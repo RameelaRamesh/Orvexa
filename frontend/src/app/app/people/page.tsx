@@ -715,12 +715,17 @@ export default function PeoplePage() {
                     <select
                       value={inviteForm.departmentId}
                       onChange={(e) => setInviteForm({ ...inviteForm, departmentId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     >
-                      <option value="">Select Department</option>
-                      {departments.map((d) => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
+                      <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Select Department</option>
+                      {departments.map((rawD) => {
+                        const d = rawD.data !== undefined ? rawD.data : rawD;
+                        return (
+                          <option key={d.id} value={d.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                            {d.name}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
@@ -737,9 +742,12 @@ export default function PeoplePage() {
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     />
                     <datalist id="designations-datalist">
-                      {designations.map((d) => (
-                        <option key={d.id} value={d.title} />
-                      ))}
+                      {designations.map((rawD) => {
+                        const d = rawD.data !== undefined ? rawD.data : rawD;
+                        return (
+                          <option key={d.id} value={d.title} />
+                        );
+                      })}
                     </datalist>
                   </div>
                   <div>
@@ -747,12 +755,17 @@ export default function PeoplePage() {
                     <select
                       value={inviteForm.teamId}
                       onChange={(e) => setInviteForm({ ...inviteForm, teamId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     >
-                      <option value="">Select Team</option>
-                      {teams.map((t) => (
-                        <option key={t.id} value={t.id}>{t.name}</option>
-                      ))}
+                      <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Select Team</option>
+                      {teams.map((rawT) => {
+                        const t = rawT.data !== undefined ? rawT.data : rawT;
+                        return (
+                          <option key={t.id} value={t.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                            {t.name}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>

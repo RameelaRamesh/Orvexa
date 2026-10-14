@@ -338,11 +338,12 @@ export default function SettingsPage() {
       });
       if (!res.ok) throw new Error('Failed to create role');
       const data = await res.json();
+      const newRole = data.data !== undefined ? data.data : data;
       toast.success('Custom role created!');
       setNewRoleName('');
       setNewRoleDesc('');
-      setRoles([...roles, data]);
-      setSelectedRoleId(data.id);
+      setRoles([...roles, newRole]);
+      setSelectedRoleId(newRole.id);
     } catch (err: any) {
       toast.error(err.message || 'Error creating role');
     } finally {
@@ -499,7 +500,8 @@ export default function SettingsPage() {
       });
       if (!res.ok) throw new Error('Failed to add department');
       const data = await res.json();
-      setDepartments([...departments, data]);
+      const newDept = data.data !== undefined ? data.data : data;
+      setDepartments([...departments, newDept]);
       setNewDeptName('');
       setNewDeptCode('');
       toast.success('Department created');
@@ -512,7 +514,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch(`${BRANDING.apiUrl}/departments/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete department');
-      setDepartments(departments.filter((d) => d.id !== id));
+      setDepartments(departments.filter((d) => (d.id || d.data?.id) !== id));
       toast.success('Department deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting department');
@@ -531,7 +533,8 @@ export default function SettingsPage() {
       });
       if (!res.ok) throw new Error('Failed to add team');
       const data = await res.json();
-      setTeams([...teams, data]);
+      const newTeam = data.data !== undefined ? data.data : data;
+      setTeams([...teams, newTeam]);
       setNewTeamName('');
       toast.success('Team created');
     } catch (err: any) {
@@ -543,7 +546,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch(`${BRANDING.apiUrl}/teams/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete team');
-      setTeams(teams.filter((t) => t.id !== id));
+      setTeams(teams.filter((t) => (t.id || t.data?.id) !== id));
       toast.success('Team deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting team');
@@ -562,7 +565,8 @@ export default function SettingsPage() {
       });
       if (!res.ok) throw new Error('Failed to add designation');
       const data = await res.json();
-      setDesignations([...designations, data]);
+      const newDesig = data.data !== undefined ? data.data : data;
+      setDesignations([...designations, newDesig]);
       setNewDesigTitle('');
       toast.success('Designation created');
     } catch (err: any) {
@@ -574,7 +578,7 @@ export default function SettingsPage() {
     try {
       const res = await fetch(`${BRANDING.apiUrl}/designations/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete designation');
-      setDesignations(designations.filter((d) => d.id !== id));
+      setDesignations(designations.filter((d) => (d.id || d.data?.id) !== id));
       toast.success('Designation deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting designation');
@@ -1598,17 +1602,20 @@ export default function SettingsPage() {
                 {departments.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No departments created yet.</p>
                 ) : (
-                  departments.map((d) => (
-                    <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                      <div>
-                        <span className="font-semibold text-foreground">{d.name}</span>
-                        {d.code && <span className="text-[10px] font-mono text-muted-foreground ml-2">({d.code})</span>}
+                  departments.map((rawD) => {
+                    const d = rawD.data !== undefined ? rawD.data : rawD;
+                    return (
+                      <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
+                        <div>
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">{d.name}</span>
+                          {d.code && <span className="text-[10px] font-mono text-muted-foreground ml-2">({d.code})</span>}
+                        </div>
+                        <button onClick={() => handleDeleteDept(d.id)} className="text-destructive hover:opacity-80">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                      <button onClick={() => handleDeleteDept(d.id)} className="text-destructive hover:opacity-80">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </CardContent>
@@ -1637,12 +1644,17 @@ export default function SettingsPage() {
                   <select
                     value={newTeamDeptId}
                     onChange={(e) => setNewTeamDeptId(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none"
                   >
-                    <option value="">Select Dept (Optional)</option>
-                    {departments.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
-                    ))}
+                    <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Select Dept (Optional)</option>
+                    {departments.map((rawD) => {
+                      const d = rawD.data !== undefined ? rawD.data : rawD;
+                      return (
+                        <option key={d.id} value={d.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                          {d.name}
+                        </option>
+                      );
+                    })}
                   </select>
                   <Button type="submit" size="sm" className="h-8 text-xs px-3">Add</Button>
                 </div>
@@ -1651,19 +1663,22 @@ export default function SettingsPage() {
                 {teams.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No teams created yet.</p>
                 ) : (
-                  teams.map((t) => (
-                    <div key={t.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                      <div>
-                        <span className="font-semibold text-foreground">{t.name}</span>
-                        {t.department?.name && (
-                          <span className="text-[10px] text-muted-foreground ml-2">({t.department.name})</span>
-                        )}
+                  teams.map((rawT) => {
+                    const t = rawT.data !== undefined ? rawT.data : rawT;
+                    return (
+                      <div key={t.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
+                        <div>
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">{t.name}</span>
+                          {(t.department?.name || t.departmentName) && (
+                            <span className="text-[10px] text-muted-foreground ml-2">({t.department?.name || t.departmentName})</span>
+                          )}
+                        </div>
+                        <button onClick={() => handleDeleteTeam(t.id)} className="text-destructive hover:opacity-80">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                      <button onClick={() => handleDeleteTeam(t.id)} className="text-destructive hover:opacity-80">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </CardContent>
@@ -1705,17 +1720,20 @@ export default function SettingsPage() {
                 {designations.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No designations created yet.</p>
                 ) : (
-                  designations.map((d) => (
-                    <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                      <div>
-                        <span className="font-semibold text-foreground">{d.title}</span>
-                        <span className="text-[10px] text-muted-foreground ml-2">(Level {d.level || 1})</span>
+                  designations.map((rawD) => {
+                    const d = rawD.data !== undefined ? rawD.data : rawD;
+                    return (
+                      <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
+                        <div>
+                          <span className="font-semibold text-slate-900 dark:text-slate-100">{d.title}</span>
+                          <span className="text-[10px] text-muted-foreground ml-2">(Level {d.level || 1})</span>
+                        </div>
+                        <button onClick={() => handleDeleteDesig(d.id)} className="text-destructive hover:opacity-80">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
                       </div>
-                      <button onClick={() => handleDeleteDesig(d.id)} className="text-destructive hover:opacity-80">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </CardContent>
