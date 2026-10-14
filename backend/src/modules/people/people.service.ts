@@ -413,7 +413,7 @@ export class PeopleService {
       },
     });
 
-    const inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/accept-invitation?token=${token}`;
+    const inviteLink = `${process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app'}/accept-invitation?token=${token}`;
     const inviterName = `${invitation.invitedBy.firstName} ${invitation.invitedBy.lastName}`.trim();
     const inviterEmail = invitation.invitedBy.email;
 
@@ -604,7 +604,7 @@ export class PeopleService {
       orderBy: { createdAt: 'desc' },
     });
 
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const frontendUrl = process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app';
     return list.map((inv) => ({
       ...inv,
       inviteLink: `${frontendUrl}/accept-invitation?token=${inv.token}`,
@@ -649,7 +649,7 @@ export class PeopleService {
       },
     });
 
-    const inviteLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/accept-invitation?token=${newToken}`;
+    const inviteLink = `${process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app'}/accept-invitation?token=${newToken}`;
     const senderName = senderUser
       ? `${senderUser.firstName} ${senderUser.lastName}`.trim()
       : 'Workspace Administrator';

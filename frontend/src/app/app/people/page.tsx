@@ -97,10 +97,24 @@ export default function PeoplePage() {
 
   const headers = getHeaders();
 
+  const normalizeInviteLink = (linkOrToken: string) => {
+    if (!linkOrToken) return '';
+    if (typeof window !== 'undefined') {
+      try {
+        if (linkOrToken.startsWith('http')) {
+          const url = new URL(linkOrToken);
+          return `${window.location.origin}${url.pathname}${url.search}`;
+        }
+        return `${window.location.origin}/accept-invitation?token=${linkOrToken}`;
+      } catch {
+        return `${window.location.origin}/accept-invitation?token=${linkOrToken}`;
+      }
+    }
+    return linkOrToken;
+  };
+
   const copyInviteLink = (linkOrToken: string) => {
-    const fullUrl = linkOrToken.startsWith('http')
-      ? linkOrToken
-      : `${window.location.origin}/accept-invitation?token=${linkOrToken}`;
+    const fullUrl = normalizeInviteLink(linkOrToken);
     navigator.clipboard.writeText(fullUrl).then(
       () => toast.success('Invitation link copied to clipboard!'),
       () => toast.info('Link: ' + fullUrl),
@@ -165,11 +179,12 @@ export default function PeoplePage() {
       if (!res.ok) throw new Error(data.message || 'Invitation failed');
 
       const payload = data.data || data;
-      const generatedLink =
+      const rawLink =
         payload.inviteLink ||
         (payload.invitation?.token
           ? `${window.location.origin}/accept-invitation?token=${payload.invitation.token}`
           : null);
+      const generatedLink = normalizeInviteLink(rawLink);
 
       if (generatedLink) {
         setCreatedInviteInfo({
@@ -219,7 +234,8 @@ export default function PeoplePage() {
       if (!res.ok) throw new Error(data.message || 'Resend failed');
 
       const payload = data.data || data;
-      const link = payload.inviteLink;
+      const rawLink = payload.inviteLink || payload.invitation?.token;
+      const link = normalizeInviteLink(rawLink);
       if (link) {
         setCreatedInviteInfo({
           email: payload.invitation?.email || 'user',
@@ -1146,28 +1162,38 @@ export default function PeoplePage() {
                 <div className="rounded-md bg-amber-500/10 border border-amber-500/20 p-3 text-amber-700 dark:text-amber-400">
                   <p className="font-semibold mb-1">Direct Invitation Link Ready</p>
                   <p>
-                    SMTP mail server is not configured in <code>.env</code> yet, so you can share the link below directly with the user to accept and activate their account.
+                    SMTP mail server is not configured in the cloud environment yet, so no email is sent to your inbox. You can open or copy the direct link below to accept and activate this account immediately!
                   </p>
                 </div>
               )}
 
               <div>
                 <label className="font-semibold text-foreground block mb-1">Accept Invitation URL</label>
-                <div className="flex gap-2">
+                <div className="flex flex-col sm:flex-row gap-2">
                   <input
                     readOnly
                     type="text"
-                    value={createdInviteInfo.link}
-                    className="w-full rounded-md border border-input bg-surface-secondary px-3 py-1.5 text-xs text-muted-foreground select-all font-mono"
+                    value={normalizeInviteLink(createdInviteInfo.link)}
+                    className="w-full rounded-md border border-input bg-surface-secondary px-3 py-1.5 text-xs text-foreground select-all font-mono"
                     onClick={(e) => (e.target as HTMLInputElement).select()}
                   />
-                  <Button
-                    size="sm"
-                    className="gap-1.5 shrink-0"
-                    onClick={() => copyInviteLink(createdInviteInfo.link)}
-                  >
-                    <Copy className="h-3.5 w-3.5" /> Copy
-                  </Button>
+                  <div className="flex gap-2 shrink-0">
+                    <Button
+                      size="sm"
+                      className="gap-1.5 shrink-0"
+                      onClick={() => copyInviteLink(createdInviteInfo.link)}
+                    >
+                      <Copy className="h-3.5 w-3.5" /> Copy
+                    </Button>
+                    <a
+                      href={normalizeInviteLink(createdInviteInfo.link)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center rounded-md text-xs font-semibold border border-primary/30 bg-primary/10 text-primary hover:bg-primary/20 h-8 px-3 gap-1 shrink-0"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" /> Open Link
+                    </a>
+                  </div>
                 </div>
               </div>
             </CardContent>
