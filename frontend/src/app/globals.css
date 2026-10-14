@@ -1,0 +1,98 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%; /* #F8FAFC */
+    --foreground: 222.2 84% 4.9%; /* #0F172A */
+
+    --card: 0 0% 100%; /* #FFFFFF */
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 221.2 83.2% 53.3%; /* #2563EB */
+    --primary-hover: 224.3 76.3% 48%; /* #1D4ED8 */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%; /* #F1F5F9 */
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 215.4 16.3% 65.1%; /* #94A3B8 */
+    --muted-foreground: 215.4 16.3% 46.9%; /* #64748B */
+
+    --accent: 188.7 94.5% 42.7%; /* #06B6D4 */
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 84.2% 60.2%; /* #DC2626 */
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%; /* #E2E8F0 */
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+
+    --radius: 0.5rem;
+
+    --surface: #FFFFFF;
+    --surface-secondary: #F1F5F9;
+
+    --success: #16A34A;
+    --warning: #F59E0B;
+    --danger: #DC2626;
+    --info: #0284C7;
+  }
+
+  .dark {
+    --background: 222 50% 8.4%; /* #0B1120 */
+    --foreground: 210 40% 98%; /* #F8FAFC */
+
+    --card: 222.2 47.4% 11.2%; /* #111827 */
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 47.4% 11.2%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 217.2 91.2% 59.8%; /* #3B82F6 */
+    --primary-hover: 213.1 93.9% 67.8%; /* #60A5FA */
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%; /* #1E293B */
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 215.4 16.3% 65.1%; /* #94A3B8 */
+    --muted-foreground: 213.3 27.3% 84.3%; /* #CBD5E1 */
+
+    --accent: 187.9 85.7% 53.3%; /* #22D3EE */
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 23.9%; /* #334155 */
+    --input: 217.2 32.6% 23.9%;
+    --ring: 217.2 91.2% 59.8%;
+
+    --surface: #111827;
+    --surface-secondary: #1E293B;
+
+    --success: #22C55E;
+    --warning: #F59E0B;
+    --danger: #EF4444;
+    --info: #38BDF8;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground antialiased font-normal;
+    font-family: 'Manrope', var(--font-manrope), system-ui, -apple-system, sans-serif;
+    letter-spacing: -0.01em;
+  }
+}

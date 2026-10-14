@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: orvexa_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: orvexapassword
+      POSTGRES_DB: orvexa_db
+    ports:
+      - "5454:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: orvexa_redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: orvexa_backend
+    restart: always
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      DATABASE_URL: postgresql://postgres:orvexapassword@postgres:5432/orvexa_db?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: orvexa-super-secret-jwt-key-2026
+      RAZORPAY_KEY_ID: rzp_test_TCr9Me1AydiZMF
+      RAZORPAY_KEY_SECRET: uPUkfk9gWbTOaewirN8KHI0T
+      SMTP_HOST: smtp.gmail.com
+      SMTP_PORT: 465
+      SMTP_SECURE: "true"
+      SMTP_USER: operations@vattara.com
+      SMTP_PASS: bacasnuqhkyupdrl
+      SMTP_FROM: "ORVEXA Notifications <operations@vattara.com>"
+      FRONTEND_URL: http://localhost:3000
+    depends_on:
+      - postgres
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: orvexa_frontend
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
+  redis_data:

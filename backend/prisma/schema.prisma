@@ -1,0 +1,878 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                   String       @id @default(uuid())
+  email                String       @unique
+  passwordHash         String
+  firstName            String
+  lastName             String
+  avatarUrl            String?
+  phone                String?
+  isEmailVerified      Boolean      @default(false)
+  mustChangePassword   Boolean      @default(false)
+  passwordResetToken   String?
+  passwordResetExpires DateTime?
+  tokenVersion         Int          @default(1)
+  mfaEnabled           Boolean      @default(false)
+  mfaSecret            String?
+  lastLoginAt          DateTime?
+  status               UserStatus   @default(ACTIVE)
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  auditLogs            AuditLog[]
+  sentInvitations      Invitation[] @relation("InvitedByUser")
+  memberships          Membership[]
+
+  @@index([email])
+}
+
+model Workspace {
+  id                  String               @id @default(uuid())
+  name                String
+  slug                String               @unique
+  logoUrl             String?
+  businessType        String?              @default("GENERAL")
+  settings            Json?                @default("{}")
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  approvalDelegations ApprovalDelegation[]
+  approvalRequests    ApprovalRequest[]
+  assets              Asset[]
+  attendances         Attendance[]
+  auditLogs           AuditLog[]
+  clients             Client[]
+  departments         Department[]
+  designations        Designation[]
+  files               File[]
+  holidays            Holiday[]
+  invitations         Invitation[]
+  invoices            Invoice[]
+  leaveBalances       LeaveBalance[]
+  leavePolicies       LeavePolicy[]
+  leaveRequests       LeaveRequest[]
+  memberships         Membership[]
+  notifications       Notification[]
+  overtimeRequests    OvertimeRequest[]
+  payments            Payment[]
+  processes           Process[]
+  projects            Project[]
+  qualityReviews      QualityReview[]
+  roles               Role[]
+  slaConfigs          SLAConfig[]
+  slaEscalations      SLAEscalation[]
+  shifts              Shift[]
+  subscriptions       Subscription[]
+  tasks               Task[]
+  teams               Team[]
+  timesheets          Timesheet[]
+  workItems           WorkItem[]
+  workflows           Workflow[]
+
+  @@index([slug])
+}
+
+model Membership {
+  id                  String               @id @default(uuid())
+  userId              String
+  workspaceId         String
+  roleId              String
+  accessRole          SystemAccessRole     @default(MEMBER)
+  departmentId        String?
+  teamId              String?
+  designationId       String?
+  reportsToId         String?
+  status              MembershipStatus     @default(ACTIVE)
+  employeeId          String?
+  employmentType      String?              @default("FULL_TIME")
+  joiningDate         DateTime?
+  workLocation        String?
+  probationEndDate    DateTime?
+  emergencyContact    Json?
+  lastWorkingDate     DateTime?
+  exitReason          String?
+  offboardingStatus   String?
+  offboardingHandover Json?
+  invitedByUserId     String?
+  dataScope           String?              @default("ASSIGNED")
+  joinedAt            DateTime             @default(now())
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  delegatedTo         ApprovalDelegation[] @relation("Delegatee")
+  delegatedFrom       ApprovalDelegation[] @relation("Delegator")
+  approvalRequests    ApprovalRequest[]    @relation("Requester")
+  assignedAssets      Asset[]              @relation("AssetAssignee")
+  attendances         Attendance[]
+  auditLogs           AuditLog[]
+  leaveBalances       LeaveBalance[]
+  approvedLeaves      LeaveRequest[]       @relation("LeaveApprover")
+  leaveRequests       LeaveRequest[]       @relation("LeaveRequester")
+  department          Department?          @relation(fields: [departmentId], references: [id])
+  designation         Designation?         @relation(fields: [designationId], references: [id])
+  reportsTo           Membership?          @relation("ReportingStructure", fields: [reportsToId], references: [id])
+  directReports       Membership[]         @relation("ReportingStructure")
+  role                Role                 @relation(fields: [roleId], references: [id])
+  team                Team?                @relation(fields: [teamId], references: [id])
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace           Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  notifications       Notification[]
+  overtimeRequests    OvertimeRequest[]
+  qualityReviews      QualityReview[]      @relation("Reviewer")
+  slaEscalations      SLAEscalation[]      @relation("EscalatedOwner")
+  assignedTasks       Task[]               @relation("TaskAssignee")
+  ledTeams            Team[]               @relation("TeamLead")
+  timesheets          Timesheet[]
+  assignedWorkItems   WorkItem[]           @relation("WorkItemAssignee")
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId, userId])
+}
+
+model Invitation {
+  id              String           @id @default(uuid())
+  workspaceId     String
+  email           String
+  firstName       String
+  lastName        String
+  accessRole      SystemAccessRole @default(MEMBER)
+  roleId          String?
+  departmentId    String?
+  teamId          String?
+  designationId   String?
+  reportsToId     String?
+  token           String           @unique
+  status          InvitationStatus @default(PENDING)
+  invitedByUserId String
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  invitedBy       User             @relation("InvitedByUser", fields: [invitedByUserId], references: [id])
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, email])
+  @@index([token])
+}
+
+model Role {
+  id           String           @id @default(uuid())
+  workspaceId  String?
+  name         String
+  description  String?
+  isSystemRole Boolean          @default(false)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  memberships  Membership[]
+  workspace    Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  permissions  RolePermission[]
+
+  @@index([workspaceId])
+}
+
+model Permission {
+  id              String           @id @default(uuid())
+  code            String           @unique
+  name            String
+  module          String
+  description     String?
+  rolePermissions RolePermission[]
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  roleId       String
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+model Department {
+  id          String       @id @default(uuid())
+  workspaceId String
+  name        String
+  code        String?
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+  teams       Team[]
+
+  @@index([workspaceId])
+}
+
+model Team {
+  id               String       @id @default(uuid())
+  workspaceId      String
+  departmentId     String?
+  name             String
+  description      String?
+  leadMembershipId String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  memberships      Membership[]
+  department       Department?  @relation(fields: [departmentId], references: [id])
+  leadMembership   Membership?  @relation("TeamLead", fields: [leadMembershipId], references: [id])
+  workspace        Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Designation {
+  id          String       @id @default(uuid())
+  workspaceId String
+  title       String
+  level       Int?         @default(1)
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  memberships Membership[]
+
+  @@index([workspaceId])
+}
+
+model Client {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  name         String
+  code         String?
+  companyName  String?
+  contactEmail String?
+  contactPhone String?
+  status       String     @default("ACTIVE")
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projects     Project[]
+  workItems    WorkItem[]
+
+  @@index([workspaceId])
+}
+
+model Project {
+  id          String        @id @default(uuid())
+  workspaceId String
+  clientId    String?
+  name        String
+  key         String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  priority    PriorityLevel @default(MEDIUM)
+  startDate   DateTime?
+  endDate     DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  client      Client?       @relation(fields: [clientId], references: [id])
+  workspace   Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tasks       Task[]
+
+  @@index([workspaceId])
+}
+
+model Task {
+  id                   String        @id @default(uuid())
+  workspaceId          String
+  projectId            String?
+  assigneeMembershipId String?
+  title                String
+  description          String?
+  status               TaskStatus    @default(TODO)
+  priority             PriorityLevel @default(MEDIUM)
+  dueDate              DateTime?
+  estimatedHours       Float?
+  actualHours          Float?
+  sla                  Json?         @default("{}")
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+  assignee             Membership?   @relation("TaskAssignee", fields: [assigneeMembershipId], references: [id])
+  project              Project?      @relation(fields: [projectId], references: [id])
+  workspace            Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([assigneeMembershipId])
+}
+
+model WorkItem {
+  id                   String          @id @default(uuid())
+  workspaceId          String
+  clientId             String?
+  batchId              String?
+  title                String
+  quantity             Int             @default(1)
+  processedQuantity    Int             @default(0)
+  targetStage          String?
+  currentStage         String?
+  status               WorkItemStatus  @default(PENDING)
+  priority             PriorityLevel   @default(MEDIUM)
+  slaDeadline          DateTime?
+  assignedMembershipId String?
+  qaScore              Float?
+  metadata             Json?           @default("{}")
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+  qualityReviews       QualityReview[]
+  assignedMembership   Membership?     @relation("WorkItemAssignee", fields: [assignedMembershipId], references: [id])
+  client               Client?         @relation(fields: [clientId], references: [id])
+  workspace            Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+  @@index([status])
+}
+
+model Process {
+  defaultSlaHours Int       @default(24)
+  id              String    @id @default(uuid())
+  workspaceId     String
+  name            String
+  code            String
+  description     String?
+  activeStages    Json?     @default("[]")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  workspace       Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Workflow {
+  id               String            @id @default(uuid())
+  workspaceId      String
+  entityType       String
+  name             String
+  triggerCondition Json?             @default("{}")
+  isActive         Boolean           @default(true)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  approvalRequests ApprovalRequest[]
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  steps            WorkflowStep[]
+
+  @@index([workspaceId])
+}
+
+model WorkflowStep {
+  id                    String   @id @default(uuid())
+  workflowId            String
+  stepOrder             Int
+  approverRole          String?
+  approverDesignationId String?
+  approverMembershipId  String?
+  autoApproveHours      Int?
+  workflow              Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+}
+
+model ApprovalRequest {
+  id                    String         @id @default(uuid())
+  workspaceId           String
+  workflowId            String?
+  entityType            String
+  entityId              String
+  requesterMembershipId String
+  currentStep           Int            @default(1)
+  status                ApprovalStatus @default(PENDING)
+  comments              String?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  requester             Membership     @relation("Requester", fields: [requesterMembershipId], references: [id])
+  workflow              Workflow?      @relation(fields: [workflowId], references: [id])
+  workspace             Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Attendance {
+  id                String            @id @default(uuid())
+  workspaceId       String
+  membershipId      String
+  date              DateTime
+  clockIn           DateTime
+  clockOut          DateTime?
+  totalWorkMinutes  Int               @default(0)
+  totalBreakMinutes Int               @default(0)
+  status            AttendanceStatus  @default(PRESENT)
+  notes             String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  membership        Membership        @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  workspace         Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  breaks            AttendanceBreak[]
+
+  @@index([workspaceId, date])
+  @@index([membershipId])
+}
+
+model AttendanceBreak {
+  id              String     @id @default(uuid())
+  attendanceId    String
+  breakStart      DateTime
+  breakEnd        DateTime?
+  durationMinutes Int        @default(0)
+  breakType       String?    @default("LUNCH")
+  notes           String?
+  attendance      Attendance @relation(fields: [attendanceId], references: [id], onDelete: Cascade)
+}
+
+model LeavePolicy {
+  id                   String    @id @default(uuid())
+  workspaceId          String
+  leaveType            LeaveType
+  name                 String
+  annualAllocation     Float     @default(12)
+  paid                 Boolean   @default(true)
+  accrualFrequency     String    @default("MONTHLY")
+  carryForwardMax      Float     @default(0)
+  requireDocument      Boolean   @default(false)
+  allowNegativeBalance Boolean   @default(false)
+  probationAllowed     Boolean   @default(true)
+  noticePeriodAllowed  Boolean   @default(false)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  workspace            Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, leaveType])
+  @@index([workspaceId])
+}
+
+model LeaveBalance {
+  id           String     @id @default(uuid())
+  workspaceId  String
+  membershipId String
+  leaveType    LeaveType
+  year         Int
+  allocated    Float      @default(0)
+  used         Float      @default(0)
+  pending      Float      @default(0)
+  carriedOver  Float      @default(0)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  workspace    Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([membershipId, leaveType, year])
+  @@index([workspaceId, membershipId])
+}
+
+model LeaveRequest {
+  id                     String      @id @default(uuid())
+  workspaceId            String
+  membershipId           String
+  leaveType              LeaveType   @default(ANNUAL)
+  startDate              DateTime
+  endDate                DateTime
+  totalDays              Float
+  reason                 String?
+  status                 LeaveStatus @default(PENDING)
+  approvedByMembershipId String?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  approvedBy             Membership? @relation("LeaveApprover", fields: [approvedByMembershipId], references: [id])
+  membership             Membership  @relation("LeaveRequester", fields: [membershipId], references: [id], onDelete: Cascade)
+  workspace              Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Shift {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  startTime   String    @default("09:00")
+  endTime     String    @default("17:00")
+  workDays    Json      @default("[\"MON\", \"TUE\", \"WED\", \"THU\", \"FRI\"]")
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Timesheet {
+  id                     String         @id @default(uuid())
+  workspaceId            String
+  membershipId           String
+  periodStart            DateTime
+  periodEnd              DateTime
+  totalHours             Float          @default(0)
+  status                 ApprovalStatus @default(PENDING)
+  approvedByMembershipId String?
+  notes                  String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime       @updatedAt
+  membership             Membership     @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  workspace              Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, membershipId])
+}
+
+model OvertimeRequest {
+  id                     String         @id @default(uuid())
+  workspaceId            String
+  membershipId           String
+  date                   DateTime
+  hours                  Float
+  reason                 String
+  status                 ApprovalStatus @default(PENDING)
+  approvedByMembershipId String?
+  createdAt              DateTime       @default(now())
+  membership             Membership     @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  workspace              Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, membershipId])
+}
+
+model Holiday {
+  id          String    @id @default(uuid())
+  workspaceId String
+  name        String
+  date        DateTime
+  isOptional  Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, date])
+}
+
+model ApprovalDelegation {
+  id                    String     @id @default(uuid())
+  workspaceId           String
+  delegatorMembershipId String
+  delegateeMembershipId String
+  startDate             DateTime
+  endDate               DateTime
+  reason                String?
+  isActive              Boolean    @default(true)
+  createdAt             DateTime   @default(now())
+  delegatee             Membership @relation("Delegatee", fields: [delegateeMembershipId], references: [id], onDelete: Cascade)
+  delegator             Membership @relation("Delegator", fields: [delegatorMembershipId], references: [id], onDelete: Cascade)
+  workspace             Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, delegatorMembershipId])
+}
+
+model QualityReview {
+  id                   String            @id @default(uuid())
+  workspaceId          String
+  workItemId           String
+  reviewerMembershipId String
+  score                Float
+  maxScore             Float             @default(100.0)
+  passStatus           QualityPassStatus @default(PASSED)
+  defects              Json?             @default("[]")
+  feedback             String?
+  reviewedAt           DateTime          @default(now())
+  reviewer             Membership        @relation("Reviewer", fields: [reviewerMembershipId], references: [id])
+  workItem             WorkItem          @relation(fields: [workItemId], references: [id], onDelete: Cascade)
+  workspace            Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model SLAConfig {
+  id                          String          @id @default(uuid())
+  workspaceId                 String
+  entityType                  String
+  priority                    String?
+  maxResolutionMinutes        Int
+  warningThresholdPercent     Float           @default(80.0)
+  escalationOwnerMembershipId String?
+  createdAt                   DateTime        @default(now())
+  workspace                   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  escalations                 SLAEscalation[]
+
+  @@index([workspaceId])
+}
+
+model SLAEscalation {
+  id                      String          @id @default(uuid())
+  workspaceId             String
+  entityType              String
+  entityId                String
+  slaConfigId             String
+  breachStatus            SLABreachStatus @default(HEALTHY)
+  triggeredAt             DateTime        @default(now())
+  escalationHandledAt     DateTime?
+  escalatedToMembershipId String?
+  escalatedTo             Membership?     @relation("EscalatedOwner", fields: [escalatedToMembershipId], references: [id])
+  slaConfig               SLAConfig       @relation(fields: [slaConfigId], references: [id], onDelete: Cascade)
+  workspace               Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Asset {
+  id                     String      @id @default(uuid())
+  workspaceId            String
+  name                   String
+  assetTag               String
+  serialNumber           String?
+  category               String?
+  status                 AssetStatus @default(AVAILABLE)
+  assignedToMembershipId String?
+  purchaseDate           DateTime?
+  cost                   Float?
+  createdAt              DateTime    @default(now())
+  updatedAt              DateTime    @updatedAt
+  assignedTo             Membership? @relation("AssetAssignee", fields: [assignedToMembershipId], references: [id])
+  workspace              Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Notification {
+  id                    String     @id @default(uuid())
+  workspaceId           String
+  recipientMembershipId String
+  title                 String
+  message               String
+  type                  String?    @default("INFO")
+  link                  String?
+  isRead                Boolean    @default(false)
+  createdAt             DateTime   @default(now())
+  recipient             Membership @relation(fields: [recipientMembershipId], references: [id], onDelete: Cascade)
+  workspace             Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, recipientMembershipId])
+}
+
+model Plan {
+  id             String         @id @default(uuid())
+  name           String
+  code           PlanTier       @unique
+  priceMonthly   Float
+  priceYearly    Float
+  razorpayPlanId String?
+  entitlements   Json?          @default("{}")
+  isActive       Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  subscriptions  Subscription[]
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  workspaceId            String
+  planId                 String
+  razorpaySubscriptionId String?
+  status                 SubscriptionStatus @default(TRIALING)
+  currentPeriodStart     DateTime           @default(now())
+  currentPeriodEnd       DateTime
+  seatCount              Int                @default(5)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  payments               Payment[]
+  plan                   Plan               @relation(fields: [planId], references: [id])
+  workspace              Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Payment {
+  id                String        @id @default(uuid())
+  workspaceId       String
+  subscriptionId    String?
+  razorpayPaymentId String?
+  razorpayOrderId   String?
+  amount            Float
+  currency          String        @default("INR")
+  status            PaymentStatus @default(PENDING)
+  paymentMethod     String?
+  paidAt            DateTime?
+  createdAt         DateTime      @default(now())
+  subscription      Subscription? @relation(fields: [subscriptionId], references: [id])
+  workspace         Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model Invoice {
+  id            String    @id @default(uuid())
+  workspaceId   String
+  invoiceNumber String    @unique
+  amount        Float
+  tax           Float     @default(0.0)
+  status        String    @default("UNPAID")
+  pdfUrl        String?
+  dueDate       DateTime
+  paidAt        DateTime?
+  createdAt     DateTime  @default(now())
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model File {
+  id                     String    @id @default(uuid())
+  workspaceId            String
+  uploadedByMembershipId String?
+  key                    String    @unique
+  originalName           String
+  mimeType               String
+  sizeBytes              Int
+  url                    String
+  isPublic               Boolean   @default(false)
+  entityType             String?
+  entityId               String?
+  createdAt              DateTime  @default(now())
+  workspace              Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId])
+}
+
+model AuditLog {
+  id                String      @id @default(uuid())
+  workspaceId       String
+  actorMembershipId String?
+  actorUserId       String?
+  action            String
+  entity            String
+  entityId          String?
+  metadata          Json?       @default("{}")
+  ipAddress         String?
+  userAgent         String?
+  createdAt         DateTime    @default(now())
+  actorMembership   Membership? @relation(fields: [actorMembershipId], references: [id])
+  actorUser         User?       @relation(fields: [actorUserId], references: [id])
+  workspace         Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+  OFFBOARDED
+  ARCHIVED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum SystemAccessRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  COMPLETED
+  CANCELLED
+}
+
+enum PriorityLevel {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  IN_REVIEW
+  COMPLETED
+  CANCELLED
+}
+
+enum WorkItemStatus {
+  PENDING
+  PROCESSING
+  QA_REVIEW
+  REWORK
+  COMPLETED
+  REJECTED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  HALF_DAY
+  ABSENT
+}
+
+enum LeaveType {
+  ANNUAL
+  SICK
+  CASUAL
+  UNPAID
+  MATERNITY
+  PATERNITY
+}
+
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum QualityPassStatus {
+  PASSED
+  FAILED
+  REWORK_REQUIRED
+}
+
+enum SLABreachStatus {
+  HEALTHY
+  WARNING
+  BREACHED
+}
+
+enum AssetStatus {
+  AVAILABLE
+  ASSIGNED
+  UNDER_MAINTENANCE
+  DISPOSED
+}
+
+enum PlanTier {
+  FREE
+  STARTER
+  BUSINESS
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  UNPAID
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESSFUL
+  FAILED
+  REFUNDED
+}
