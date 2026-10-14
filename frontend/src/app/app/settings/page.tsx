@@ -37,6 +37,8 @@ import {
   Copy,
   RefreshCw,
   ShieldAlert,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -57,11 +59,15 @@ export default function SettingsPage() {
   const [confirmingMfa, setConfirmingMfa] = useState(false);
   const [showDisableMfa, setShowDisableMfa] = useState(false);
   const [disablePassword, setDisablePassword] = useState('');
+  const [showDisablePassword, setShowDisablePassword] = useState(false);
   const [disableCode, setDisableCode] = useState('');
   const [disablingMfa, setDisablingMfa] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [resettingMfaUserId, setResettingMfaUserId] = useState<string | null>(null);
 
@@ -2117,14 +2123,24 @@ export default function SettingsPage() {
                       </p>
                       <div className="space-y-1">
                         <label className="text-xs font-medium text-foreground">Account Password</label>
-                        <input
-                          type="password"
-                          required
-                          value={disablePassword}
-                          onChange={(e) => setDisablePassword(e.target.value)}
-                          placeholder="Your current password"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-destructive focus:outline-none"
-                        />
+                        <div className="relative">
+                          <input
+                            type={showDisablePassword ? 'text' : 'password'}
+                            required
+                            value={disablePassword}
+                            onChange={(e) => setDisablePassword(e.target.value)}
+                            placeholder="Your current password"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs focus:ring-1 focus:ring-destructive focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowDisablePassword(!showDisablePassword)}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                            aria-label={showDisablePassword ? 'Hide password' : 'Show password'}
+                          >
+                            {showDisablePassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
                       </div>
                       <div className="space-y-1">
                         <label className="text-xs font-medium text-foreground">6-Digit Code or Recovery Code</label>
@@ -2297,35 +2313,65 @@ export default function SettingsPage() {
               <form onSubmit={handleChangePassword} className="space-y-3.5 max-w-md">
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-foreground">Current Password *</label>
-                  <input
-                    type="password"
-                    required
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showCurrentPassword ? 'text' : 'password'}
+                      required
+                      value={currentPassword}
+                      onChange={(e) => setCurrentPassword(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                      aria-label={showCurrentPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showCurrentPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-foreground">New Password (minimum 8 characters) *</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={8}
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showNewPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-foreground">Confirm New Password *</label>
-                  <input
-                    type="password"
-                    required
-                    minLength={8}
-                    value={confirmNewPassword}
-                    onChange={(e) => setConfirmNewPassword(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
+                  <div className="relative">
+                    <input
+                      type={showConfirmNewPassword ? 'text' : 'password'}
+                      required
+                      minLength={8}
+                      value={confirmNewPassword}
+                      onChange={(e) => setConfirmNewPassword(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground focus:outline-none"
+                      aria-label={showConfirmNewPassword ? 'Hide password' : 'Show password'}
+                    >
+                      {showConfirmNewPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                  </div>
                 </div>
                 <Button type="submit" size="sm" disabled={changingPassword} className="text-xs">
                   {changingPassword ? 'Updating Password...' : 'Change Password'}
