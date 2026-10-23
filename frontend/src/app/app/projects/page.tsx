@@ -28,6 +28,7 @@ import {
   RefreshCw,
   X,
   UserPlus,
+  Users,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -57,17 +58,22 @@ export default function ProjectsPage() {
     description: '',
     projectId: '',
     assigneeMembershipId: '',
+    assigneeMembershipIds: [] as string[],
     priority: 'MEDIUM',
     dueDate: '',
     startDate: '',
     estimatedHours: '',
   });
+  const [assigneeFilterText, setAssigneeFilterText] = useState('');
 
   // Selected Work Item Detail View
   const [selectedTask, setSelectedTask] = useState<any>(null);
   const [taskDetailLoading, setTaskDetailLoading] = useState(false);
   const [newCommentText, setNewCommentText] = useState('');
   const [selectedNewDepId, setSelectedNewDepId] = useState('');
+  const [showEditAssignees, setShowEditAssignees] = useState(false);
+  const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
+  const [savingAssignees, setSavingAssignees] = useState(false);
 
   // Workflow Rule Modal
   const [showWorkflowModal, setShowWorkflowModal] = useState(false);
@@ -136,10 +142,56 @@ export default function ProjectsPage() {
       if (!res.ok) throw new Error(data.message);
       const payload = data?.data !== undefined ? data.data : data;
       setSelectedTask(payload);
+      setShowEditAssignees(false);
+      const currentIds: string[] = Array.isArray(payload.assigneeMembershipIds) && payload.assigneeMembershipIds.length > 0
+        ? payload.assigneeMembershipIds
+        : (payload.assigneeMembershipId ? [payload.assigneeMembershipId] : []);
+      setEditAssigneeIds(currentIds);
     } catch (err: any) {
       toast.error(err.message || 'Error loading work item details');
     } finally {
       setTaskDetailLoading(false);
+    }
+  };
+
+  const getTaskAssignees = (task: any) => {
+    if (!task) return [];
+    const ids: string[] = Array.isArray(task.assigneeMembershipIds) && task.assigneeMembershipIds.length > 0
+      ? task.assigneeMembershipIds
+      : (task.assigneeMembershipId ? [task.assigneeMembershipId] : []);
+    const found = teamMembers.filter((m) => ids.includes(m.id));
+    if (found.length === 0 && task.assignee) {
+      return [task.assignee];
+    }
+    return found;
+  };
+
+  const handleSaveAssignees = async () => {
+    if (!selectedTask) return;
+    setSavingAssignees(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/tasks/${selectedTask.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-workspace-id': wsId!,
+        },
+        body: JSON.stringify({
+          assigneeMembershipIds: editAssigneeIds,
+          assigneeMembershipId: editAssigneeIds[0] || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to update assignees');
+      toast.success('Assignees updated successfully');
+      setShowEditAssignees(false);
+      await openTaskDetail(selectedTask.id);
+      loadAllData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating assignees');
+    } finally {
+      setSavingAssignees(false);
     }
   };
 
@@ -178,7 +230,9 @@ export default function ProjectsPage() {
         dueDate: newTask.dueDate || undefined,
         startDate: newTask.startDate || undefined,
         estimatedHours: newTask.estimatedHours ? Number(newTask.estimatedHours) : undefined,
-        assigneeMembershipId: newTask.assigneeMembershipId || undefined,
+        assigneeMembershipId: newTask.assigneeMembershipIds.length > 0 ? newTask.assigneeMembershipIds[0] : (newTask.assigneeMembershipId || undefined),
+        assigneeMembershipIds: newTask.assigneeMembershipIds,
+        collaboratorIds: newTask.assigneeMembershipIds,
         projectId: isStandaloneTask ? undefined : newTask.projectId || undefined,
       };
 
@@ -200,11 +254,13 @@ export default function ProjectsPage() {
         description: '',
         projectId: '',
         assigneeMembershipId: '',
+        assigneeMembershipIds: [],
         priority: 'MEDIUM',
         dueDate: '',
         startDate: '',
         estimatedHours: '',
       });
+      setAssigneeFilterText('');
       loadAllData();
     } catch (err: any) {
       toast.error(err.message || 'Error creating task');
@@ -528,8 +584,14 @@ export default function ProjectsPage() {
                           )}
                         </td>
                         <td className="py-3.5 px-4 text-xs text-foreground">
-                          {t.assignee?.user ? (
-                            <span>{t.assignee.user.firstName} {t.assignee.user.lastName}</span>
+                          {getTaskAssignees(t).length > 0 ? (
+                            <div className="flex flex-wrap gap-1 max-w-[200px]">
+                              {getTaskAssignees(t).map((m: any) => (
+                                <Badge key={m.id} variant="secondary" className="text-[10px] py-0 px-1.5 font-normal">
+                                  {m.user?.firstName} {m.user?.lastName}
+                                </Badge>
+                              ))}
+                            </div>
                           ) : (
                             <span className="text-muted-foreground italic">Unassigned</span>
                           )}
@@ -885,15 +947,99 @@ export default function ProjectsPage() {
               {/* Sidebar Metadata */}
               <div className="space-y-3">
                 <div className="p-3 rounded-lg border border-border bg-card space-y-2 text-xs">
-                  <div>
-                    <span className="text-muted-foreground font-semibold">Assignee:</span>
-                    <div className="text-foreground mt-0.5 font-medium">
-                      {selectedTask.assignee?.user ? (
-                        `${selectedTask.assignee.user.firstName} ${selectedTask.assignee.user.lastName}`
-                      ) : (
-                        <span className="text-muted-foreground italic">Unassigned</span>
-                      )}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground font-semibold">
+                        Assignees ({getTaskAssignees(selectedTask).length}):
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowEditAssignees(!showEditAssignees)}
+                        className="text-[11px] text-primary hover:underline font-semibold"
+                      >
+                        {showEditAssignees ? 'Cancel' : 'Edit'}
+                      </button>
                     </div>
+
+                    {!showEditAssignees ? (
+                      <div className="text-foreground font-medium flex flex-wrap gap-1">
+                        {getTaskAssignees(selectedTask).length > 0 ? (
+                          getTaskAssignees(selectedTask).map((m: any) => (
+                            <Badge key={m.id} variant="secondary" className="text-xs py-0.5 px-2">
+                              {m.user?.firstName} {m.user?.lastName}
+                              {m.department?.name && (
+                                <span className="text-[10px] text-muted-foreground ml-1">({m.department.name})</span>
+                              )}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-muted-foreground italic text-xs">Unassigned</span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="p-2.5 rounded-lg border border-border bg-surface-secondary/40 space-y-2">
+                        <div className="flex justify-between items-center text-[10px]">
+                          <span className="font-semibold text-muted-foreground">Select team members:</span>
+                          <div className="flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setEditAssigneeIds(teamMembers.map((m) => m.id))}
+                              className="text-primary hover:underline"
+                            >
+                              All
+                            </button>
+                            <span>•</span>
+                            <button
+                              type="button"
+                              onClick={() => setEditAssigneeIds([])}
+                              className="text-muted-foreground hover:underline"
+                            >
+                              None
+                            </button>
+                          </div>
+                        </div>
+                        <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                          {teamMembers.map((m) => {
+                            const isChecked = editAssigneeIds.includes(m.id);
+                            return (
+                              <label
+                                key={m.id}
+                                className={`flex items-center justify-between p-1.5 rounded cursor-pointer text-xs ${
+                                  isChecked ? 'bg-primary/10 text-primary font-semibold' : 'hover:bg-background text-foreground'
+                                }`}
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={() => {
+                                      setEditAssigneeIds(
+                                        isChecked
+                                          ? editAssigneeIds.filter((id) => id !== m.id)
+                                          : [...editAssigneeIds, m.id],
+                                      );
+                                    }}
+                                    className="h-3.5 w-3.5 rounded border-border text-primary"
+                                  />
+                                  <span>{m.user?.firstName} {m.user?.lastName}</span>
+                                </div>
+                                <span className="text-[10px] text-muted-foreground font-normal">
+                                  {m.department?.name || 'General'}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={handleSaveAssignees}
+                          disabled={savingAssignees}
+                          className="w-full h-7 text-xs"
+                        >
+                          {savingAssignees ? 'Saving...' : 'Save Assignees'}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   <div>
                     <span className="text-muted-foreground font-semibold">Due Date:</span>
@@ -941,7 +1087,7 @@ export default function ProjectsPage() {
           ========================================================================= */}
       {showCreateTaskModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-xl shadow-xl max-w-lg w-full p-6 space-y-4">
+          <div className="bg-card border border-border rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6 space-y-4">
             <h3 className="text-lg font-bold text-foreground">Create Work Item</h3>
             <p className="text-xs text-muted-foreground">
               Define a standalone organizational task or link to an active project
@@ -993,7 +1139,7 @@ export default function ProjectsPage() {
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground">Priority</label>
                   <select
@@ -1007,24 +1153,6 @@ export default function ProjectsPage() {
                     <option value="URGENT">Urgent</option>
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-semibold text-muted-foreground">Assignee</label>
-                  <select
-                    value={newTask.assigneeMembershipId}
-                    onChange={(e) => setNewTask({ ...newTask, assigneeMembershipId: e.target.value })}
-                    className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1"
-                  >
-                    <option value="">Unassigned</option>
-                    {teamMembers.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.user?.firstName} {m.user?.lastName} ({m.department?.name || 'General'})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground">Due Date</label>
                   <input
@@ -1044,6 +1172,160 @@ export default function ProjectsPage() {
                     onChange={(e) => setNewTask({ ...newTask, estimatedHours: e.target.value })}
                     className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1"
                   />
+                </div>
+              </div>
+
+              {/* Multi-Select Assignees Section */}
+              <div className="space-y-2 border border-border rounded-lg p-3 bg-surface-secondary/20">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <Users className="h-3.5 w-3.5 text-primary" />
+                    <span>Assignees ({newTask.assigneeMembershipIds.length} selected)</span>
+                  </label>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewTask({
+                          ...newTask,
+                          assigneeMembershipIds: teamMembers.map((m) => m.id),
+                          assigneeMembershipId: teamMembers[0]?.id || '',
+                        })
+                      }
+                      className="text-[11px] text-primary hover:underline px-1.5 py-0.5 font-medium"
+                    >
+                      Select All
+                    </button>
+                    <span className="text-muted-foreground text-xs">|</span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setNewTask({
+                          ...newTask,
+                          assigneeMembershipIds: [],
+                          assigneeMembershipId: '',
+                        })
+                      }
+                      className="text-[11px] text-muted-foreground hover:text-foreground px-1.5 py-0.5"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                </div>
+
+                {/* Selected members chips */}
+                {newTask.assigneeMembershipIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 p-2 bg-background/80 rounded-md border border-border/60 max-h-24 overflow-y-auto">
+                    {newTask.assigneeMembershipIds.map((id) => {
+                      const m = teamMembers.find((member) => member.id === id);
+                      const name = m ? `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || m.user?.email : id;
+                      return (
+                        <span
+                          key={id}
+                          className="inline-flex items-center gap-1 bg-primary/10 text-primary text-[11px] font-medium px-2 py-0.5 rounded-full border border-primary/20"
+                        >
+                          {name}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = newTask.assigneeMembershipIds.filter((item) => item !== id);
+                              setNewTask({
+                                ...newTask,
+                                assigneeMembershipIds: updated,
+                                assigneeMembershipId: updated[0] || '',
+                              });
+                            }}
+                            className="hover:text-destructive transition-colors ml-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Filter input */}
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search members by name, email, or dept..."
+                    value={assigneeFilterText}
+                    onChange={(e) => setAssigneeFilterText(e.target.value)}
+                    className="w-full text-xs pl-8 pr-3 py-1.5 rounded-md border border-border bg-background text-foreground"
+                  />
+                </div>
+
+                {/* Scrollable member checklist */}
+                <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
+                  {teamMembers
+                    .filter((m) => {
+                      if (!assigneeFilterText.trim()) return true;
+                      const q = assigneeFilterText.toLowerCase();
+                      const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.toLowerCase();
+                      const email = (m.user?.email || '').toLowerCase();
+                      const dept = (m.department?.name || '').toLowerCase();
+                      const role = (m.role || '').toLowerCase();
+                      const designation = (m.designation || '').toLowerCase();
+                      return (
+                        fullName.includes(q) ||
+                        email.includes(q) ||
+                        dept.includes(q) ||
+                        role.includes(q) ||
+                        designation.includes(q)
+                      );
+                    })
+                    .map((m) => {
+                      const isSelected = newTask.assigneeMembershipIds.includes(m.id);
+                      const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || 'Team Member';
+                      const dept = m.department?.name || 'General';
+                      const role = m.designation || m.role || 'Member';
+
+                      return (
+                        <label
+                          key={m.id}
+                          className={`flex items-center justify-between p-2 rounded-md border text-xs cursor-pointer transition-colors ${
+                            isSelected
+                              ? 'bg-primary/10 border-primary/40 text-foreground'
+                              : 'bg-background hover:bg-muted/40 border-border/60 text-muted-foreground'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={(e) => {
+                                let updated: string[];
+                                if (e.target.checked) {
+                                  updated = [...newTask.assigneeMembershipIds, m.id];
+                                } else {
+                                  updated = newTask.assigneeMembershipIds.filter((id) => id !== m.id);
+                                }
+                                setNewTask({
+                                  ...newTask,
+                                  assigneeMembershipIds: updated,
+                                  assigneeMembershipId: updated[0] || '',
+                                });
+                              }}
+                              className="h-3.5 w-3.5 rounded border-border"
+                            />
+                            <div className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px]">
+                              {(m.user?.firstName?.[0] || 'U').toUpperCase()}
+                            </div>
+                            <div>
+                              <div className="font-medium text-foreground text-xs leading-none">{fullName}</div>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {m.user?.email} • {dept}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground uppercase">
+                            {role}
+                          </span>
+                        </label>
+                      );
+                    })}
                 </div>
               </div>
 

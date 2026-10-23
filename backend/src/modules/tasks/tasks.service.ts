@@ -172,6 +172,7 @@ export class TasksService {
       description?: string;
       projectId?: string;
       assigneeMembershipId?: string;
+      assigneeMembershipIds?: string[];
       status?: TaskStatus;
       priority?: PriorityLevel;
       dueDate?: Date | string;
@@ -208,6 +209,17 @@ export class TasksService {
     const initialStatus = data.status || TaskStatus.TODO;
     const initialProgress = initialStatus === TaskStatus.COMPLETED ? 100 : initialStatus === TaskStatus.IN_PROGRESS ? 25 : 0;
 
+    const assigneeIds: string[] = Array.isArray(data.assigneeMembershipIds) && data.assigneeMembershipIds.length > 0
+      ? data.assigneeMembershipIds.filter(Boolean)
+      : data.assigneeMembershipId ? [data.assigneeMembershipId] : [];
+
+    const primaryAssigneeId = assigneeIds.length > 0 ? assigneeIds[0] : null;
+
+    const allCollaboratorIds = Array.from(new Set([
+      ...(data.collaboratorIds || []),
+      ...assigneeIds,
+    ]));
+
     const initialMetadata: any = {
       creatorMembershipId: creatorMembershipId || null,
       startDate: data.startDate ? new Date(data.startDate) : null,
@@ -217,7 +229,8 @@ export class TasksService {
       assetId: data.assetId || null,
       customFields: data.customFields || {},
       dependsOnTaskIds: data.dependsOnTaskIds || [],
-      collaboratorIds: data.collaboratorIds || [],
+      collaboratorIds: allCollaboratorIds,
+      assigneeMembershipIds: assigneeIds,
       comments: [],
       attachments: [],
       activityLog: [
@@ -237,7 +250,7 @@ export class TasksService {
         title: data.title.trim(),
         description: data.description?.trim() || null,
         projectId: data.projectId || null,
-        assigneeMembershipId: data.assigneeMembershipId || null,
+        assigneeMembershipId: primaryAssigneeId,
         status: initialStatus,
         priority: data.priority || PriorityLevel.MEDIUM,
         dueDate: data.dueDate ? new Date(data.dueDate) : null,
@@ -250,11 +263,11 @@ export class TasksService {
       },
     });
 
-    // Notify assignee if assigned at creation
-    if (data.assigneeMembershipId) {
+    // Notify all assignees if assigned at creation
+    for (const memId of assigneeIds) {
       await this.sendNotification(
         workspaceId,
-        data.assigneeMembershipId,
+        memId,
         'New Work Item Assigned',
         `You have been assigned to: "${task.title}"`,
         `/app/projects?taskId=${task.id}`,
@@ -276,6 +289,7 @@ export class TasksService {
       status?: TaskStatus;
       priority?: PriorityLevel;
       assigneeMembershipId?: string;
+      assigneeMembershipIds?: string[];
       dueDate?: Date | string;
       startDate?: Date | string;
       actualHours?: number;
@@ -296,8 +310,18 @@ export class TasksService {
     const currentMetadata = (existing.sla as any) || {};
     const activityLog = currentMetadata.activityLog || [];
 
+    const newAssigneeIds = data.assigneeMembershipIds !== undefined
+      ? (Array.isArray(data.assigneeMembershipIds) ? data.assigneeMembershipIds.filter(Boolean) : [])
+      : data.assigneeMembershipId !== undefined
+      ? (data.assigneeMembershipId ? [data.assigneeMembershipId] : [])
+      : undefined;
+
+    const primaryAssigneeId = newAssigneeIds !== undefined
+      ? (newAssigneeIds.length > 0 ? newAssigneeIds[0] : null)
+      : data.assigneeMembershipId;
+
     const isStatusChanging = data.status && data.status !== existing.status;
-    const isAssigneeChanging = data.assigneeMembershipId !== undefined && data.assigneeMembershipId !== existing.assigneeMembershipId;
+    const isAssigneeChanging = primaryAssigneeId !== undefined && primaryAssigneeId !== existing.assigneeMembershipId;
     const isDueDateChanging = data.dueDate && new Date(data.dueDate).getTime() !== (existing.dueDate ? new Date(existing.dueDate).getTime() : 0);
 
     // If status moving to COMPLETED, check dependencies
@@ -314,12 +338,12 @@ export class TasksService {
       });
     }
 
-    if (isAssigneeChanging) {
+    if (isAssigneeChanging || (newAssigneeIds !== undefined)) {
       activityLog.push({
         action: 'REASSIGNED',
         actorId: actorMembershipId || 'SYSTEM',
         timestamp: new Date(),
-        details: `Reassigned to membership ${data.assigneeMembershipId || 'None'}`,
+        details: `Assignees updated (${newAssigneeIds ? newAssigneeIds.length : (primaryAssigneeId ? 1 : 0)} member(s) assigned)`,
       });
     }
 
@@ -334,6 +358,12 @@ export class TasksService {
 
     const updatedMetadata = {
       ...currentMetadata,
+      ...(newAssigneeIds !== undefined
+        ? {
+            assigneeMembershipIds: newAssigneeIds,
+            collaboratorIds: Array.from(new Set([...(currentMetadata.collaboratorIds || []), ...newAssigneeIds])),
+          }
+        : {}),
       ...(data.startDate ? { startDate: new Date(data.startDate) } : {}),
       ...(data.progress !== undefined ? { progress: Number(data.progress) } : isStatusChanging && data.status === 'COMPLETED' ? { progress: 100 } : {}),
       ...(data.customFields ? { customFields: { ...currentMetadata.customFields, ...data.customFields } } : {}),
@@ -347,7 +377,7 @@ export class TasksService {
         ...(data.description !== undefined ? { description: data.description } : {}),
         ...(data.status ? { status: data.status } : {}),
         ...(data.priority ? { priority: data.priority } : {}),
-        ...(data.assigneeMembershipId !== undefined ? { assigneeMembershipId: data.assigneeMembershipId } : {}),
+        ...(primaryAssigneeId !== undefined ? { assigneeMembershipId: primaryAssigneeId } : {}),
         ...(data.dueDate ? { dueDate: new Date(data.dueDate) } : {}),
         ...(data.actualHours !== undefined ? { actualHours: Number(data.actualHours) } : {}),
         ...(data.estimatedHours !== undefined ? { estimatedHours: Number(data.estimatedHours) } : {}),
@@ -359,10 +389,10 @@ export class TasksService {
       },
     });
 
-    if (isAssigneeChanging && data.assigneeMembershipId) {
+    if (isAssigneeChanging && primaryAssigneeId) {
       await this.sendNotification(
         workspaceId,
-        data.assigneeMembershipId,
+        primaryAssigneeId,
         'Work Item Reassigned to You',
         `You are now assigned to: "${updated.title}"`,
         `/app/projects?taskId=${updated.id}`,
@@ -963,6 +993,9 @@ export class TasksService {
       isRework: !!metadata.isRework,
       customFields: metadata.customFields || {},
       collaboratorIds: metadata.collaboratorIds || [],
+      assigneeMembershipIds: Array.isArray(metadata.assigneeMembershipIds) && metadata.assigneeMembershipIds.length > 0
+        ? metadata.assigneeMembershipIds
+        : (task.assigneeMembershipId ? [task.assigneeMembershipId] : []),
     };
   }
 

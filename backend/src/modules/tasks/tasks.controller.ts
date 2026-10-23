@@ -100,6 +100,7 @@ export class TasksController {
       description?: string;
       projectId?: string;
       assigneeMembershipId?: string;
+      assigneeMembershipIds?: string[];
       status?: TaskStatus;
       priority?: PriorityLevel;
       dueDate?: Date;
@@ -128,6 +129,7 @@ export class TasksController {
       status?: TaskStatus;
       priority?: PriorityLevel;
       assigneeMembershipId?: string;
+      assigneeMembershipIds?: string[];
       dueDate?: Date;
       startDate?: Date;
       actualHours?: number;
