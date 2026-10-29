@@ -154,12 +154,38 @@ export default function ProjectsPage() {
     }
   };
 
+  const getMemberDisplayName = (m: any): string => {
+    if (!m) return 'Team Member';
+    if (m.user) {
+      const full = `${m.user.firstName || ''} ${m.user.lastName || ''}`.trim();
+      if (full) return full;
+      if (m.user.email) return m.user.email;
+    }
+    return m.email || 'Team Member';
+  };
+
+  const getMemberRoleName = (m: any): string => {
+    if (!m) return 'Member';
+    if (typeof m.designation === 'string' && m.designation) return m.designation;
+    if (m.designation && typeof m.designation === 'object' && m.designation.title) return String(m.designation.title);
+    if (typeof m.role === 'string' && m.role) return m.role;
+    return 'Member';
+  };
+
+  const getMemberDeptName = (m: any): string => {
+    if (!m) return 'General';
+    if (typeof m.department === 'string' && m.department) return m.department;
+    if (m.department && typeof m.department === 'object' && m.department.name) return String(m.department.name);
+    return 'General';
+  };
+
   const getTaskAssignees = (task: any) => {
     if (!task) return [];
     const ids: string[] = Array.isArray(task.assigneeMembershipIds) && task.assigneeMembershipIds.length > 0
       ? task.assigneeMembershipIds
       : (task.assigneeMembershipId ? [task.assigneeMembershipId] : []);
-    const found = teamMembers.filter((m) => ids.includes(m.id));
+    const safeMembers = Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [];
+    const found = safeMembers.filter((m) => m && ids.includes(m.id));
     if (found.length === 0 && task.assignee) {
       return [task.assignee];
     }
@@ -588,7 +614,7 @@ export default function ProjectsPage() {
                             <div className="flex flex-wrap gap-1 max-w-[200px]">
                               {getTaskAssignees(t).map((m: any) => (
                                 <Badge key={m.id} variant="secondary" className="text-[10px] py-0 px-1.5 font-normal">
-                                  {m.user?.firstName} {m.user?.lastName}
+                                  {getMemberDisplayName(m)}
                                 </Badge>
                               ))}
                             </div>
@@ -966,9 +992,9 @@ export default function ProjectsPage() {
                         {getTaskAssignees(selectedTask).length > 0 ? (
                           getTaskAssignees(selectedTask).map((m: any) => (
                             <Badge key={m.id} variant="secondary" className="text-xs py-0.5 px-2">
-                              {m.user?.firstName} {m.user?.lastName}
-                              {m.department?.name && (
-                                <span className="text-[10px] text-muted-foreground ml-1">({m.department.name})</span>
+                              {getMemberDisplayName(m)}
+                              {getMemberDeptName(m) !== 'General' && (
+                                <span className="text-[10px] text-muted-foreground ml-1">({getMemberDeptName(m)})</span>
                               )}
                             </Badge>
                           ))
@@ -983,7 +1009,10 @@ export default function ProjectsPage() {
                           <div className="flex gap-1.5">
                             <button
                               type="button"
-                              onClick={() => setEditAssigneeIds(teamMembers.map((m) => m.id))}
+                              onClick={() => {
+                                const safeList = Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [];
+                                setEditAssigneeIds(safeList.map((m) => m.id));
+                              }}
                               className="text-primary hover:underline"
                             >
                               All
@@ -999,8 +1028,8 @@ export default function ProjectsPage() {
                           </div>
                         </div>
                         <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
-                          {teamMembers.map((m) => {
-                            const isChecked = editAssigneeIds.includes(m.id);
+                          {(Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : []).map((m) => {
+                            const isChecked = Array.isArray(editAssigneeIds) && editAssigneeIds.includes(m.id);
                             return (
                               <label
                                 key={m.id}
@@ -1013,18 +1042,19 @@ export default function ProjectsPage() {
                                     type="checkbox"
                                     checked={isChecked}
                                     onChange={() => {
+                                      const current = editAssigneeIds || [];
                                       setEditAssigneeIds(
                                         isChecked
-                                          ? editAssigneeIds.filter((id) => id !== m.id)
-                                          : [...editAssigneeIds, m.id],
+                                          ? current.filter((id) => id !== m.id)
+                                          : [...current, m.id],
                                       );
                                     }}
                                     className="h-3.5 w-3.5 rounded border-border text-primary"
                                   />
-                                  <span>{m.user?.firstName} {m.user?.lastName}</span>
+                                  <span>{getMemberDisplayName(m)}</span>
                                 </div>
                                 <span className="text-[10px] text-muted-foreground font-normal">
-                                  {m.department?.name || 'General'}
+                                  {getMemberDeptName(m)}
                                 </span>
                               </label>
                             );
@@ -1180,18 +1210,20 @@ export default function ProjectsPage() {
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                     <Users className="h-3.5 w-3.5 text-primary" />
-                    <span>Assignees ({newTask.assigneeMembershipIds.length} selected)</span>
+                    <span>Assignees ({(newTask.assigneeMembershipIds || []).length} selected)</span>
                   </label>
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        const safeList = Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [];
+                        const allIds = safeList.map((m) => m.id);
                         setNewTask({
                           ...newTask,
-                          assigneeMembershipIds: teamMembers.map((m) => m.id),
-                          assigneeMembershipId: teamMembers[0]?.id || '',
-                        })
-                      }
+                          assigneeMembershipIds: allIds,
+                          assigneeMembershipId: allIds[0] || '',
+                        });
+                      }}
                       className="text-[11px] text-primary hover:underline px-1.5 py-0.5 font-medium"
                     >
                       Select All
@@ -1214,11 +1246,11 @@ export default function ProjectsPage() {
                 </div>
 
                 {/* Selected members chips */}
-                {newTask.assigneeMembershipIds.length > 0 && (
+                {Array.isArray(newTask.assigneeMembershipIds) && newTask.assigneeMembershipIds.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 p-2 bg-background/80 rounded-md border border-border/60 max-h-24 overflow-y-auto">
                     {newTask.assigneeMembershipIds.map((id) => {
-                      const m = teamMembers.find((member) => member.id === id);
-                      const name = m ? `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || m.user?.email : id;
+                      const m = Array.isArray(teamMembers) ? teamMembers.find((member) => member?.id === id) : null;
+                      const name = m ? getMemberDisplayName(m) : id;
                       return (
                         <span
                           key={id}
@@ -1228,7 +1260,7 @@ export default function ProjectsPage() {
                           <button
                             type="button"
                             onClick={() => {
-                              const updated = newTask.assigneeMembershipIds.filter((item) => item !== id);
+                              const updated = (newTask.assigneeMembershipIds || []).filter((item) => item !== id);
                               setNewTask({
                                 ...newTask,
                                 assigneeMembershipIds: updated,
@@ -1259,28 +1291,27 @@ export default function ProjectsPage() {
 
                 {/* Scrollable member checklist */}
                 <div className="max-h-40 overflow-y-auto space-y-1 pr-1">
-                  {teamMembers
+                  {(Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [])
                     .filter((m) => {
                       if (!assigneeFilterText.trim()) return true;
                       const q = assigneeFilterText.toLowerCase();
-                      const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.toLowerCase();
-                      const email = (m.user?.email || '').toLowerCase();
-                      const dept = (m.department?.name || '').toLowerCase();
-                      const role = (m.role || '').toLowerCase();
-                      const designation = (m.designation || '').toLowerCase();
+                      const fullName = getMemberDisplayName(m).toLowerCase();
+                      const email = (m.user?.email || m.email || '').toLowerCase();
+                      const dept = getMemberDeptName(m).toLowerCase();
+                      const role = getMemberRoleName(m).toLowerCase();
                       return (
                         fullName.includes(q) ||
                         email.includes(q) ||
                         dept.includes(q) ||
-                        role.includes(q) ||
-                        designation.includes(q)
+                        role.includes(q)
                       );
                     })
                     .map((m) => {
-                      const isSelected = newTask.assigneeMembershipIds.includes(m.id);
-                      const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || 'Team Member';
-                      const dept = m.department?.name || 'General';
-                      const role = m.designation || m.role || 'Member';
+                      const isSelected = (newTask.assigneeMembershipIds || []).includes(m.id);
+                      const fullName = getMemberDisplayName(m);
+                      const dept = getMemberDeptName(m);
+                      const role = getMemberRoleName(m);
+                      const initial = (m.user?.firstName?.[0] || m.user?.email?.[0] || m.email?.[0] || 'U').toUpperCase();
 
                       return (
                         <label
@@ -1296,11 +1327,12 @@ export default function ProjectsPage() {
                               type="checkbox"
                               checked={isSelected}
                               onChange={(e) => {
+                                const current = newTask.assigneeMembershipIds || [];
                                 let updated: string[];
                                 if (e.target.checked) {
-                                  updated = [...newTask.assigneeMembershipIds, m.id];
+                                  updated = [...current, m.id];
                                 } else {
-                                  updated = newTask.assigneeMembershipIds.filter((id) => id !== m.id);
+                                  updated = current.filter((id) => id !== m.id);
                                 }
                                 setNewTask({
                                   ...newTask,
@@ -1311,12 +1343,12 @@ export default function ProjectsPage() {
                               className="h-3.5 w-3.5 rounded border-border"
                             />
                             <div className="h-6 w-6 rounded-full bg-primary/20 text-primary flex items-center justify-center font-bold text-[10px]">
-                              {(m.user?.firstName?.[0] || 'U').toUpperCase()}
+                              {initial}
                             </div>
                             <div>
                               <div className="font-medium text-foreground text-xs leading-none">{fullName}</div>
                               <div className="text-[10px] text-muted-foreground mt-0.5">
-                                {m.user?.email} • {dept}
+                                {m.user?.email || m.email || 'No email'} • {dept}
                               </div>
                             </div>
                           </div>
