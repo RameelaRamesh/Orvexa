@@ -96,7 +96,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const isPlatformAdmin = activeWorkspace?.accessRole === 'OWNER';
+  const accessRole = activeWorkspace?.accessRole || 'MEMBER';
+  const isPlatformAdmin = accessRole === 'OWNER';
   const rolePermissions: string[] = activeWorkspace?.role?.permissions?.map(
     (rp: any) => rp.permission?.code || rp.code || rp,
   ) || [];
@@ -175,7 +176,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Assets, Inventory & Docs',
       href: '/app/assets',
       icon: Package,
-      visible: true,
+      visible: accessRole !== 'MEMBER',
     },
     {
       name: 'Payroll & Compensation',
@@ -203,8 +204,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       </div>
     );
   }
-
-  const accessRole = activeWorkspace?.accessRole || 'MEMBER';
 
   return (
     <div className="flex min-h-screen bg-background">

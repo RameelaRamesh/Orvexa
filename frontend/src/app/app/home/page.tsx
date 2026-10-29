@@ -133,6 +133,10 @@ export default function HomePage() {
   };
 
   const role = activeWorkspace?.accessRole || 'MEMBER';
+  const enabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
+    'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'quality', 'sla', 'settings'
+  ];
+  const isAttendanceEnabled = enabledModules.includes('attendance') || enabledModules.includes('time');
 
   return (
     <div className="space-y-8">
@@ -150,24 +154,26 @@ export default function HomePage() {
         </div>
 
         {/* Quick Attendance Widget */}
-        <div className="flex items-center gap-3 bg-card border border-border p-2.5 rounded-lg shadow-sm">
-          <Clock className="h-5 w-5 text-primary" />
-          <div className="flex flex-col">
-            <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
-            <span className="text-xs font-bold text-foreground">
-              {todayAttendance ? (todayAttendance.clockOut ? 'Clocked Out' : 'Active Clock-In') : 'Not Clocked In'}
-            </span>
+        {isAttendanceEnabled && (
+          <div className="flex items-center gap-3 bg-card border border-border p-2.5 rounded-lg shadow-sm">
+            <Clock className="h-5 w-5 text-primary" />
+            <div className="flex flex-col">
+              <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
+              <span className="text-xs font-bold text-foreground">
+                {todayAttendance ? (todayAttendance.clockOut ? 'Clocked Out' : 'Active Clock-In') : 'Not Clocked In'}
+              </span>
+            </div>
+            {todayAttendance && !todayAttendance.clockOut ? (
+              <Button size="sm" variant="destructive" onClick={handleClockOut} className="h-8 text-xs">
+                Clock Out
+              </Button>
+            ) : (
+              <Button size="sm" onClick={handleClockIn} disabled={!!todayAttendance?.clockOut} className="h-8 text-xs">
+                Clock In
+              </Button>
+            )}
           </div>
-          {todayAttendance && !todayAttendance.clockOut ? (
-            <Button size="sm" variant="destructive" onClick={handleClockOut} className="h-8 text-xs">
-              Clock Out
-            </Button>
-          ) : (
-            <Button size="sm" onClick={handleClockIn} disabled={!!todayAttendance?.clockOut} className="h-8 text-xs">
-              Clock In
-            </Button>
-          )}
-        </div>
+        )}
       </div>
 
       {/* Actionable Onboarding Setup Reminder Card */}

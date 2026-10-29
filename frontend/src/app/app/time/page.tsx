@@ -30,7 +30,7 @@ import {
 import { toast } from 'sonner';
 
 export default function TimeAttendancePage() {
-  const [activeTab, setActiveTab] = useState<'my_attendance' | 'team_logs' | 'corrections' | 'shifts_policy'>('my_attendance');
+  const [activeTab, setActiveTab] = useState<'my_attendance' | 'team_logs' | 'corrections' | 'shifts_policy' | 'leave'>('my_attendance');
 
   // Core Data
   const [todayData, setTodayData] = useState<any>(null);
@@ -39,6 +39,18 @@ export default function TimeAttendancePage() {
   const [shiftsList, setShiftsList] = useState<any[]>([]);
   const [correctionsList, setCorrectionsList] = useState<any[]>([]);
   const [policy, setPolicy] = useState<any>(null);
+
+  // Leave & PTO State
+  const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
+  const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
+  const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
+  const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [showApplyLeaveModal, setShowApplyLeaveModal] = useState(false);
+  const [applyLeaveType, setApplyLeaveType] = useState('CASUAL');
+  const [applyStartDate, setApplyStartDate] = useState('');
+  const [applyEndDate, setApplyEndDate] = useState('');
+  const [applyReason, setApplyReason] = useState('');
+  const [submittingLeave, setSubmittingLeave] = useState(false);
 
   // Filters & State
   const [filterDate, setFilterDate] = useState<string>('');
@@ -76,7 +88,7 @@ export default function TimeAttendancePage() {
     if (!token || !wsId) return;
     try {
       const headers = { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId };
-      const [todayRes, listRes, summaryRes, shiftsRes, correctionsRes, policyRes, wsRes] = await Promise.all([
+      const [todayRes, listRes, summaryRes, shiftsRes, correctionsRes, policyRes, wsRes, leaveRes, balanceRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/time/today`, { headers }),
         fetch(`${BRANDING.apiUrl}/time/attendance${filterDate ? `?date=${filterDate}` : ''}`, { headers }),
         fetch(`${BRANDING.apiUrl}/time/reports/summary`, { headers }),
@@ -84,9 +96,12 @@ export default function TimeAttendancePage() {
         fetch(`${BRANDING.apiUrl}/time/corrections`, { headers }),
         fetch(`${BRANDING.apiUrl}/time/policy`, { headers }),
         fetch(`${BRANDING.apiUrl}/workspaces/${wsId}`, { headers }),
+        fetch(`${BRANDING.apiUrl}/leave`, { headers }),
+        fetch(`${BRANDING.apiUrl}/leave/balances`, { headers }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }),
       ]);
 
-      const [rawToday, rawList, rawSummary, rawShifts, rawCorrections, rawPolicy, rawWs] = await Promise.all([
+      const [rawToday, rawList, rawSummary, rawShifts, rawCorrections, rawPolicy, rawWs, rawLeave, rawBalance, rawMe] = await Promise.all([
         todayRes.json(),
         listRes.json(),
         summaryRes.json(),
@@ -94,6 +109,9 @@ export default function TimeAttendancePage() {
         correctionsRes.json(),
         policyRes.json(),
         wsRes.json(),
+        leaveRes.json(),
+        balanceRes.json(),
+        meRes.json(),
       ]);
 
       const tData = rawToday.data !== undefined ? rawToday.data : rawToday;
@@ -121,6 +139,21 @@ export default function TimeAttendancePage() {
         setIsAttendanceDisabled(!enabled);
       } else {
         setIsAttendanceDisabled(false);
+      }
+
+      const lvData = rawLeave.data !== undefined ? rawLeave.data : rawLeave;
+      setLeaveRequests(Array.isArray(lvData) ? lvData : []);
+
+      const bData = rawBalance.data !== undefined ? rawBalance.data : rawBalance;
+      setLeaveBalances(Array.isArray(bData) ? bData : []);
+
+      const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
+      if (meData?.memberships) {
+        const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
+        if (mem) {
+          setCurrentUserRole(mem.accessRole || 'MEMBER');
+          setCurrentMembershipId(mem.id);
+        }
       }
     } catch (err: any) {
       console.error('Error loading attendance engine data:', err);
@@ -412,6 +445,66 @@ export default function TimeAttendancePage() {
     }
   };
 
+  // Leave Handlers
+  const handleApplyLeave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!applyStartDate || !applyEndDate) {
+      toast.error('Please select start and end dates');
+      return;
+    }
+    setSubmittingLeave(true);
+    try {
+      const activeHeaders = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-workspace-id': wsId!,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/leave`, {
+        method: 'POST',
+        headers: activeHeaders,
+        body: JSON.stringify({
+          leaveType: applyLeaveType,
+          startDate: applyStartDate,
+          endDate: applyEndDate,
+          reason: applyReason,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to submit leave request');
+      toast.success('Leave request submitted successfully!');
+      setShowApplyLeaveModal(false);
+      setApplyReason('');
+      setApplyStartDate('');
+      setApplyEndDate('');
+      await loadAllData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error submitting leave request');
+    } finally {
+      setSubmittingLeave(false);
+    }
+  };
+
+  const handleUpdateLeaveStatus = async (id: string, status: 'APPROVED' | 'REJECTED') => {
+    try {
+      const activeHeaders = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-workspace-id': wsId!,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/leave/${id}/status`, {
+        method: 'PATCH',
+        headers: activeHeaders,
+        body: JSON.stringify({ status }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || `Failed to ${status.toLowerCase()} leave`);
+      toast.success(`Leave request ${status.toLowerCase()} successfully`);
+      await loadAllData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating leave status');
+    }
+  };
+
   const isClockedIn = !!todayData?.todaySummary?.isClockedIn;
   const isOnBreak = !!todayData?.todaySummary?.isOnBreak;
   const activeBreak = todayData?.todaySummary?.activeBreak;
@@ -510,6 +603,21 @@ export default function TimeAttendancePage() {
           }`}
         >
           <Settings className="h-4 w-4" /> Shifts &amp; Policies
+        </button>
+        <button
+          onClick={() => setActiveTab('leave')}
+          className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
+            activeTab === 'leave'
+              ? 'border-primary text-primary font-semibold'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Calendar className="h-4 w-4" /> Leave &amp; PTO
+          {leaveRequests.filter((l) => l.status === 'PENDING').length > 0 && (
+            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+              {leaveRequests.filter((l) => l.status === 'PENDING').length}
+            </Badge>
+          )}
         </button>
       </div>
 
@@ -1125,6 +1233,345 @@ export default function TimeAttendancePage() {
               </Button>
             </CardContent>
           </Card>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAB 5: LEAVE & PTO MANAGEMENT
+          ========================================================================= */}
+      {activeTab === 'leave' && (
+        <div className="space-y-6">
+          {/* Action Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card border border-border p-4 rounded-xl shadow-xs">
+            <div>
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-primary" />
+                Leave &amp; Paid Time Off (PTO)
+              </h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Apply for leave, check personal balances, and review team approval requests
+              </p>
+            </div>
+            <Button size="sm" onClick={() => setShowApplyLeaveModal(true)} className="gap-2 shrink-0">
+              <Plus className="h-4 w-4" /> Apply for Leave
+            </Button>
+          </div>
+
+          {/* Leave Balances Grid */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {['CASUAL', 'SICK', 'ANNUAL', 'UNPAID'].map((typeKey) => {
+              const bal = leaveBalances.find((b) => b.leaveType === typeKey);
+              const allocated = bal?.allocated ?? (typeKey === 'CASUAL' ? 7 : typeKey === 'SICK' ? 10 : typeKey === 'ANNUAL' ? 15 : 30);
+              const used = bal?.used ?? 0;
+              const pending = bal?.pending ?? 0;
+              const available = Math.max(0, allocated - used - pending);
+
+              const titles: Record<string, string> = {
+                CASUAL: 'Casual Leave',
+                SICK: 'Sick Leave',
+                ANNUAL: 'Annual Paid Leave',
+                UNPAID: 'Unpaid Leave (LOP)',
+              };
+
+              return (
+                <Card key={typeKey} className="border-border bg-card shadow-xs">
+                  <CardContent className="p-4 space-y-1.5">
+                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                      {titles[typeKey]}
+                    </div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-2xl font-bold text-foreground">
+                        {typeKey === 'UNPAID' ? used : available}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {typeKey === 'UNPAID' ? 'days used' : `/ ${allocated} total`}
+                      </span>
+                    </div>
+                    {pending > 0 && (
+                      <div className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                        {pending} day(s) pending approval
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+
+          {/* Team Approvals Inbox (Visible for Managers, Admins & Owner) */}
+          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') && (
+            <Card className="border-border shadow-xs">
+              <CardHeader className="pb-3 border-b border-border/60">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-sm font-bold flex items-center gap-2">
+                      <Users className="h-4 w-4 text-primary" />
+                      Team Leave Approvals (Manager / HR Inbox)
+                    </CardTitle>
+                    <CardDescription className="text-xs mt-0.5">
+                      Review, approve, or reject leave applications submitted by team members
+                    </CardDescription>
+                  </div>
+                  <Badge variant="secondary" className="text-xs">
+                    {leaveRequests.filter((r) => r.status === 'PENDING').length} Pending
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs border-collapse">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30 text-muted-foreground">
+                        <th className="py-3 px-4 font-semibold">Employee</th>
+                        <th className="py-3 px-4 font-semibold">Leave Type</th>
+                        <th className="py-3 px-4 font-semibold">Dates &amp; Duration</th>
+                        <th className="py-3 px-4 font-semibold">Reason</th>
+                        <th className="py-3 px-4 font-semibold">Status</th>
+                        <th className="py-3 px-4 font-semibold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {leaveRequests.length === 0 ? (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-muted-foreground">
+                            No leave requests found for this organization.
+                          </td>
+                        </tr>
+                      ) : (
+                        leaveRequests.map((req) => (
+                          <tr key={req.id} className="hover:bg-muted/20 transition-colors">
+                            <td className="py-3 px-4">
+                              <div className="font-semibold text-foreground">
+                                {req.membership?.user?.firstName} {req.membership?.user?.lastName}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground">
+                                {req.membership?.department?.name || 'Engineering'} • {req.membership?.designation?.title || 'Member'}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4">
+                              <Badge variant="outline" className="text-[10px] uppercase font-mono">
+                                {req.leaveType}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="font-medium text-foreground">
+                                {new Date(req.startDate).toLocaleDateString()} &rarr; {new Date(req.endDate).toLocaleDateString()}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground font-semibold">
+                                {req.totalDays} day{req.totalDays > 1 ? 's' : ''}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 max-w-xs truncate text-muted-foreground">
+                              {req.reason || 'No justification provided'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <Badge
+                                variant={
+                                  req.status === 'APPROVED'
+                                    ? 'default'
+                                    : req.status === 'REJECTED'
+                                    ? 'destructive'
+                                    : 'secondary'
+                                }
+                                className="text-[10px]"
+                              >
+                                {req.status}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                              {req.status === 'PENDING' ? (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleUpdateLeaveStatus(req.id, 'APPROVED')}
+                                    className="h-7 text-xs px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                  >
+                                    <Check className="h-3 w-3" /> Approve
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    variant="destructive"
+                                    onClick={() => handleUpdateLeaveStatus(req.id, 'REJECTED')}
+                                    className="h-7 text-xs px-2.5 gap-1"
+                                  >
+                                    <XCircle className="h-3 w-3" /> Reject
+                                  </Button>
+                                </>
+                              ) : (
+                                <span className="text-[11px] text-muted-foreground">
+                                  {req.approvedBy?.user?.firstName ? `Processed by ${req.approvedBy.user.firstName}` : 'Reviewed'}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* My Personal Leave Applications History */}
+          <Card className="border-border shadow-xs">
+            <CardHeader className="pb-3 border-b border-border/60">
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Clock className="h-4 w-4 text-primary" />
+                My Leave History
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Review all personal leave applications and their current approval status
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30 text-muted-foreground">
+                      <th className="py-3 px-4 font-semibold">Leave Type</th>
+                      <th className="py-3 px-4 font-semibold">Start &amp; End Dates</th>
+                      <th className="py-3 px-4 font-semibold">Total Days</th>
+                      <th className="py-3 px-4 font-semibold">Reason</th>
+                      <th className="py-3 px-4 font-semibold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {leaveRequests.filter((r) => r.membershipId === currentMembershipId).length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="py-8 text-center text-muted-foreground">
+                          You haven't submitted any leave applications yet.
+                        </td>
+                      </tr>
+                    ) : (
+                      leaveRequests
+                        .filter((r) => r.membershipId === currentMembershipId)
+                        .map((req) => (
+                          <tr key={req.id} className="hover:bg-muted/20 transition-colors">
+                            <td className="py-3 px-4 font-semibold">
+                              <Badge variant="outline" className="text-[10px] uppercase font-mono">
+                                {req.leaveType}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4 font-medium">
+                              {new Date(req.startDate).toLocaleDateString()} &rarr; {new Date(req.endDate).toLocaleDateString()}
+                            </td>
+                            <td className="py-3 px-4 font-semibold text-foreground">
+                              {req.totalDays} day{req.totalDays > 1 ? 's' : ''}
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground max-w-xs truncate">
+                              {req.reason || 'Personal leave'}
+                            </td>
+                            <td className="py-3 px-4">
+                              <Badge
+                                variant={
+                                  req.status === 'APPROVED'
+                                    ? 'default'
+                                    : req.status === 'REJECTED'
+                                    ? 'destructive'
+                                    : 'secondary'
+                                }
+                                className="text-[10px]"
+                              >
+                                {req.status}
+                              </Badge>
+                            </td>
+                          </tr>
+                        ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: APPLY FOR LEAVE
+          ========================================================================= */}
+      {showApplyLeaveModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h3 className="text-base font-bold text-foreground flex items-center gap-2">
+                <Calendar className="h-5 w-5 text-primary" />
+                Apply for Leave
+              </h3>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowApplyLeaveModal(false)}
+                className="h-7 w-7 p-0 text-muted-foreground"
+              >
+                &times;
+              </Button>
+            </div>
+
+            <form onSubmit={handleApplyLeave} className="space-y-4">
+              <div>
+                <label className="text-xs font-semibold text-foreground">Leave Type *</label>
+                <select
+                  value={applyLeaveType}
+                  onChange={(e) => setApplyLeaveType(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                >
+                  <option value="CASUAL">Casual Leave (Short Notice)</option>
+                  <option value="SICK">Sick Leave (Medical/Health)</option>
+                  <option value="ANNUAL">Annual Paid Leave (Planned Vacation)</option>
+                  <option value="UNPAID">Unpaid Leave (Loss of Pay)</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-foreground">Start Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={applyStartDate}
+                    onChange={(e) => setApplyStartDate(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-foreground">End Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={applyEndDate}
+                    onChange={(e) => setApplyEndDate(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-foreground">Reason / Handover Note</label>
+                <textarea
+                  rows={3}
+                  placeholder="e.g. Attending family function, medical appointment, semester exam..."
+                  value={applyReason}
+                  onChange={(e) => setApplyReason(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowApplyLeaveModal(false)}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={submittingLeave}>
+                  {submittingLeave ? 'Submitting...' : 'Submit Application'}
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

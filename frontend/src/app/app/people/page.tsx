@@ -41,6 +41,7 @@ export default function PeoplePage() {
   const [designations, setDesignations] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
+  const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -127,13 +128,14 @@ export default function PeoplePage() {
     if (!token || !wsId) return;
     try {
       const activeHeaders = getHeaders();
-      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes] = await Promise.all([
+      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/people/invitations`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/designations`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
       ]);
 
       const rawMem = await memRes.json();
@@ -142,6 +144,7 @@ export default function PeoplePage() {
       const rawDesig = await desigRes.json();
       const rawTeam = await teamRes.json();
       const rawRole = await roleRes.json();
+      const rawMe = await meRes.json();
 
       const memData = rawMem.data !== undefined ? rawMem.data : rawMem;
       const invData = rawInv.data !== undefined ? rawInv.data : rawInv;
@@ -156,6 +159,12 @@ export default function PeoplePage() {
       setDesignations(Array.isArray(desigData) ? desigData : []);
       setTeams(Array.isArray(teamData) ? teamData : []);
       setRoles(Array.isArray(roleData) ? roleData : []);
+
+      const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
+      if (meData?.memberships) {
+        const currentMem = meData.memberships.find((m: any) => m.workspaceId === wsId);
+        if (currentMem) setCurrentUserRole(currentMem.accessRole);
+      }
     } catch (err: any) {
       console.error('Error loading people data:', err);
     } finally {
@@ -389,12 +398,16 @@ export default function PeoplePage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
-            Transfer Ownership
-          </Button>
-          <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2">
-            <UserPlus className="h-4 w-4" /> Invite Member
-          </Button>
+          {currentUserRole === 'OWNER' && (
+            <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
+              Transfer Ownership
+            </Button>
+          )}
+          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+            <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2">
+              <UserPlus className="h-4 w-4" /> Invite Member
+            </Button>
+          )}
         </div>
       </div>
 
