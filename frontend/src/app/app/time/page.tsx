@@ -740,6 +740,23 @@ export default function TimeAttendancePage() {
           ========================================================================= */}
       {activeTab === 'my_attendance' && (
         <div className="space-y-6">
+          {/* Attendance Disabled Empty State */}
+          {isAttendanceDisabled && (
+            <Card className="border-border bg-card shadow-sm">
+              <CardContent className="py-12 text-center space-y-3">
+                <Clock className="h-10 w-10 text-muted-foreground/50 mx-auto" />
+                <h3 className="text-base font-semibold text-foreground">Attendance &amp; Shifts Module is Disabled</h3>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  Shift tracking, clock-in/out, and session histories are disabled in workspace settings. You can manage your leave requests and time off under the Leave &amp; PTO tab.
+                </p>
+                <div className="pt-2">
+                  <Button size="sm" onClick={() => setActiveTab('leave')} className="text-xs">
+                    Switch to Leave &amp; PTO &rarr;
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
           {/* Shift Tracker Access Restricted banner */}
           {!canAccessShiftTracker && !isAttendanceDisabled && (
             <Card className="border-border bg-muted/20">
@@ -969,70 +986,72 @@ export default function TimeAttendancePage() {
           )}
 
           {/* Today's Multi-Session Timeline */}
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <div>
-                <CardTitle className="text-base">Today&apos;s Work Sessions History</CardTitle>
-                <CardDescription>Each work segment recorded today is preserved independently</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {allTodaySessions.length === 0 ? (
-                <div className="text-center py-8 text-muted-foreground text-xs">
-                  No attendance sessions recorded for today. Clock in to start your first session.
+          {!isAttendanceDisabled && (
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <div>
+                  <CardTitle className="text-base">Today&apos;s Work Sessions History</CardTitle>
+                  <CardDescription>Each work segment recorded today is preserved independently</CardDescription>
                 </div>
-              ) : (
-                <div className="divide-y divide-border">
-                  {allTodaySessions.map((s: any, idx: number) => {
-                    const grossMins = s.clockOut
-                      ? Math.round((new Date(s.clockOut).getTime() - new Date(s.clockIn).getTime()) / 60000)
-                      : Math.round((Date.now() - new Date(s.clockIn).getTime()) / 60000);
-                    return (
-                      <div key={s.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs font-bold text-foreground">Session #{idx + 1}</span>
-                            {s.clockOut ? (
-                              <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
-                            ) : (
-                              <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
-                            )}
-                            {s.status === 'LATE' && (
-                              <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">LATE</Badge>
-                            )}
+              </CardHeader>
+              <CardContent>
+                {allTodaySessions.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground text-xs">
+                    No attendance sessions recorded for today. Clock in to start your first session.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border">
+                    {allTodaySessions.map((s: any, idx: number) => {
+                      const grossMins = s.clockOut
+                        ? Math.round((new Date(s.clockOut).getTime() - new Date(s.clockIn).getTime()) / 60000)
+                        : Math.round((Date.now() - new Date(s.clockIn).getTime()) / 60000);
+                      return (
+                        <div key={s.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-bold text-foreground">Session #{idx + 1}</span>
+                              {s.clockOut ? (
+                                <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
+                              ) : (
+                                <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
+                              )}
+                              {s.status === 'LATE' && (
+                                <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">LATE</Badge>
+                              )}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              <span>Clock In: <strong>{new Date(s.clockIn).toLocaleTimeString()}</strong></span>
+                              {s.clockOut && (
+                                <span> • Clock Out: <strong>{new Date(s.clockOut).toLocaleTimeString()}</strong></span>
+                              )}
+                              <span> • Worked: <strong>{s.totalWorkMinutes || grossMins} mins</strong></span>
+                              <span> • Breaks: <strong>{s.totalBreakMinutes || 0} mins ({s.breaks?.length || 0})</strong></span>
+                            </div>
+                            {s.notes && <div className="text-[11px] text-muted-foreground italic">&ldquo;{s.notes}&rdquo;</div>}
                           </div>
-                          <div className="text-xs text-muted-foreground">
-                            <span>Clock In: <strong>{new Date(s.clockIn).toLocaleTimeString()}</strong></span>
-                            {s.clockOut && (
-                              <span> • Clock Out: <strong>{new Date(s.clockOut).toLocaleTimeString()}</strong></span>
-                            )}
-                            <span> • Worked: <strong>{s.totalWorkMinutes || grossMins} mins</strong></span>
-                            <span> • Breaks: <strong>{s.totalBreakMinutes || 0} mins ({s.breaks?.length || 0})</strong></span>
+                          <div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                setCorrectionTarget(s);
+                                setRequestedClockIn(new Date(s.clockIn).toISOString().slice(0, 16));
+                                setRequestedClockOut(s.clockOut ? new Date(s.clockOut).toISOString().slice(0, 16) : '');
+                                setShowCorrectionModal(true);
+                              }}
+                              className="text-xs gap-1.5"
+                            >
+                              <FileText className="h-3.5 w-3.5" /> Request Correction
+                            </Button>
                           </div>
-                          {s.notes && <div className="text-[11px] text-muted-foreground italic">&ldquo;{s.notes}&rdquo;</div>}
                         </div>
-                        <div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setCorrectionTarget(s);
-                              setRequestedClockIn(new Date(s.clockIn).toISOString().slice(0, 16));
-                              setRequestedClockOut(s.clockOut ? new Date(s.clockOut).toISOString().slice(0, 16) : '');
-                              setShowCorrectionModal(true);
-                            }}
-                            className="text-xs gap-1.5"
-                          >
-                            <FileText className="h-3.5 w-3.5" /> Request Correction
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                      );
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
