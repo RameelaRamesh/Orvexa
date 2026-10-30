@@ -72,7 +72,7 @@ export default function PayrollPage() {
     };
   };
 
-  const loadData = async () => {
+  const loadData = async (targetPeriodId?: string) => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
     if (!wsId) return;
 
@@ -86,14 +86,27 @@ export default function PayrollPage() {
         fetch(`${BRANDING.apiUrl}/people`, { headers }),
       ]);
 
-      const periodsData = await periodsRes.json();
-      const configData = await configRes.json();
-      const reportsData = await reportsRes.json();
-      const peopleData = await peopleRes.json();
+      const rawPeriods = await periodsRes.json();
+      const rawConfig = await configRes.json();
+      const rawReports = await reportsRes.json();
+      const rawPeople = await peopleRes.json();
+
+      const periodsData = rawPeriods?.data !== undefined ? rawPeriods.data : rawPeriods;
+      const configData = rawConfig?.data !== undefined ? rawConfig.data : rawConfig;
+      const reportsData = rawReports?.data !== undefined ? rawReports.data : rawReports;
+      const peopleData = rawPeople?.data !== undefined ? rawPeople.data : rawPeople;
 
       if (Array.isArray(periodsData)) {
         setPeriods(periodsData);
-        if (periodsData.length > 0 && !selectedPeriod) {
+        const toSelectId = targetPeriodId || selectedPeriod?.id;
+        if (toSelectId) {
+          const matched = periodsData.find((p: any) => p.id === toSelectId);
+          if (matched) {
+            setSelectedPeriod(matched);
+          } else if (periodsData.length > 0) {
+            setSelectedPeriod(periodsData[0]);
+          }
+        } else if (periodsData.length > 0) {
           setSelectedPeriod(periodsData[0]);
         }
       }
@@ -109,12 +122,8 @@ export default function PayrollPage() {
         });
       }
       if (reportsData) setReports(reportsData);
-      if (Array.isArray(peopleData.data || peopleData)) setPeople(peopleData.data || peopleData);
-
-      if (selectedPeriod) {
-        const fresh = periodsData.find((p: any) => p.id === selectedPeriod.id);
-        if (fresh) setSelectedPeriod(fresh);
-      }
+      const peopleList = Array.isArray(peopleData) ? peopleData : (peopleData?.data || []);
+      if (Array.isArray(peopleList)) setPeople(peopleList);
     } catch (err: any) {
       console.error('Failed to load payroll data:', err);
       toast.error('Failed to load payroll records');
@@ -137,14 +146,16 @@ export default function PayrollPage() {
         body: JSON.stringify(periodForm),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to create period');
+      const rawData = await res.json();
+      if (!res.ok) throw new Error(rawData?.message || 'Failed to create period');
+
+      const data = rawData?.data !== undefined ? rawData.data : rawData;
 
       toast.success(`Payroll period "${periodForm.name}" created`);
       setShowCreatePeriodModal(false);
       setPeriodForm({ name: '', startDate: '', endDate: '', paymentDate: '' });
-      loadData();
       setSelectedPeriod(data);
+      await loadData(data?.id);
     } catch (err: any) {
       toast.error(err.message || 'Error creating payroll period');
     }
@@ -158,12 +169,14 @@ export default function PayrollPage() {
         headers,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Calculation failed');
+      const rawData = await res.json();
+      if (!res.ok) throw new Error(rawData?.message || 'Calculation failed');
+
+      const data = rawData?.data !== undefined ? rawData.data : rawData;
 
       toast.success('Payroll calculated! Unpaid leave & overtime records integrated.');
-      loadData();
       setSelectedPeriod(data);
+      await loadData(periodId);
     } catch (err: any) {
       toast.error(err.message || 'Error calculating payroll');
     }
@@ -177,12 +190,14 @@ export default function PayrollPage() {
         headers,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Approval failed');
+      const rawData = await res.json();
+      if (!res.ok) throw new Error(rawData?.message || 'Approval failed');
+
+      const data = rawData?.data !== undefined ? rawData.data : rawData;
 
       toast.success('Payroll period approved and permanently locked');
-      loadData();
       setSelectedPeriod(data);
+      await loadData(periodId);
     } catch (err: any) {
       toast.error(err.message || 'Error approving payroll');
     }
@@ -198,8 +213,10 @@ export default function PayrollPage() {
         body: JSON.stringify(configForm),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to update config');
+      const rawData = await res.json();
+      if (!res.ok) throw new Error(rawData?.message || 'Failed to update config');
+
+      const data = rawData?.data !== undefined ? rawData.data : rawData;
 
       toast.success('Payroll configuration updated');
       setConfig(data);
