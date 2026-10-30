@@ -45,7 +45,7 @@ services:
       SMTP_USER: operations@vattara.com
       SMTP_PASS: bacasnuqhkyupdrl
       SMTP_FROM: "ORVEXA Notifications <operations@vattara.com>"
-      FRONTEND_URL: http://localhost:3000
+      FRONTEND_URL: ${FRONTEND_URL:-https://app.orvexa.io}
     depends_on:
       - postgres
       - redis
@@ -60,7 +60,7 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: http://localhost:4000/api/v1
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://api.orvexa.io/api/v1}
     depends_on:
       - backend
 

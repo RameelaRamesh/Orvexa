@@ -512,7 +512,7 @@ export class AuthService {
       },
     });
 
-    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app';
     const resetLink = `${appUrl}/reset-password?token=${resetToken}`;
 
     await this.mailService.sendPasswordResetEmail({
@@ -674,7 +674,7 @@ export class AuthService {
       data: { passwordResetToken: resetToken, passwordResetExpires: expiresAt },
     });
 
-    const appUrl = process.env.APP_URL || 'http://localhost:3000';
+    const appUrl = process.env.APP_URL || process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app';
     const resetLink = `${appUrl}/reset-password?token=${resetToken}`;
     await this.mailService.sendPasswordResetEmail({
       to: user.email,
