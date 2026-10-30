@@ -1,5 +1,7 @@
 'use client';
 
+import '@/lib/session-isolation';
+
 import React, { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -23,6 +25,15 @@ export default function LoginPage() {
   const [recoveryCode, setRecoveryCode] = useState('');
   const [useRecovery, setUseRecovery] = useState(false);
   const [mfaLoading, setMfaLoading] = useState(false);
+
+  React.useEffect(() => {
+    try {
+      sessionStorage.removeItem('accessToken');
+      sessionStorage.removeItem('activeWorkspaceId');
+      window.localStorage.removeItem('accessToken');
+      window.localStorage.removeItem('activeWorkspaceId');
+    } catch {}
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

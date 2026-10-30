@@ -78,6 +78,12 @@ export class TasksController {
     return this.tasksService.retryWorkflowExecution(workspaceId, executionId);
   }
 
+  @Post('deadlines/check')
+  async triggerDeadlineCheck(@CurrentWorkspace() workspaceId: string) {
+    await this.tasksService.checkOverdueTasks(workspaceId);
+    return { success: true, message: 'Deadline check completed' };
+  }
+
   @Get(':id')
   async getById(
     @CurrentWorkspace() workspaceId: string,

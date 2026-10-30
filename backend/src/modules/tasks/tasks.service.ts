@@ -3,6 +3,7 @@ import {
   BadRequestException,
   NotFoundException,
   ForbiddenException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { TaskStatus, PriorityLevel, ApprovalStatus } from '@prisma/client';
@@ -42,7 +43,16 @@ export interface WorkflowExecution {
 }
 
 @Injectable()
-export class TasksService {
+export class TasksService implements OnModuleInit {
+  onModuleInit() {
+    setTimeout(() => {
+      this.checkOverdueTasks().catch(() => null);
+    }, 5000);
+
+    setInterval(() => {
+      this.checkOverdueTasks().catch(() => null);
+    }, 60000);
+  }
   constructor(private readonly prisma: PrismaService) {}
 
   // ---------------------------------------------------------------------------
@@ -62,6 +72,7 @@ export class TasksService {
     userContext?: any,
   ) {
     const where: any = { workspaceId };
+    this.checkOverdueTasks(workspaceId).catch(() => null);
 
     if (filter?.projectId) where.projectId = filter.projectId;
     if (filter?.assigneeMembershipId) where.assigneeMembershipId = filter.assigneeMembershipId;
@@ -326,6 +337,16 @@ export class TasksService {
 
     // If status moving to COMPLETED, check dependencies
     if (data.status === TaskStatus.COMPLETED) {
+      if (actorMembershipId) {
+        const actor = await this.prisma.membership.findFirst({
+          where: { id: actorMembershipId, workspaceId },
+        });
+        if (actor && actor.accessRole === 'MEMBER') {
+          throw new ForbiddenException(
+            'Access restricted: Only managers and workspace administrators are authorized to complete work items. Please submit the item for review.',
+          );
+        }
+      }
       await this.verifyDependenciesCompleted(workspaceId, id, currentMetadata);
     }
 
@@ -357,6 +378,7 @@ export class TasksService {
     }
 
     const updatedMetadata = {
+      ...((isDueDateChanging && data.dueDate && new Date(data.dueDate).getTime() > Date.now()) ? { overdueNotifiedAt: null, isOverdue: false } : {}),
       ...currentMetadata,
       ...(newAssigneeIds !== undefined
         ? {
@@ -454,6 +476,27 @@ export class TasksService {
       include: { project: true, assignee: { include: { user: true } } },
     });
 
+    const managersToAlert = await this.prisma.membership.findMany({
+      where: {
+        workspaceId,
+        status: 'ACTIVE',
+        OR: [
+          { accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] } },
+          ...(updated.assignee?.reportsToId ? [{ id: updated.assignee.reportsToId }] : []),
+        ],
+      },
+    });
+    for (const m of managersToAlert) {
+      if (m.id === actorMembershipId) continue;
+      await this.sendNotification(
+        workspaceId,
+        m.id,
+        'Work Item Ready for Review',
+        `"${updated.title}" was submitted for review by ${updated.assignee?.user?.firstName || 'team member'}.`,
+        `/app/projects?taskId=${updated.id}`,
+      );
+    }
+
     if (reviewerMembershipId) {
       await this.sendNotification(
         workspaceId,
@@ -518,6 +561,16 @@ export class TasksService {
   }
 
   async complete(id: string, workspaceId: string, actorMembershipId?: string, actualHours?: number) {
+    if (actorMembershipId) {
+      const actor = await this.prisma.membership.findFirst({
+        where: { id: actorMembershipId, workspaceId },
+      });
+      if (actor && actor.accessRole === 'MEMBER') {
+        throw new ForbiddenException(
+          'Access restricted: Only managers and workspace administrators can complete work items. Please submit the item for review.',
+        );
+      }
+    }
     const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
     if (!task) throw new NotFoundException('Work item not found');
 
@@ -541,6 +594,7 @@ export class TasksService {
           ...metadata,
           progress: 100,
           completedAt: new Date(),
+          completedByManagerMembershipId: actorMembershipId || null,
           activityLog,
         },
       },
@@ -997,6 +1051,94 @@ export class TasksService {
         ? metadata.assigneeMembershipIds
         : (task.assigneeMembershipId ? [task.assigneeMembershipId] : []),
     };
+  }
+
+  /**
+   * Scans for tasks whose deadline has ended without completion,
+   * and dispatches alert notifications to higher officials (Managers, Admins, Owners, and Direct Reports).
+   */
+  public async checkOverdueTasks(workspaceId?: string) {
+    try {
+      const now = new Date();
+      const where: any = {
+        status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
+        dueDate: { lt: now },
+      };
+      if (workspaceId) {
+        where.workspaceId = workspaceId;
+      }
+
+      const overdueTasks = await this.prisma.task.findMany({
+        where,
+        include: {
+          assignee: {
+            include: {
+              user: { select: { firstName: true, lastName: true, email: true } },
+            },
+          },
+          project: { select: { id: true, name: true } },
+        },
+      });
+
+      for (const task of overdueTasks) {
+        const metadata = (task.sla as any) || {};
+
+        if (metadata.overdueNotifiedAt) {
+          continue;
+        }
+
+        const higherOfficials = await this.prisma.membership.findMany({
+          where: {
+            workspaceId: task.workspaceId,
+            status: 'ACTIVE',
+            OR: [
+              { accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] } },
+              ...(task.assignee?.reportsToId ? [{ id: task.assignee.reportsToId }] : []),
+            ],
+          },
+        });
+
+        const assigneeName = task.assignee?.user
+          ? `${task.assignee.user.firstName || ''} ${task.assignee.user.lastName || ''}`.trim()
+          : 'Unassigned';
+
+        const dueDateFormatted = task.dueDate ? new Date(task.dueDate).toLocaleString() : 'Deadline';
+
+        const activityLog = metadata.activityLog || [];
+        activityLog.push({
+          action: 'DEADLINE_BREACHED',
+          actorId: 'SYSTEM',
+          timestamp: now,
+          details: `Task missed deadline of ${dueDateFormatted}. Higher officials notified.`,
+        });
+
+        for (const official of higherOfficials) {
+          if (official.id === task.assigneeMembershipId) continue;
+
+          await this.sendNotification(
+            task.workspaceId,
+            official.id,
+            `🚨 Deadline Missed: ${task.title}`,
+            `Work item "${task.title}" assigned to ${assigneeName} missed its deadline (${dueDateFormatted}) without completion. Immediate review required.`,
+            `/app/projects?taskId=${task.id}`,
+          );
+        }
+
+        await this.prisma.task.update({
+          where: { id: task.id },
+          data: {
+            sla: {
+              ...metadata,
+              overdueNotifiedAt: now,
+              isOverdue: true,
+              activityLog,
+            },
+          },
+        });
+      }
+    } catch (err) {
+      // Overdue scan errors do not crash caller
+    }
   }
 
   private async sendNotification(

@@ -73,6 +73,7 @@ export default function ProjectsPage() {
   const [selectedNewDepId, setSelectedNewDepId] = useState('');
   const [showEditAssignees, setShowEditAssignees] = useState(false);
   const [editAssigneeIds, setEditAssigneeIds] = useState<string[]>([]);
+  const [currentRole, setCurrentRole] = useState<string>('MEMBER');
   const [savingAssignees, setSavingAssignees] = useState(false);
 
   // Workflow Rule Modal
@@ -93,26 +94,34 @@ export default function ProjectsPage() {
     if (!token || !wsId) return;
     try {
       const headers = { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId };
-      const [projRes, taskRes, memRes, wfRulesRes, wfExecsRes] = await Promise.all([
+      const [projRes, taskRes, memRes, wfRulesRes, wfExecsRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/projects`, { headers }),
         fetch(`${BRANDING.apiUrl}/tasks`, { headers }),
         fetch(`${BRANDING.apiUrl}/people`, { headers }),
         fetch(`${BRANDING.apiUrl}/tasks/workflows/rules`, { headers }),
         fetch(`${BRANDING.apiUrl}/tasks/workflows/executions`, { headers }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }),
       ]);
 
-      const [projData, taskData, memData, wfRulesData, wfExecsData] = await Promise.all([
+      const [projData, taskData, memData, wfRulesData, wfExecsData, meData] = await Promise.all([
         projRes.json(),
         taskRes.json(),
         memRes.json(),
         wfRulesRes.json(),
         wfExecsRes.json(),
+        meRes.json(),
       ]);
 
       setProjects(projData?.data !== undefined ? projData.data : (Array.isArray(projData) ? projData : []));
       setTasks(taskData?.data !== undefined ? taskData.data : (Array.isArray(taskData) ? taskData : []));
       setTeamMembers(memData?.data !== undefined ? memData.data : (Array.isArray(memData) ? memData : []));
       setWorkflowRules(wfRulesData?.data !== undefined ? wfRulesData.data : (Array.isArray(wfRulesData) ? wfRulesData : []));
+
+      const memberships = meData?.data?.memberships || [];
+      const activeMem = memberships.find((m: any) => m.workspaceId === wsId) || memberships[0];
+      if (activeMem?.accessRole) {
+        setCurrentRole(activeMem.accessRole);
+      }
       setWorkflowExecutions(wfExecsData?.data !== undefined ? wfExecsData.data : (Array.isArray(wfExecsData) ? wfExecsData : []));
     } catch (err: any) {
       console.error(err);
@@ -422,6 +431,8 @@ export default function ProjectsPage() {
   };
 
   // Filter Tasks
+  const isManagerOrAdmin = currentRole === 'MANAGER' || currentRole === 'ADMIN' || currentRole === 'OWNER';
+
   const filteredTasks = tasks.filter((t) => {
     if (selectedProjectId === 'STANDALONE' && t.projectId) return false;
     if (selectedProjectId !== 'ALL' && selectedProjectId !== 'STANDALONE' && t.projectId !== selectedProjectId) return false;
@@ -657,6 +668,7 @@ export default function ProjectsPage() {
                             className="text-xs"
                           >
                             {t.status}
+                            {t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'COMPLETED' && ' (Overdue)'}
                           </Badge>
                         </td>
                         <td className="py-3.5 px-4 text-right">
@@ -810,6 +822,13 @@ export default function ProjectsPage() {
                     {selectedTask.priority}
                   </Badge>
                 </div>
+                <div className="pt-1">
+                  {selectedTask.dueDate && new Date(selectedTask.dueDate) < new Date() && selectedTask.status !== 'COMPLETED' && (
+                    <Badge variant="destructive" className="text-xs gap-1 font-semibold animate-pulse mb-1">
+                      <AlertTriangle className="h-3 w-3" /> Deadline Missed (Officials Notified)
+                    </Badge>
+                  )}
+                </div>
                 <h2 className="text-xl font-bold text-foreground">{selectedTask.title}</h2>
               </div>
               <Button size="sm" variant="ghost" onClick={() => setSelectedTask(null)} className="h-8 w-8 p-0">
@@ -825,7 +844,13 @@ export default function ProjectsPage() {
                   <CheckCircle className="h-3.5 w-3.5" /> Submit for Review
                 </Button>
               )}
-              {selectedTask.status === 'IN_REVIEW' && (
+              {!isManagerOrAdmin && selectedTask.status === 'IN_REVIEW' && (
+                <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/30 text-xs font-medium">
+                  <Clock className="h-3.5 w-3.5" />
+                  <span>Submitted • Awaiting Manager Review &amp; Approval</span>
+                </div>
+              )}
+              {isManagerOrAdmin && selectedTask.status === 'IN_REVIEW' && (
                 <Button
                   size="sm"
                   variant="destructive"
@@ -838,7 +863,7 @@ export default function ProjectsPage() {
                   <RotateCcw className="h-3.5 w-3.5" /> Reject to Rework
                 </Button>
               )}
-              {selectedTask.status !== 'COMPLETED' && (
+              {isManagerOrAdmin && selectedTask.status !== 'COMPLETED' && (
                 <Button
                   size="sm"
                   onClick={() => handleAction('complete', {}, 'Work Item Completed')}
@@ -847,7 +872,7 @@ export default function ProjectsPage() {
                   <CheckCircle className="h-3.5 w-3.5" /> Complete Work
                 </Button>
               )}
-              {selectedTask.status === 'COMPLETED' && (
+              {isManagerOrAdmin && selectedTask.status === 'COMPLETED' && (
                 <Button size="sm" variant="outline" onClick={() => handleAction('reopen', {}, 'Work Item Reopened')} className="text-xs gap-1">
                   <RotateCcw className="h-3.5 w-3.5" /> Reopen Work
                 </Button>

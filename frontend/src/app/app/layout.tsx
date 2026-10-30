@@ -1,5 +1,7 @@
 'use client';
 
+import '@/lib/session-isolation';
+
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
@@ -80,6 +82,10 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   const handleLogout = () => {
+    try {
+      sessionStorage.removeItem('accessToken');
+      sessionStorage.removeItem('activeWorkspaceId');
+    } catch {}
     localStorage.removeItem('accessToken');
     localStorage.removeItem('activeWorkspaceId');
     toast.info('Logged out successfully');

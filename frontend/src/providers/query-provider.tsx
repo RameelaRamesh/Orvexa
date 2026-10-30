@@ -1,5 +1,6 @@
 'use client';
 
+import '@/lib/session-isolation';
 import React, { useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
