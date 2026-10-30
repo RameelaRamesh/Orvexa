@@ -175,7 +175,27 @@ export default function HomePage() {
               <div className="flex flex-col">
                 <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
                 <span className="text-xs font-bold text-foreground">
-                  {isClockedIn ? 'Active Clock-In' : isClockedOut ? 'Clocked Out' : 'Not Clocked In'}
+                  {isClockedIn ? (
+                    <>
+                      Active Clock-In{' '}
+                      {todayAttendance?.clockIn && (
+                        <span className="text-[11px] font-normal text-muted-foreground">
+                          ({new Date(todayAttendance.clockIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                        </span>
+                      )}
+                    </>
+                  ) : isClockedOut ? (
+                    <>
+                      Clocked Out{' '}
+                      {todayAttendance?.clockOut && (
+                        <span className="text-[11px] font-normal text-muted-foreground">
+                          ({new Date(todayAttendance.clockOut).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    'Not Clocked In'
+                  )}
                 </span>
               </div>
               {isClockedIn ? (
