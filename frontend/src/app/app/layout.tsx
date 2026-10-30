@@ -165,7 +165,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Time & Attendance',
       href: '/app/time',
       icon: Clock,
-      visible: (hasPerm('time:view') || hasPerm('attendance:view')) && (enabledModules.includes('time') || enabledModules.includes('attendance')),
+      visible: (hasPerm('time:view') || hasPerm('attendance:view') || hasPerm('attendance:clock')) && (enabledModules.includes('time') || enabledModules.includes('attendance')),
     },
     {
       name: 'Leave & PTO',
