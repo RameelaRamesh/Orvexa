@@ -21,9 +21,19 @@ export class DesignationsService {
   }
 
   async update(id: string, workspaceId: string, data: { title?: string; level?: number; description?: string }) {
-    return this.prisma.designation.updateMany({
+    await this.prisma.designation.updateMany({
       where: { id, workspaceId },
-      data,
+      data: {
+        ...(data.title !== undefined ? { title: data.title } : {}),
+        ...(data.level !== undefined ? { level: Number(data.level) || 1 } : {}),
+        ...(data.description !== undefined ? { description: data.description || null } : {}),
+      },
+    });
+    return this.prisma.designation.findFirst({
+      where: { id, workspaceId },
+      include: {
+        _count: { select: { memberships: true } },
+      },
     });
   }
 

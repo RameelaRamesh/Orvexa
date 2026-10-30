@@ -36,11 +36,26 @@ export class TeamsService {
   async update(
     id: string,
     workspaceId: string,
-    data: { name?: string; departmentId?: string; description?: string; leadMembershipId?: string },
+    data: { name?: string; departmentId?: string | null; description?: string; leadMembershipId?: string | null },
   ) {
-    return this.prisma.team.updateMany({
+    await this.prisma.team.updateMany({
       where: { id, workspaceId },
-      data,
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.departmentId !== undefined ? { departmentId: data.departmentId || null } : {}),
+        ...(data.description !== undefined ? { description: data.description || null } : {}),
+        ...(data.leadMembershipId !== undefined ? { leadMembershipId: data.leadMembershipId || null } : {}),
+      },
+    });
+    return this.prisma.team.findFirst({
+      where: { id, workspaceId },
+      include: {
+        department: true,
+        leadMembership: {
+          include: { user: { select: { firstName: true, lastName: true, email: true } } },
+        },
+        _count: { select: { memberships: true } },
+      },
     });
   }
 

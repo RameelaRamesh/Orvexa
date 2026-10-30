@@ -28,6 +28,7 @@ export class TimeController {
   // ---------------------------------------------------------------------------
 
   @Post('clock-in')
+  @RequirePermissions('attendance:clock')
   async clockIn(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -37,6 +38,7 @@ export class TimeController {
   }
 
   @Post('clock-out')
+  @RequirePermissions('attendance:clock')
   async clockOut(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -46,6 +48,7 @@ export class TimeController {
   }
 
   @Post('break/start')
+  @RequirePermissions('attendance:clock')
   async startBreak(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -55,6 +58,7 @@ export class TimeController {
   }
 
   @Post('break/end')
+  @RequirePermissions('attendance:clock')
   async endBreak(@CurrentWorkspace() workspaceId: string, @Request() req: any) {
     return this.timeService.endBreak(workspaceId, req.membershipId);
   }

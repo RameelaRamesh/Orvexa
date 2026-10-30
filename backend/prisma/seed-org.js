@@ -43,11 +43,11 @@ async function main() {
     { code: 'time:export', name: 'Export Timesheet Logs', module: 'Time' },
     { code: 'time:manage', name: 'Full Time & Shift Administration', module: 'Time' },
 
-    { code: 'attendance:view', name: 'View Attendance Records', module: 'Attendance' },
-    { code: 'attendance:clock', name: 'Clock In & Clock Out', module: 'Attendance' },
+    { code: 'attendance:view', name: 'View Attendance Records & History', module: 'Attendance' },
+    { code: 'attendance:clock', name: 'Clock In, Clock Out & Shift Tracker', module: 'Attendance' },
     { code: 'attendance:edit', name: 'Adjust Attendance Records', module: 'Attendance' },
     { code: 'attendance:export', name: 'Export Attendance Reports', module: 'Attendance' },
-    { code: 'attendance:manage', name: 'Full Attendance Administration', module: 'Attendance' },
+    { code: 'attendance:manage', name: 'Full Attendance & Shift Administration', module: 'Attendance' },
 
     { code: 'leave:view', name: 'View Leave Balances & Team Calendar', module: 'Leave' },
     { code: 'leave:apply', name: 'Apply for Leave & PTO', module: 'Leave' },

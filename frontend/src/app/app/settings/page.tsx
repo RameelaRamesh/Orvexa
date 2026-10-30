@@ -13,6 +13,8 @@ import {
   CheckCircle2,
   Plus,
   Trash2,
+  Pencil,
+  X,
   CreditCard,
   Sparkles,
   Clock,
@@ -109,6 +111,22 @@ export default function SettingsPage() {
   const [newTeamDeptId, setNewTeamDeptId] = useState('');
   const [newDesigTitle, setNewDesigTitle] = useState('');
   const [newDesigLevel, setNewDesigLevel] = useState(1);
+
+  // Structure Edit state
+  const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
+  const [editDeptName, setEditDeptName] = useState('');
+  const [editDeptCode, setEditDeptCode] = useState('');
+  const [savingDept, setSavingDept] = useState(false);
+
+  const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
+  const [editTeamName, setEditTeamName] = useState('');
+  const [editTeamDeptId, setEditTeamDeptId] = useState('');
+  const [savingTeam, setSavingTeam] = useState(false);
+
+  const [editingDesigId, setEditingDesigId] = useState<string | null>(null);
+  const [editDesigTitle, setEditDesigTitle] = useState('');
+  const [editDesigLevel, setEditDesigLevel] = useState(1);
+  const [savingDesig, setSavingDesig] = useState(false);
 
   // Billing state
   const [subscription, setSubscription] = useState<any>(null);
@@ -241,6 +259,12 @@ export default function SettingsPage() {
   };
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const tabParam = new URLSearchParams(window.location.search).get('tab');
+      if (tabParam && ['details', 'modules', 'roles', 'structure', 'billing', 'security'].includes(tabParam)) {
+        setActiveTab(tabParam as any);
+      }
+    }
     loadAllData();
   }, []);
 
@@ -521,9 +545,63 @@ export default function SettingsPage() {
       const res = await fetch(`${BRANDING.apiUrl}/departments/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete department');
       setDepartments(departments.filter((d) => (d.id || d.data?.id) !== id));
+      if (editingDeptId === id) cancelEditDept();
       toast.success('Department deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting department');
+    }
+  };
+
+  const startEditDept = (dept: any) => {
+    setEditingDeptId(dept.id);
+    setEditDeptName(dept.name || '');
+    setEditDeptCode(dept.code || '');
+  };
+
+  const cancelEditDept = () => {
+    setEditingDeptId(null);
+    setEditDeptName('');
+    setEditDeptCode('');
+  };
+
+  const handleSaveDept = async (id: string) => {
+    if (!editDeptName.trim()) {
+      toast.error('Department Name is required');
+      return;
+    }
+    setSavingDept(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/departments/${id}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: editDeptName.trim(),
+          code: editDeptCode.trim() || undefined,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to update department');
+      const data = await res.json();
+      const updated = data.data !== undefined ? data.data : data;
+      setDepartments((prev) =>
+        prev.map((d) => {
+          const did = d.id || d.data?.id;
+          if (did === id) {
+            return {
+              ...(d.data !== undefined ? d.data : d),
+              name: editDeptName.trim(),
+              code: editDeptCode.trim(),
+              ...(updated && typeof updated === 'object' ? updated : {}),
+            };
+          }
+          return d;
+        })
+      );
+      cancelEditDept();
+      toast.success('Department updated successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating department');
+    } finally {
+      setSavingDept(false);
     }
   };
 
@@ -553,9 +631,65 @@ export default function SettingsPage() {
       const res = await fetch(`${BRANDING.apiUrl}/teams/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete team');
       setTeams(teams.filter((t) => (t.id || t.data?.id) !== id));
+      if (editingTeamId === id) cancelEditTeam();
       toast.success('Team deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting team');
+    }
+  };
+
+  const startEditTeam = (team: any) => {
+    setEditingTeamId(team.id);
+    setEditTeamName(team.name || '');
+    setEditTeamDeptId(team.departmentId || team.department?.id || '');
+  };
+
+  const cancelEditTeam = () => {
+    setEditingTeamId(null);
+    setEditTeamName('');
+    setEditTeamDeptId('');
+  };
+
+  const handleSaveTeam = async (id: string) => {
+    if (!editTeamName.trim()) {
+      toast.error('Team Name is required');
+      return;
+    }
+    setSavingTeam(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/teams/${id}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: editTeamName.trim(),
+          departmentId: editTeamDeptId || null,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to update team');
+      const data = await res.json();
+      const updated = data.data !== undefined ? data.data : data;
+      const matchingDept = departments.find((d) => (d.id || d.data?.id) === editTeamDeptId);
+      setTeams((prev) =>
+        prev.map((t) => {
+          const tid = t.id || t.data?.id;
+          if (tid === id) {
+            return {
+              ...(t.data !== undefined ? t.data : t),
+              name: editTeamName.trim(),
+              departmentId: editTeamDeptId || null,
+              department: matchingDept ? (matchingDept.data !== undefined ? matchingDept.data : matchingDept) : null,
+              ...(updated && typeof updated === 'object' ? updated : {}),
+            };
+          }
+          return t;
+        })
+      );
+      cancelEditTeam();
+      toast.success('Team updated successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating team');
+    } finally {
+      setSavingTeam(false);
     }
   };
 
@@ -585,9 +719,63 @@ export default function SettingsPage() {
       const res = await fetch(`${BRANDING.apiUrl}/designations/${id}`, { method: 'DELETE', headers: getHeaders() });
       if (!res.ok) throw new Error('Failed to delete designation');
       setDesignations(designations.filter((d) => (d.id || d.data?.id) !== id));
+      if (editingDesigId === id) cancelEditDesig();
       toast.success('Designation deleted');
     } catch (err: any) {
       toast.error(err.message || 'Error deleting designation');
+    }
+  };
+
+  const startEditDesig = (desig: any) => {
+    setEditingDesigId(desig.id);
+    setEditDesigTitle(desig.title || '');
+    setEditDesigLevel(desig.level || 1);
+  };
+
+  const cancelEditDesig = () => {
+    setEditingDesigId(null);
+    setEditDesigTitle('');
+    setEditDesigLevel(1);
+  };
+
+  const handleSaveDesig = async (id: string) => {
+    if (!editDesigTitle.trim()) {
+      toast.error('Designation Title is required');
+      return;
+    }
+    setSavingDesig(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/designations/${id}`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          title: editDesigTitle.trim(),
+          level: Number(editDesigLevel) || 1,
+        }),
+      });
+      if (!res.ok) throw new Error('Failed to update designation');
+      const data = await res.json();
+      const updated = data.data !== undefined ? data.data : data;
+      setDesignations((prev) =>
+        prev.map((d) => {
+          const did = d.id || d.data?.id;
+          if (did === id) {
+            return {
+              ...(d.data !== undefined ? d.data : d),
+              title: editDesigTitle.trim(),
+              level: Number(editDesigLevel) || 1,
+              ...(updated && typeof updated === 'object' ? updated : {}),
+            };
+          }
+          return d;
+        })
+      );
+      cancelEditDesig();
+      toast.success('Designation updated successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating designation');
+    } finally {
+      setSavingDesig(false);
     }
   };
 
@@ -1610,15 +1798,82 @@ export default function SettingsPage() {
                 ) : (
                   departments.map((rawD) => {
                     const d = rawD.data !== undefined ? rawD.data : rawD;
+                    const isEditing = editingDeptId === d.id;
+
+                    if (isEditing) {
+                      return (
+                        <form
+                          key={d.id}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSaveDept(d.id);
+                          }}
+                          className="p-2 rounded-md bg-muted/60 border border-primary/30 space-y-1.5 text-xs"
+                        >
+                          <input
+                            type="text"
+                            required
+                            value={editDeptName}
+                            onChange={(e) => setEditDeptName(e.target.value)}
+                            placeholder="Department Name *"
+                            className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                            autoFocus
+                          />
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              value={editDeptCode}
+                              onChange={(e) => setEditDeptCode(e.target.value)}
+                              placeholder="Code (e.g. OPS)"
+                              className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                            />
+                            <Button
+                              type="submit"
+                              size="sm"
+                              disabled={savingDept}
+                              className="h-7 text-xs px-2.5 shrink-0"
+                            >
+                              {savingDept ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={savingDept}
+                              onClick={cancelEditDept}
+                              className="h-7 text-xs px-2 shrink-0"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </form>
+                      );
+                    }
+
                     return (
-                      <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                        <div>
+                      <div key={d.id} className="group flex items-center justify-between p-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs">
+                        <div className="min-w-0 pr-2">
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{d.name}</span>
                           {d.code && <span className="text-[10px] font-mono text-muted-foreground ml-2">({d.code})</span>}
                         </div>
-                        <button onClick={() => handleDeleteDept(d.id)} className="text-destructive hover:opacity-80">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => startEditDept(d)}
+                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-background"
+                            title="Edit Department"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDept(d.id)}
+                            className="text-destructive hover:opacity-80 transition-opacity p-1 rounded hover:bg-destructive/10"
+                            title="Delete Department"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })
@@ -1671,17 +1926,92 @@ export default function SettingsPage() {
                 ) : (
                   teams.map((rawT) => {
                     const t = rawT.data !== undefined ? rawT.data : rawT;
+                    const isEditing = editingTeamId === t.id;
+
+                    if (isEditing) {
+                      return (
+                        <form
+                          key={t.id}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSaveTeam(t.id);
+                          }}
+                          className="p-2 rounded-md bg-muted/60 border border-primary/30 space-y-1.5 text-xs"
+                        >
+                          <input
+                            type="text"
+                            required
+                            value={editTeamName}
+                            onChange={(e) => setEditTeamName(e.target.value)}
+                            placeholder="Team Name *"
+                            className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                            autoFocus
+                          />
+                          <div className="flex gap-1.5">
+                            <select
+                              value={editTeamDeptId}
+                              onChange={(e) => setEditTeamDeptId(e.target.value)}
+                              className="w-full rounded border border-input bg-background px-2 py-1 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none"
+                            >
+                              <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Select Dept (Optional)</option>
+                              {departments.map((rawD) => {
+                                const d = rawD.data !== undefined ? rawD.data : rawD;
+                                return (
+                                  <option key={d.id} value={d.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                                    {d.name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            <Button
+                              type="submit"
+                              size="sm"
+                              disabled={savingTeam}
+                              className="h-7 text-xs px-2.5 shrink-0"
+                            >
+                              {savingTeam ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={savingTeam}
+                              onClick={cancelEditTeam}
+                              className="h-7 text-xs px-2 shrink-0"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </form>
+                      );
+                    }
+
                     return (
-                      <div key={t.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                        <div>
+                      <div key={t.id} className="group flex items-center justify-between p-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs">
+                        <div className="min-w-0 pr-2">
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{t.name}</span>
                           {(t.department?.name || t.departmentName) && (
                             <span className="text-[10px] text-muted-foreground ml-2">({t.department?.name || t.departmentName})</span>
                           )}
                         </div>
-                        <button onClick={() => handleDeleteTeam(t.id)} className="text-destructive hover:opacity-80">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => startEditTeam(t)}
+                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-background"
+                            title="Edit Team"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTeam(t.id)}
+                            className="text-destructive hover:opacity-80 transition-opacity p-1 rounded hover:bg-destructive/10"
+                            title="Delete Team"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })
@@ -1728,15 +2058,84 @@ export default function SettingsPage() {
                 ) : (
                   designations.map((rawD) => {
                     const d = rawD.data !== undefined ? rawD.data : rawD;
+                    const isEditing = editingDesigId === d.id;
+
+                    if (isEditing) {
+                      return (
+                        <form
+                          key={d.id}
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            handleSaveDesig(d.id);
+                          }}
+                          className="p-2 rounded-md bg-muted/60 border border-primary/30 space-y-1.5 text-xs"
+                        >
+                          <input
+                            type="text"
+                            required
+                            value={editDesigTitle}
+                            onChange={(e) => setEditDesigTitle(e.target.value)}
+                            placeholder="Designation Title *"
+                            className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                            autoFocus
+                          />
+                          <div className="flex gap-1.5">
+                            <input
+                              type="number"
+                              min={1}
+                              max={10}
+                              value={editDesigLevel}
+                              onChange={(e) => setEditDesigLevel(Number(e.target.value))}
+                              placeholder="Level (1-10)"
+                              className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                            />
+                            <Button
+                              type="submit"
+                              size="sm"
+                              disabled={savingDesig}
+                              className="h-7 text-xs px-2.5 shrink-0"
+                            >
+                              {savingDesig ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              disabled={savingDesig}
+                              onClick={cancelEditDesig}
+                              className="h-7 text-xs px-2 shrink-0"
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </form>
+                      );
+                    }
+
                     return (
-                      <div key={d.id} className="flex items-center justify-between p-2 rounded-md bg-muted/40 text-xs">
-                        <div>
+                      <div key={d.id} className="group flex items-center justify-between p-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs">
+                        <div className="min-w-0 pr-2">
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{d.title}</span>
                           <span className="text-[10px] text-muted-foreground ml-2">(Level {d.level || 1})</span>
                         </div>
-                        <button onClick={() => handleDeleteDesig(d.id)} className="text-destructive hover:opacity-80">
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => startEditDesig(d)}
+                            className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-background"
+                            title="Edit Designation"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDesig(d.id)}
+                            className="text-destructive hover:opacity-80 transition-opacity p-1 rounded hover:bg-destructive/10"
+                            title="Delete Designation"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })

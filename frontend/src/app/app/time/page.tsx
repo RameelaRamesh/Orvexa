@@ -46,6 +46,8 @@ export default function TimeAttendancePage() {
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
   const [currentUserDesignation, setCurrentUserDesignation] = useState<string>('');
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [userPermissions, setUserPermissions] = useState<string[]>([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [showApplyLeaveModal, setShowApplyLeaveModal] = useState(false);
   const [applyLeaveType, setApplyLeaveType] = useState('CASUAL');
   const [applyStartDate, setApplyStartDate] = useState('');
@@ -135,8 +137,10 @@ export default function TimeAttendancePage() {
       setPolicyForm(pData || {});
 
       const wsData = rawWs.data !== undefined ? rawWs.data : rawWs;
+      let attendanceDisabled = false;
       if (wsData?.settings?.enabledModules && Array.isArray(wsData.settings.enabledModules)) {
         const enabled = wsData.settings.enabledModules.includes('attendance') || wsData.settings.enabledModules.includes('time');
+        attendanceDisabled = !enabled;
         setIsAttendanceDisabled(!enabled);
       } else {
         setIsAttendanceDisabled(false);
@@ -160,6 +164,20 @@ export default function TimeAttendancePage() {
           setCurrentUserRole(effectiveRole);
           setCurrentMembershipId(mem.id);
           setCurrentUserDesignation(mem.designation?.title || '');
+          const isOwner = mem.accessRole === 'OWNER';
+          setIsPlatformAdmin(isOwner);
+
+          const perms: string[] = (mem.role?.permissions || []).map(
+            (rp: any) => rp.permission?.code || rp.code || rp
+          );
+          setUserPermissions(perms);
+        }
+      }
+
+      if (attendanceDisabled && typeof window !== 'undefined') {
+        const tabParam = new URLSearchParams(window.location.search).get('tab');
+        if (!tabParam || tabParam === 'my_attendance') {
+          setActiveTab('leave');
         }
       }
     } catch (err: any) {
@@ -168,6 +186,47 @@ export default function TimeAttendancePage() {
       setLoading(false);
     }
   };
+
+  const hasPerm = (perm: string) => {
+    if (isPlatformAdmin) return true;
+    const [mod] = perm.split(':');
+    return (
+      userPermissions.includes(perm) ||
+      userPermissions.includes(`${mod}:manage`) ||
+      userPermissions.includes(`${mod}:administer`)
+    );
+  };
+
+  const canAccessShiftTracker = !isAttendanceDisabled && (
+    isPlatformAdmin ||
+    hasPerm('attendance:clock') ||
+    hasPerm('attendance:manage')
+  );
+
+  const canViewAttendance = !isAttendanceDisabled && (
+    isPlatformAdmin ||
+    hasPerm('attendance:view') ||
+    hasPerm('attendance:clock') ||
+    hasPerm('attendance:manage')
+  );
+
+  const canManageShiftsPolicy = !isAttendanceDisabled && (
+    isPlatformAdmin ||
+    hasPerm('time:manage') ||
+    hasPerm('attendance:manage') ||
+    currentUserRole === 'OWNER' ||
+    currentUserRole === 'ADMIN' ||
+    currentUserRole === 'MANAGER'
+  );
+
+  const canViewCorrections = !isAttendanceDisabled && (
+    isPlatformAdmin ||
+    hasPerm('attendance:edit') ||
+    hasPerm('attendance:manage') ||
+    currentUserRole === 'OWNER' ||
+    currentUserRole === 'ADMIN' ||
+    currentUserRole === 'MANAGER'
+  );
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -183,6 +242,10 @@ export default function TimeAttendancePage() {
   const handleClockIn = async () => {
     if (isAttendanceDisabled) {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
+      return;
+    }
+    if (!canAccessShiftTracker) {
+      toast.error('You do not have permission to clock in or track shifts. Please request the attendance:clock permission.');
       return;
     }
     setActionLoading(true);
@@ -217,6 +280,10 @@ export default function TimeAttendancePage() {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
       return;
     }
+    if (!canAccessShiftTracker) {
+      toast.error('You do not have permission to clock out. Please request the attendance:clock permission.');
+      return;
+    }
     setActionLoading(true);
     try {
       const res = await fetch(`${BRANDING.apiUrl}/time/clock-out`, {
@@ -245,6 +312,10 @@ export default function TimeAttendancePage() {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
       return;
     }
+    if (!canAccessShiftTracker) {
+      toast.error('You do not have permission to log breaks.');
+      return;
+    }
     setActionLoading(true);
     try {
       const res = await fetch(`${BRANDING.apiUrl}/time/break/start`, {
@@ -270,6 +341,10 @@ export default function TimeAttendancePage() {
   const handleEndBreak = async () => {
     if (isAttendanceDisabled) {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
+      return;
+    }
+    if (!canAccessShiftTracker) {
+      toast.error('You do not have permission to end breaks.');
       return;
     }
     setActionLoading(true);
@@ -559,64 +634,90 @@ export default function TimeAttendancePage() {
 
       {/* Module Disabled Warning */}
       {isAttendanceDisabled && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30 p-4 text-amber-900 dark:text-amber-200 flex items-start gap-3.5 shadow-sm">
-          <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
-          <div className="space-y-1">
-            <h4 className="text-sm font-semibold">Attendance &amp; Shifts Module is Disabled</h4>
-            <p className="text-xs text-amber-800/90 dark:text-amber-300/80 leading-relaxed">
-              Attendance tracking is disabled for this organization. An administrator can enable <strong>Attendance &amp; Shifts</strong> in Workspace Settings &rarr; Modules &amp; Features.
-            </p>
+        <div className="rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30 p-4 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 shadow-sm">
+          <div className="flex items-start gap-3.5">
+            <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
+            <div className="space-y-1">
+              <h4 className="text-sm font-semibold">Attendance &amp; Shifts Module is Disabled</h4>
+              <p className="text-xs text-amber-800/90 dark:text-amber-300/80 leading-relaxed">
+                Attendance tracking and shift monitoring are disabled for this workspace. An administrator can enable <strong>Attendance &amp; Shifts</strong> in Workspace Settings or configure permissions in Roles &amp; Permissions.
+              </p>
+            </div>
           </div>
+          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || isPlatformAdmin) && (
+            <div className="flex items-center gap-2 shrink-0">
+              <a
+                href="/app/settings?tab=roles"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors shadow-sm"
+              >
+                Roles &amp; Permissions &rarr;
+              </a>
+              <a
+                href="/app/settings?tab=modules"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-600/50 bg-background/50 hover:bg-background text-amber-800 dark:text-amber-200 text-xs font-semibold transition-colors shadow-sm"
+              >
+                Modules
+              </a>
+            </div>
+          )}
         </div>
       )}
 
       {/* Navigation Tabs */}
       <div className="flex flex-wrap border-b border-border gap-1 text-sm font-medium">
-        <button
-          onClick={() => setActiveTab('my_attendance')}
-          className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
-            activeTab === 'my_attendance'
-              ? 'border-primary text-primary font-semibold'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Clock className="h-4 w-4" /> My Shift &amp; Sessions
-        </button>
-        <button
-          onClick={() => setActiveTab('team_logs')}
-          className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
-            activeTab === 'team_logs'
-              ? 'border-primary text-primary font-semibold'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Users className="h-4 w-4" /> Workspace Attendance Logs
-        </button>
-        <button
-          onClick={() => setActiveTab('corrections')}
-          className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
-            activeTab === 'corrections'
-              ? 'border-primary text-primary font-semibold'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <FileText className="h-4 w-4" /> Exceptions &amp; Corrections
-          {correctionsList.filter((c) => c.status === 'PENDING').length > 0 && (
-            <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
-              {correctionsList.filter((c) => c.status === 'PENDING').length}
-            </Badge>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('shifts_policy')}
-          className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
-            activeTab === 'shifts_policy'
-              ? 'border-primary text-primary font-semibold'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Settings className="h-4 w-4" /> Shifts &amp; Policies
-        </button>
+        {!isAttendanceDisabled && (canAccessShiftTracker || canViewAttendance) && (
+          <button
+            onClick={() => setActiveTab('my_attendance')}
+            className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'my_attendance'
+                ? 'border-primary text-primary font-semibold'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Clock className="h-4 w-4" /> My Shift &amp; Sessions
+          </button>
+        )}
+        {!isAttendanceDisabled && canViewAttendance && (
+          <button
+            onClick={() => setActiveTab('team_logs')}
+            className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'team_logs'
+                ? 'border-primary text-primary font-semibold'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Users className="h-4 w-4" /> Workspace Attendance Logs
+          </button>
+        )}
+        {!isAttendanceDisabled && canViewCorrections && (
+          <button
+            onClick={() => setActiveTab('corrections')}
+            className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'corrections'
+                ? 'border-primary text-primary font-semibold'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FileText className="h-4 w-4" /> Exceptions &amp; Corrections
+            {correctionsList.filter((c) => c.status === 'PENDING').length > 0 && (
+              <Badge variant="destructive" className="h-5 px-1.5 text-[10px]">
+                {correctionsList.filter((c) => c.status === 'PENDING').length}
+              </Badge>
+            )}
+          </button>
+        )}
+        {!isAttendanceDisabled && canManageShiftsPolicy && (
+          <button
+            onClick={() => setActiveTab('shifts_policy')}
+            className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'shifts_policy'
+                ? 'border-primary text-primary font-semibold'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Settings className="h-4 w-4" /> Shifts &amp; Policies
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('leave')}
           className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
@@ -639,11 +740,37 @@ export default function TimeAttendancePage() {
           ========================================================================= */}
       {activeTab === 'my_attendance' && (
         <div className="space-y-6">
-          {/* Real-time Status Card */}
-          <Card className={`border-border bg-card shadow-sm ${isAttendanceDisabled ? 'opacity-70' : ''}`}>
-            <CardHeader className="flex flex-row items-center justify-between pb-3">
-              <div>
-                <CardTitle className="text-lg">My Today Shift Tracker</CardTitle>
+          {/* Shift Tracker Access Restricted banner */}
+          {!canAccessShiftTracker && !isAttendanceDisabled && (
+            <Card className="border-border bg-muted/20">
+              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <Clock className="h-5 w-5 text-muted-foreground shrink-0" />
+                  <div>
+                    <div className="text-xs font-semibold text-foreground">Shift Tracker Access Restricted</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      Access to the real-time Shift Tracker and Clock In/Out is controlled by Roles &amp; Permissions. Your current role does not have the <span className="font-mono text-primary font-semibold">attendance:clock</span> permission.
+                    </div>
+                  </div>
+                </div>
+                {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || isPlatformAdmin) && (
+                  <a
+                    href="/app/settings?tab=roles"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold shrink-0 transition-colors shadow-sm"
+                  >
+                    Configure in Roles &amp; Permissions &rarr;
+                  </a>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Real-time Status Card - Only shown if authorized and attendance enabled */}
+          {canAccessShiftTracker && (
+            <Card className="border-border bg-card shadow-sm">
+              <CardHeader className="flex flex-row items-center justify-between pb-3">
+                <div>
+                  <CardTitle className="text-lg">My Today Shift Tracker</CardTitle>
                 <CardDescription>
                   {todayData?.todaySummary?.assignedShift
                     ? `Assigned Shift: ${todayData.todaySummary.assignedShift.name} (${todayData.todaySummary.assignedShift.startTime} - ${todayData.todaySummary.assignedShift.endTime})`
@@ -839,6 +966,7 @@ export default function TimeAttendancePage() {
               </div>
             </CardContent>
           </Card>
+          )}
 
           {/* Today's Multi-Session Timeline */}
           <Card>

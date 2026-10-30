@@ -21,9 +21,16 @@ export class DepartmentsService {
   }
 
   async update(id: string, workspaceId: string, data: { name?: string; code?: string; description?: string }) {
-    return this.prisma.department.updateMany({
+    await this.prisma.department.updateMany({
       where: { id, workspaceId },
-      data,
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.code !== undefined ? { code: data.code || null } : {}),
+        ...(data.description !== undefined ? { description: data.description || null } : {}),
+      },
+    });
+    return this.prisma.department.findFirst({
+      where: { id, workspaceId },
     });
   }
 
