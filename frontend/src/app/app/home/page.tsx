@@ -137,6 +137,9 @@ export default function HomePage() {
     'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'quality', 'sla', 'settings'
   ];
   const isAttendanceEnabled = enabledModules.includes('attendance') || enabledModules.includes('time');
+  const isClockedIn = !!(todayAttendance?.todaySummary?.isClockedIn ?? (todayAttendance?.clockIn && !todayAttendance?.clockOut));
+  const isClockedOut = !!(todayAttendance?.clockIn && todayAttendance?.clockOut && !isClockedIn);
+  const canClockIn = !isClockedIn && (todayAttendance?.todaySummary?.canClockInAgain ?? true);
 
   return (
     <div className="space-y-8">
@@ -172,15 +175,15 @@ export default function HomePage() {
               <div className="flex flex-col">
                 <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
                 <span className="text-xs font-bold text-foreground">
-                  {todayAttendance ? (todayAttendance.clockOut ? 'Clocked Out' : 'Active Clock-In') : 'Not Clocked In'}
+                  {isClockedIn ? 'Active Clock-In' : isClockedOut ? 'Clocked Out' : 'Not Clocked In'}
                 </span>
               </div>
-              {todayAttendance && !todayAttendance.clockOut ? (
+              {isClockedIn ? (
                 <Button size="sm" variant="destructive" onClick={handleClockOut} className="h-8 text-xs">
                   Clock Out
                 </Button>
               ) : (
-                <Button size="sm" onClick={handleClockIn} disabled={!!todayAttendance?.clockOut} className="h-8 text-xs">
+                <Button size="sm" onClick={handleClockIn} disabled={!canClockIn} className="h-8 text-xs">
                   Clock In
                 </Button>
               )}
