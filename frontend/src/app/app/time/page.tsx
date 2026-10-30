@@ -151,7 +151,12 @@ export default function TimeAttendancePage() {
       if (meData?.memberships) {
         const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
         if (mem) {
-          setCurrentUserRole(mem.accessRole || 'MEMBER');
+          const isHR =
+            mem.designation?.title?.toLowerCase().includes('hr') ||
+            mem.department?.name?.toLowerCase().includes('hr') ||
+            mem.user?.email?.toLowerCase().includes('hr');
+          const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
+          setCurrentUserRole(effectiveRole);
           setCurrentMembershipId(mem.id);
         }
       }
@@ -163,6 +168,12 @@ export default function TimeAttendancePage() {
   };
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const tabParam = new URLSearchParams(window.location.search).get('tab');
+      if (tabParam === 'leave') {
+        setActiveTab('leave');
+      }
+    }
     loadAllData();
   }, [filterDate]);
 

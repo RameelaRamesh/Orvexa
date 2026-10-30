@@ -153,27 +153,40 @@ export default function HomePage() {
           </p>
         </div>
 
-        {/* Quick Attendance Widget */}
-        {isAttendanceEnabled && (
-          <div className="flex items-center gap-3 bg-card border border-border p-2.5 rounded-lg shadow-sm">
-            <Clock className="h-5 w-5 text-primary" />
-            <div className="flex flex-col">
-              <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
-              <span className="text-xs font-bold text-foreground">
-                {todayAttendance ? (todayAttendance.clockOut ? 'Clocked Out' : 'Active Clock-In') : 'Not Clocked In'}
-              </span>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Apply Leave Quick Button */}
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => router.push('/app/time?tab=leave')}
+            className="h-10 text-xs gap-1.5 border-border bg-card shadow-sm hover:bg-muted"
+          >
+            <Calendar className="h-4 w-4 text-primary" />
+            <span>Apply Leave / PTO</span>
+          </Button>
+
+          {/* Quick Attendance Widget */}
+          {isAttendanceEnabled && (
+            <div className="flex items-center gap-3 bg-card border border-border p-2.5 rounded-lg shadow-sm">
+              <Clock className="h-5 w-5 text-primary" />
+              <div className="flex flex-col">
+                <span className="text-xs font-medium text-muted-foreground">Today's Presence</span>
+                <span className="text-xs font-bold text-foreground">
+                  {todayAttendance ? (todayAttendance.clockOut ? 'Clocked Out' : 'Active Clock-In') : 'Not Clocked In'}
+                </span>
+              </div>
+              {todayAttendance && !todayAttendance.clockOut ? (
+                <Button size="sm" variant="destructive" onClick={handleClockOut} className="h-8 text-xs">
+                  Clock Out
+                </Button>
+              ) : (
+                <Button size="sm" onClick={handleClockIn} disabled={!!todayAttendance?.clockOut} className="h-8 text-xs">
+                  Clock In
+                </Button>
+              )}
             </div>
-            {todayAttendance && !todayAttendance.clockOut ? (
-              <Button size="sm" variant="destructive" onClick={handleClockOut} className="h-8 text-xs">
-                Clock Out
-              </Button>
-            ) : (
-              <Button size="sm" onClick={handleClockIn} disabled={!!todayAttendance?.clockOut} className="h-8 text-xs">
-                Clock In
-              </Button>
-            )}
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Actionable Onboarding Setup Reminder Card */}
@@ -395,6 +408,10 @@ export default function HomePage() {
                     <span>Operations Calendar</span>
                     <ArrowRight className="h-3 w-3" />
                   </Button>
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/time?tab=leave')} className="w-full text-xs justify-between">
+                    <span>Team Leave Approvals</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
                 </div>
               </div>
             ) : role === 'MANAGER' ? (
@@ -404,6 +421,10 @@ export default function HomePage() {
                   Monitor team workload, review pending quality audits, and manage leave requests.
                 </p>
                 <div className="pt-2 flex flex-col gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/time?tab=leave')} className="w-full text-xs justify-between">
+                    <span>Team Leave Approvals</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => router.push('/app/calendar')} className="w-full text-xs justify-between">
                     <span>Team Roster & Calendar</span>
                     <ArrowRight className="h-3 w-3" />
@@ -420,7 +441,11 @@ export default function HomePage() {
                 <p className="text-xs text-muted-foreground">
                   Focus on executing assigned work items, logging daily time/attendance, and submitting completed batches.
                 </p>
-                <div className="pt-2">
+                <div className="pt-2 flex flex-col gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/time?tab=leave')} className="w-full text-xs justify-between">
+                    <span>Apply for Leave (PTO)</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
                   <Button size="sm" variant="outline" onClick={() => router.push('/app/calendar')} className="w-full text-xs justify-between">
                     <span>My Schedule & Deadlines</span>
                     <ArrowRight className="h-3 w-3" />

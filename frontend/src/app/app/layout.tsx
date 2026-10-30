@@ -155,6 +155,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       visible: (hasPerm('time:view') || hasPerm('attendance:view')) && (enabledModules.includes('time') || enabledModules.includes('attendance')),
     },
     {
+      name: 'Leave & PTO',
+      href: '/app/time?tab=leave',
+      icon: Calendar,
+      visible: true,
+    },
+    {
       name: 'Quality Scorecards',
       href: '/app/quality',
       icon: Award,
