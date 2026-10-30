@@ -103,6 +103,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   };
 
   const accessRole = activeWorkspace?.accessRole || 'MEMBER';
+  const getPortalRoleLabel = (r: string) => {
+    if (r === 'ADMIN') return 'HR EXECUTIVE';
+    if (r === 'OWNER') return 'OWNER';
+    if (r === 'MANAGER') return 'MANAGER';
+    if (r === 'MEMBER') return 'MEMBER';
+    return r;
+  };
   const isPlatformAdmin = accessRole === 'OWNER';
   const rolePermissions: string[] = activeWorkspace?.role?.permissions?.map(
     (rp: any) => rp.permission?.code || rp.code || rp,
@@ -244,7 +251,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 {activeWorkspace?.workspace?.name || 'Workspace'}
               </span>
               <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                {accessRole} • {activeWorkspace?.designation?.title || 'Member'}
+                {getPortalRoleLabel(accessRole)} • {activeWorkspace?.designation?.title || 'Member'}
               </span>
             </div>
           </div>
@@ -335,7 +342,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 >
                   {profile.memberships.map((m: any) => (
                     <option key={m.workspaceId} value={m.workspaceId}>
-                      {m.workspace?.name} ({m.accessRole})
+                      {m.workspace?.name} ({getPortalRoleLabel(m.accessRole)})
                     </option>
                   ))}
                 </select>
@@ -345,6 +352,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 <span className="text-xs text-muted-foreground hidden sm:inline">Workspace:</span>
                 <Badge variant="outline" className="font-mono text-xs">{activeWorkspace?.workspace?.slug}</Badge>
                 <Badge variant="default" className="text-xs">{activeWorkspace?.workspace?.businessType || 'GENERAL'}</Badge>
+                <Badge variant="outline" className="text-xs font-semibold border-primary/40 bg-primary/10 text-primary">
+                  {getPortalRoleLabel(accessRole)} PORTAL
+                </Badge>
               </div>
             )}
           </div>

@@ -455,7 +455,7 @@ export default function PeoplePage() {
             >
               <option value="">All Roles</option>
               <option value="OWNER">Owner</option>
-              <option value="ADMIN">Admin</option>
+              <option value="ADMIN">HR Executive</option>
               <option value="MANAGER">Manager</option>
               <option value="MEMBER">Member</option>
             </select>
@@ -508,7 +508,7 @@ export default function PeoplePage() {
                         </td>
                         <td className="py-3 px-4">
                           <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                            {m.accessRole}
+                            {m.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : m.accessRole}
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
@@ -735,7 +735,7 @@ export default function PeoplePage() {
                     >
                       <option value="MEMBER">Member (Individual contributor)</option>
                       <option value="MANAGER">Manager (Team & operations management)</option>
-                      <option value="ADMIN">Admin (Organization administration)</option>
+                      <option value="ADMIN">HR Executive (HR &amp; Organization administration)</option>
                       <option value="OWNER">Owner (Organization ownership)</option>
                     </select>
                   </div>
@@ -962,7 +962,7 @@ export default function PeoplePage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <span className="text-muted-foreground block">System Access Role:</span>
-                    <Badge variant="default">{selectedMember.accessRole}</Badge>
+                    <Badge variant="default">{selectedMember.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : selectedMember.accessRole}</Badge>
                   </div>
                   <div>
                     <span className="text-muted-foreground block">Account Status:</span>

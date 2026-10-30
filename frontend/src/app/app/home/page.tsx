@@ -147,7 +147,7 @@ export default function HomePage() {
             Welcome back, {profile?.firstName || 'User'} 👋
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Role: <span className="font-semibold text-foreground">{role}</span> • Designation:{' '}
+            Role: <span className="font-semibold text-foreground">{role === 'ADMIN' ? 'HR EXECUTIVE' : role}</span> • Designation:{' '}
             <span className="font-semibold text-foreground">{activeWorkspace?.designation?.title || 'Team Member'}</span> • Department:{' '}
             <span className="font-semibold text-foreground">{activeWorkspace?.department?.name || 'General'}</span>
           </p>
@@ -393,7 +393,32 @@ export default function HomePage() {
             <CardDescription>Contextual view based on your role</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 text-sm">
-            {role === 'OWNER' || role === 'ADMIN' ? (
+            {role === 'ADMIN' ? (
+              <div className="rounded-lg border border-border p-3 bg-surface-secondary/50 space-y-2">
+                <h4 className="font-semibold text-foreground text-xs uppercase tracking-wider">HR Executive Overview</h4>
+                <p className="text-xs text-muted-foreground">
+                  You manage workforce onboarding, employee attendance, leaves, asset assignments, and monthly payroll.
+                </p>
+                <div className="pt-2 flex flex-col gap-1.5">
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/people')} className="w-full text-xs justify-between">
+                    <span>People Directory &amp; Teams</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/time?tab=leave')} className="w-full text-xs justify-between">
+                    <span>Leave &amp; Attendance Management</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/payroll')} className="w-full text-xs justify-between">
+                    <span>Payroll &amp; Compensation</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => router.push('/app/assets')} className="w-full text-xs justify-between">
+                    <span>Asset Management</span>
+                    <ArrowRight className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ) : role === 'OWNER' ? (
               <div className="rounded-lg border border-border p-3 bg-surface-secondary/50 space-y-2">
                 <h4 className="font-semibold text-foreground text-xs uppercase tracking-wider">Administrative Overview</h4>
                 <p className="text-xs text-muted-foreground">
