@@ -443,11 +443,11 @@ export default function HomePage() {
               <div className="rounded-lg border border-border p-3 bg-surface-secondary/50 space-y-2">
                 <h4 className="font-semibold text-foreground text-xs uppercase tracking-wider">Team Operations</h4>
                 <p className="text-xs text-muted-foreground">
-                  Monitor team workload, review pending quality audits, and manage leave requests.
+                  Monitor team workload, review pending quality audits, and track team leaves.
                 </p>
                 <div className="pt-2 flex flex-col gap-1.5">
                   <Button size="sm" variant="outline" onClick={() => router.push('/app/time?tab=leave')} className="w-full text-xs justify-between">
-                    <span>Team Leave Approvals</span>
+                    <span>Team Leave Requests (View Only)</span>
                     <ArrowRight className="h-3 w-3" />
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => router.push('/app/calendar')} className="w-full text-xs justify-between">

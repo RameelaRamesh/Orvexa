@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { LeaveType, LeaveStatus } from '@prisma/client';
@@ -219,7 +220,7 @@ export class LeaveService {
     }
 
     // Create request and update pending balance in transaction
-    return this.prisma.$transaction(async (tx) => {
+    const createdRequest = await this.prisma.$transaction(async (tx) => {
       const request = await tx.leaveRequest.create({
         data: {
           workspaceId,
@@ -242,6 +243,52 @@ export class LeaveService {
 
       return request;
     });
+
+    // Notify appropriate approvers
+    try {
+      const applicant = await this.prisma.membership.findUnique({
+        where: { id: membershipId },
+        include: { user: true, designation: true },
+      });
+      const applicantName = applicant?.user
+        ? `${applicant.user.firstName || ''} ${applicant.user.lastName || ''}`.trim()
+        : 'Team Member';
+
+      const isApplicantHR =
+        applicant?.accessRole === 'ADMIN' ||
+        (applicant?.designation?.title && /hr/i.test(applicant.designation.title));
+
+      // If HR applies for leave, only OWNER is notified to approve/disapprove
+      // Otherwise, both OWNER and HR (ADMIN) are notified
+      const approverMembers = await this.prisma.membership.findMany({
+        where: {
+          workspaceId,
+          status: 'ACTIVE',
+          accessRole: isApplicantHR ? 'OWNER' : { in: ['OWNER', 'ADMIN'] },
+        },
+      });
+
+      for (const approver of approverMembers) {
+        if (approver.id === membershipId) continue;
+        await this.prisma.notification.create({
+          data: {
+            workspaceId,
+            recipientMembershipId: approver.id,
+            title: isApplicantHR
+              ? `🔔 HR Leave Request (Owner Approval Required): ${applicantName}`
+              : `🔔 New Leave Request: ${applicantName}`,
+            message: `${applicantName} applied for ${totalDays} day(s) of ${data.leaveType} leave (${start.toLocaleDateString()} - ${end.toLocaleDateString()}). ${
+              isApplicantHR ? 'As an HR Executive request, Owner review is required.' : 'Review and take action.'
+            }`,
+            link: '/app/time?tab=leave',
+          },
+        });
+      }
+    } catch {
+      // Non-blocking notification
+    }
+
+    return createdRequest;
   }
 
   async updateStatus(
@@ -250,12 +297,64 @@ export class LeaveService {
     approverMembershipId: string,
     status: LeaveStatus,
   ) {
+    const approver = await this.prisma.membership.findFirst({
+      where: { id: approverMembershipId, workspaceId, status: 'ACTIVE' },
+      include: { user: true, designation: true },
+    });
+
+    if (!approver) {
+      throw new ForbiddenException('Approver membership not found or inactive');
+    }
+
     const request = await this.prisma.leaveRequest.findFirst({
       where: { id, workspaceId },
+      include: {
+        membership: {
+          include: {
+            user: { select: { firstName: true, lastName: true, email: true } },
+            designation: true,
+          },
+        },
+      },
     });
 
     if (!request) {
       throw new NotFoundException('Leave request not found');
+    }
+
+    // Rule 1: Strict self-approval prevention (no user can approve/reject their own leave)
+    if (request.membershipId === approverMembershipId) {
+      throw new ForbiddenException('You cannot approve or reject your own leave application.');
+    }
+
+    // Rule 2: Team Leads / Managers have view-only access, cannot approve or reject
+    const isApproverTeamLeadOrManager =
+      approver.accessRole === 'MANAGER' ||
+      (approver.designation?.title && /lead/i.test(approver.designation.title) && approver.accessRole !== 'OWNER' && approver.accessRole !== 'ADMIN');
+
+    if (isApproverTeamLeadOrManager || approver.accessRole === 'MEMBER') {
+      throw new ForbiddenException(
+        'Team Leads and Managers have view-only access to leave applications. Approvals can only be performed by HR Executives or the Organization Owner.',
+      );
+    }
+
+    // Rule 3: HR leave applications must ONLY be approved or disapproved by the OWNER
+    const isApplicantHR =
+      request.membership.accessRole === 'ADMIN' ||
+      (request.membership.designation?.title && /hr/i.test(request.membership.designation.title)) ||
+      (request.membership.user?.email && /hr/i.test(request.membership.user.email));
+
+    if (isApplicantHR && approver.accessRole !== 'OWNER') {
+      throw new ForbiddenException(
+        'Leave applications for HR Executives can only be approved or rejected by the Organization Owner.',
+      );
+    }
+
+    // Rule 4: For regular team members, only OWNER and ADMIN (HR Executive) are authorized
+    if (approver.accessRole !== 'OWNER' && approver.accessRole !== 'ADMIN') {
+      throw new ForbiddenException(
+        'Only HR Executives and the Organization Owner are authorized to approve or reject leave applications.',
+      );
     }
 
     if (request.status === status) {
@@ -273,9 +372,9 @@ export class LeaveService {
       },
     });
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const prevStatus = request.status;
-      const updated = await tx.leaveRequest.update({
+      const res = await tx.leaveRequest.update({
         where: { id },
         data: {
           status,
@@ -316,8 +415,30 @@ export class LeaveService {
         }
       }
 
-      return updated;
+      return res;
     });
+
+    // Notify the applicant of approval or rejection
+    try {
+      const approverName = approver.user?.firstName
+        ? `${approver.user.firstName} ${approver.user.lastName || ''}`.trim()
+        : 'Management';
+      await this.prisma.notification.create({
+        data: {
+          workspaceId,
+          recipientMembershipId: request.membershipId,
+          title: status === 'APPROVED' ? '✅ Leave Request Approved' : '❌ Leave Request Rejected',
+          message: `Your ${request.leaveType} leave request (${new Date(
+            request.startDate,
+          ).toLocaleDateString()} to ${new Date(request.endDate).toLocaleDateString()}) was ${status.toLowerCase()} by ${approverName}.`,
+          link: '/app/time?tab=leave',
+        },
+      });
+    } catch {
+      // Non-blocking notification
+    }
+
+    return updated;
   }
 
   async getLeaveCalendar(workspaceId: string, month?: number, year?: number) {

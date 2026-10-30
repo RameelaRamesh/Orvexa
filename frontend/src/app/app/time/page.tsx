@@ -44,6 +44,7 @@ export default function TimeAttendancePage() {
   const [leaveRequests, setLeaveRequests] = useState<any[]>([]);
   const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
+  const [currentUserDesignation, setCurrentUserDesignation] = useState<string>('');
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [showApplyLeaveModal, setShowApplyLeaveModal] = useState(false);
   const [applyLeaveType, setApplyLeaveType] = useState('CASUAL');
@@ -158,6 +159,7 @@ export default function TimeAttendancePage() {
           const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
           setCurrentUserRole(effectiveRole);
           setCurrentMembershipId(mem.id);
+          setCurrentUserDesignation(mem.designation?.title || '');
         }
       }
     } catch (err: any) {
@@ -1317,10 +1319,12 @@ export default function TimeAttendancePage() {
                   <div>
                     <CardTitle className="text-sm font-bold flex items-center gap-2">
                       <Users className="h-4 w-4 text-primary" />
-                      Team Leave Approvals (Manager / HR Inbox)
+                      Team Leave Approvals {currentUserRole === 'MANAGER' ? '(Team Lead — View Only)' : currentUserRole === 'ADMIN' ? '(HR Executive Approvals)' : '(Owner Approvals)'}
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
-                      Review, approve, or reject leave applications submitted by team members
+                      {currentUserRole === 'MANAGER'
+                        ? 'View pending and approved leave applications submitted by your team (Approvals handled by HR / Owner)'
+                        : 'Review, approve, or reject leave applications submitted by team members'}
                     </CardDescription>
                   </div>
                   <Badge variant="secondary" className="text-xs">
@@ -1391,23 +1395,64 @@ export default function TimeAttendancePage() {
                             </td>
                             <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
                               {req.status === 'PENDING' ? (
-                                <>
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleUpdateLeaveStatus(req.id, 'APPROVED')}
-                                    className="h-7 text-xs px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
-                                  >
-                                    <Check className="h-3 w-3" /> Approve
-                                  </Button>
-                                  <Button
-                                    size="sm"
-                                    variant="destructive"
-                                    onClick={() => handleUpdateLeaveStatus(req.id, 'REJECTED')}
-                                    className="h-7 text-xs px-2.5 gap-1"
-                                  >
-                                    <XCircle className="h-3 w-3" /> Reject
-                                  </Button>
-                                </>
+                                (() => {
+                                  // 1. Strict self-approval restriction
+                                  const isSelf = req.membershipId === currentMembershipId;
+                                  if (isSelf) {
+                                    return (
+                                      <Badge variant="outline" className="text-[10px] text-muted-foreground border-border">
+                                        Your Application (Awaiting Review)
+                                      </Badge>
+                                    );
+                                  }
+
+                                  // 2. Team Lead / Manager: "team lead cant acces the leave approve, they will see only"
+                                  const isTeamLeadOrManager =
+                                    currentUserRole === 'MANAGER' ||
+                                    (currentUserDesignation && /lead/i.test(currentUserDesignation) && currentUserRole !== 'OWNER' && currentUserRole !== 'ADMIN');
+                                  if (isTeamLeadOrManager) {
+                                    return (
+                                      <Badge variant="outline" className="text-[10px] text-muted-foreground border-border">
+                                        View Only (Team Lead)
+                                      </Badge>
+                                    );
+                                  }
+
+                                  // 3. HR Leave: "if hr wants to apply leave the owner will be approve or disapprove"
+                                  const isApplicantHR =
+                                    req.membership?.accessRole === 'ADMIN' ||
+                                    req.membership?.designation?.title?.toLowerCase().includes('hr') ||
+                                    req.membership?.user?.email?.toLowerCase().includes('hr');
+
+                                  if (isApplicantHR && currentUserRole !== 'OWNER') {
+                                    return (
+                                      <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-600 dark:text-amber-400">
+                                        Owner Approval Required
+                                      </Badge>
+                                    );
+                                  }
+
+                                  // Authorized Approver: Owner (for anyone) or HR Executive (for non-HR members)
+                                  return (
+                                    <>
+                                      <Button
+                                        size="sm"
+                                        onClick={() => handleUpdateLeaveStatus(req.id, 'APPROVED')}
+                                        className="h-7 text-xs px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white gap-1"
+                                      >
+                                        <Check className="h-3 w-3" /> Approve
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        onClick={() => handleUpdateLeaveStatus(req.id, 'REJECTED')}
+                                        className="h-7 text-xs px-2.5 gap-1"
+                                      >
+                                        <XCircle className="h-3 w-3" /> Reject
+                                      </Button>
+                                    </>
+                                  );
+                                })()
                               ) : (
                                 <span className="text-[11px] text-muted-foreground">
                                   {req.approvedBy?.user?.firstName ? `Processed by ${req.approvedBy.user.firstName}` : 'Reviewed'}
