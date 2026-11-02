@@ -30,6 +30,8 @@ import {
   Copy,
   Check,
   ExternalLink,
+  Sparkles,
+  Info,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -85,6 +87,198 @@ export default function PeoplePage() {
     reportsToId: '',
     dataScope: 'ASSIGNED',
   });
+
+  // =========================================================================
+  // SMART ROLE & SCOPE TEMPLATES BY DESIGNATION (AUTO-MAPPING)
+  // =========================================================================
+  const SMART_DESIGNATION_TEMPLATES = [
+    {
+      keywords: ['ceo', 'founder', 'co-founder', 'president', 'chief executive', 'owner'],
+      role: 'OWNER',
+      scope: 'WORKSPACE',
+      deptKeywords: [] as string[],
+      teamKeywords: [] as string[],
+      label: 'Executive Leadership',
+      description: 'Full organization-wide administrative ownership and global visibility across all records.',
+    },
+    {
+      keywords: ['director', 'vp', 'vice president', 'head of', 'general manager', 'coo', 'cto', 'cfo', 'cpo'],
+      role: 'MANAGER',
+      scope: 'WORKSPACE',
+      deptKeywords: ['management', 'executive', 'operations'],
+      teamKeywords: [] as string[],
+      label: 'Senior Leadership',
+      description: 'Cross-functional leadership with enterprise-wide data access and operations management.',
+    },
+    {
+      keywords: ['operations manager', 'department manager', 'branch manager', 'delivery manager', 'program manager'],
+      role: 'MANAGER',
+      scope: 'DEPARTMENT',
+      deptKeywords: ['operations', 'general'],
+      teamKeywords: [] as string[],
+      label: 'Department Management',
+      description: 'Departmental oversight, approvals, and cross-team workflow orchestration.',
+    },
+    {
+      keywords: ['hr', 'human resources', 'recruiter', 'people ops', 'talent', 'talent acquisition'],
+      role: 'ADMIN',
+      scope: 'DEPARTMENT',
+      deptKeywords: ['hr', 'human', 'people'],
+      teamKeywords: [] as string[],
+      label: 'HR & People Operations',
+      description: 'Organization administration, employee records, onboarding, and leave approvals.',
+    },
+    {
+      keywords: ['tech lead', 'team lead', 'lead engineer', 'engineering lead', 'scrum master', 'lead developer', 'principal engineer', 'architect'],
+      role: 'MANAGER',
+      scope: 'TEAM',
+      deptKeywords: ['tech', 'engineering', 'development', 'software', 'it'],
+      teamKeywords: ['lead', 'core', 'engineering'],
+      label: 'Technical Team Lead',
+      description: 'Supervises squad work items, sprint tracking, and task delegation.',
+    },
+    {
+      keywords: ['software engineer', 'developer', 'frontend', 'backend', 'fullstack', 'ios', 'android', 'mobile engineer', 'web developer', 'programmer'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['tech', 'engineering', 'development', 'software', 'it'],
+      teamKeywords: ['frontend', 'backend', 'mobile', 'web', 'dev'],
+      label: 'Software Engineering',
+      description: 'Collaborates on sprint deliverables and team work items.',
+    },
+    {
+      keywords: ['qa', 'quality', 'tester', 'test engineer', 'qa auditor', 'automation engineer', 'qc'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['tech', 'engineering', 'quality', 'qa'],
+      teamKeywords: ['qa', 'testing', 'quality'],
+      label: 'Quality Assurance',
+      description: 'Access to team work items for testing, defect tracking, and verification.',
+    },
+    {
+      keywords: ['product manager', 'product owner', 'associate product manager', 'pm'],
+      role: 'MANAGER',
+      scope: 'TEAM',
+      deptKeywords: ['product', 'tech', 'engineering'],
+      teamKeywords: ['product'],
+      label: 'Product Management',
+      description: 'Defines requirements, manages backlogs, and tracks feature milestones.',
+    },
+    {
+      keywords: ['designer', 'ui', 'ux', 'product designer', 'graphic designer', 'visual designer', 'creative'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['design', 'product', 'creative'],
+      teamKeywords: ['design', 'ui'],
+      label: 'Product Design',
+      description: 'Collaborates on design deliverables, assets, and design system tasks.',
+    },
+    {
+      keywords: ['marketing', 'sales', 'growth', 'social media', 'content', 'copywriter', 'seo', 'account executive', 'bdr', 'sdr'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['marketing', 'sales', 'growth', 'commercial'],
+      teamKeywords: ['marketing', 'sales'],
+      label: 'Marketing & Sales',
+      description: 'Collaborates on campaigns, outbound deals, and promotional tasks.',
+    },
+    {
+      keywords: ['finance', 'accountant', 'accounts', 'billing', 'payroll', 'controller', 'auditor'],
+      role: 'MEMBER',
+      scope: 'DEPARTMENT',
+      deptKeywords: ['finance', 'accounts', 'billing'],
+      teamKeywords: [] as string[],
+      label: 'Finance & Compliance',
+      description: 'Access to departmental financial records, billing, and accounting items.',
+    },
+    {
+      keywords: ['contractor', 'freelancer', 'consultant', 'intern', 'temporary', 'vendor', 'trainee'],
+      role: 'MEMBER',
+      scope: 'ASSIGNED',
+      deptKeywords: [] as string[],
+      teamKeywords: [] as string[],
+      label: 'External Contributor / Intern',
+      description: 'Strictly restricted to explicitly assigned tasks with zero access to peer data.',
+    },
+  ];
+
+  const QUICK_DESIGNATION_PRESETS = [
+    'Software Engineer',
+    'Tech Lead',
+    'QA Auditor',
+    'Product Manager',
+    'HR Executive',
+    'Operations Manager',
+    'Contractor / Freelancer',
+  ];
+
+  const [matchedTemplate, setMatchedTemplate] = useState<{
+    label: string;
+    description: string;
+    role: string;
+    scope: string;
+  } | null>(null);
+
+  const handleDesignationChange = (title: string) => {
+    const cleanTitle = title.trim().toLowerCase();
+
+    // Find matching template
+    const template = SMART_DESIGNATION_TEMPLATES.find((tpl) =>
+      tpl.keywords.some((kw) => cleanTitle.includes(kw))
+    );
+
+    if (template) {
+      // Find matching department if possible
+      let matchedDeptId = inviteForm.departmentId;
+      if (template.deptKeywords && template.deptKeywords.length > 0) {
+        const foundDept = departments.find((rawD) => {
+          const d = rawD.data !== undefined ? rawD.data : rawD;
+          const dName = (d.name || '').toLowerCase();
+          return template.deptKeywords.some((dk) => dName.includes(dk));
+        });
+        if (foundDept) {
+          const dObj = foundDept.data !== undefined ? foundDept.data : foundDept;
+          matchedDeptId = dObj.id;
+        }
+      }
+
+      // Find matching team if possible
+      let matchedTeamId = inviteForm.teamId;
+      if (template.teamKeywords && template.teamKeywords.length > 0) {
+        const foundTeam = teams.find((rawT) => {
+          const t = rawT.data !== undefined ? rawT.data : rawT;
+          const tName = (t.name || '').toLowerCase();
+          return template.teamKeywords.some((tk) => tName.includes(tk));
+        });
+        if (foundTeam) {
+          const tObj = foundTeam.data !== undefined ? foundTeam.data : foundTeam;
+          matchedTeamId = tObj.id;
+        }
+      }
+
+      setMatchedTemplate({
+        label: template.label,
+        description: template.description,
+        role: template.role,
+        scope: template.scope,
+      });
+
+      setInviteForm((prev) => ({
+        ...prev,
+        designationTitle: title,
+        accessRole: template.role,
+        dataScope: template.scope,
+        departmentId: matchedDeptId,
+        teamId: matchedTeamId,
+      }));
+    } else {
+      setMatchedTemplate(null);
+      setInviteForm((prev) => ({
+        ...prev,
+        designationTitle: title,
+      }));
+    }
+  };
 
   const getHeaders = () => {
     const activeToken = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -214,6 +408,7 @@ export default function PeoplePage() {
       }
 
       setShowInviteModal(false);
+      setMatchedTemplate(null);
       setInviteForm({
         email: '',
         firstName: '',
@@ -755,6 +950,76 @@ export default function PeoplePage() {
                   />
                 </div>
 
+                {/* 3. Designation with Smart Auto-Mapping */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="font-semibold text-foreground flex items-center gap-1.5">
+                      <span>Designation (Job Title)</span>
+                      <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.2 rounded font-medium">
+                        Smart Auto-Mapping
+                      </span>
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    list="designations-datalist"
+                    value={inviteForm.designationTitle}
+                    onChange={(e) => handleDesignationChange(e.target.value)}
+                    placeholder="e.g. Software Engineer, QA Auditor, Operations Manager..."
+                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                  />
+                  <datalist id="designations-datalist">
+                    {designations.map((rawD) => {
+                      const d = rawD.data !== undefined ? rawD.data : rawD;
+                      return <option key={d.id} value={d.title} />;
+                    })}
+                  </datalist>
+
+                  {/* Quick Preset Template Pills */}
+                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                    <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
+                    </span>
+                    {QUICK_DESIGNATION_PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() => handleDesignationChange(preset)}
+                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                          inviteForm.designationTitle.toLowerCase() === preset.toLowerCase()
+                            ? 'bg-primary text-primary-foreground border-primary font-semibold'
+                            : 'bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Smart Template Matched Summary Banner */}
+                {matchedTemplate && (
+                  <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-semibold text-primary flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5" /> Auto-Configured from Template
+                      </span>
+                      <Badge variant="outline" className="text-[10px] font-medium border-primary/30 text-primary">
+                        {matchedTemplate.label}
+                      </Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      {matchedTemplate.description}
+                    </p>
+                    <div className="flex items-center gap-2 pt-0.5 text-[10px] text-foreground font-medium">
+                      <span>Preset Role: <strong className="text-primary">{matchedTemplate.role}</strong></span>
+                      <span>•</span>
+                      <span>Preset Scope: <strong className="text-primary">{matchedTemplate.scope}</strong></span>
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Core Access Role & Department */}
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="font-semibold text-foreground">Core Access Role *</label>
@@ -789,26 +1054,8 @@ export default function PeoplePage() {
                   </div>
                 </div>
 
+                {/* 5. Team & Data Access Scope */}
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-semibold text-foreground">Designation (Job Title)</label>
-                    <input
-                      type="text"
-                      list="designations-datalist"
-                      value={inviteForm.designationTitle}
-                      onChange={(e) => setInviteForm({ ...inviteForm, designationTitle: e.target.value })}
-                      placeholder="e.g. Operations Manager, QA Auditor, Team Lead"
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                    />
-                    <datalist id="designations-datalist">
-                      {designations.map((rawD) => {
-                        const d = rawD.data !== undefined ? rawD.data : rawD;
-                        return (
-                          <option key={d.id} value={d.title} />
-                        );
-                      })}
-                    </datalist>
-                  </div>
                   <div>
                     <label className="font-semibold text-foreground">Team</label>
                     <select
@@ -827,25 +1074,60 @@ export default function PeoplePage() {
                       })}
                     </select>
                   </div>
+                  <div>
+                    <label className="font-semibold text-foreground">Data Access Scope *</label>
+                    <select
+                      value={inviteForm.dataScope}
+                      onChange={(e) => setInviteForm({ ...inviteForm, dataScope: e.target.value })}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    >
+                      <option value="ASSIGNED">Assigned Records Only</option>
+                      <option value="OWN">Own Records Only</option>
+                      <option value="TEAM">Assigned Team Records</option>
+                      <option value="DEPARTMENT">Assigned Department Records</option>
+                      <option value="WORKSPACE">Entire Workspace Records</option>
+                    </select>
+                  </div>
                 </div>
 
-                <div>
-                  <label className="font-semibold text-foreground">Data Access Scope</label>
-                  <select
-                    value={inviteForm.dataScope}
-                    onChange={(e) => setInviteForm({ ...inviteForm, dataScope: e.target.value })}
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                  >
-                    <option value="ASSIGNED">Assigned Records Only</option>
-                    <option value="OWN">Own Records Only</option>
-                    <option value="TEAM">Assigned Team Records</option>
-                    <option value="DEPARTMENT">Assigned Department Records</option>
-                    <option value="WORKSPACE">Entire Workspace Records</option>
-                  </select>
+                {/* Dynamic Data Scope Explainer Card */}
+                <div className="p-2.5 rounded-lg border border-border bg-surface-secondary/40 text-xs">
+                  <div className="flex items-start gap-2">
+                    <Info className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 text-[11px]">
+                      <div className="font-semibold text-foreground">
+                        {inviteForm.dataScope === 'ASSIGNED' && 'Assigned Records Scope'}
+                        {inviteForm.dataScope === 'OWN' && 'Own Records Scope'}
+                        {inviteForm.dataScope === 'TEAM' && 'Team Records Scope'}
+                        {inviteForm.dataScope === 'DEPARTMENT' && 'Department Records Scope'}
+                        {inviteForm.dataScope === 'WORKSPACE' && 'Entire Workspace Scope'}
+                      </div>
+                      <p className="text-muted-foreground leading-relaxed">
+                        {inviteForm.dataScope === 'ASSIGNED' &&
+                          'Can only view, update, and log work on tasks and items specifically assigned to them. All other workspace and colleague records are hidden.'}
+                        {inviteForm.dataScope === 'OWN' &&
+                          'Can manage records they personally created (e.g. their own shift logs, leave applications, expense claims, and created tasks).'}
+                        {inviteForm.dataScope === 'TEAM' &&
+                          'Full collaboration across their squad. Can see, edit, and track all work items, sprint tickets, and team availability.'}
+                        {inviteForm.dataScope === 'DEPARTMENT' &&
+                          'Departmental leadership oversight. Can view all squads in this department, reassign tasks, approve leaves, and review metrics.'}
+                        {inviteForm.dataScope === 'WORKSPACE' &&
+                          'Global organization-wide visibility across all projects, departments, teams, and member activities.'}
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </CardContent>
               <div className="flex items-center justify-end gap-2 p-4 border-t border-border mt-4">
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowInviteModal(false)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setMatchedTemplate(null);
+                  }}
+                >
                   Cancel
                 </Button>
                 <Button type="submit" size="sm">Send Invitation</Button>
