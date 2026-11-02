@@ -611,6 +611,7 @@ export default function SettingsPage() {
   const [permSearchQuery, setPermSearchQuery] = useState('');
   const [permFilterStatus, setPermFilterStatus] = useState<'all' | 'granted' | 'revoked'>('all');
   const [selectedModuleFilter, setSelectedModuleFilter] = useState<string>('ALL');
+  const [rolesViewMode, setRolesViewMode] = useState<'detail' | 'matrix'>('detail');
 
   // Feature Access & Role Matrix state (Requirement: Feature Access & Role Matrix matching spec)
   const [selectedMatrixCategory, setSelectedMatrixCategory] = useState<string>('All');
@@ -2095,8 +2096,54 @@ export default function SettingsPage() {
         </Card>
       )}
 
-      {/* TAB 3: Roles & Permissions (Feature Access & Role Matrix matching reference design) */}
+      {/* TAB 3: Roles & Permissions (Workspace Roles as Column + Row-Wise Permission Access) */}
       {activeTab === 'roles' && (() => {
+        // Group all permissions by module for the row-wise view
+        const groupedPermissions: Record<string, any[]> = {};
+        allPermissions.forEach((p) => {
+          const mod = (p.module || 'system').toUpperCase();
+          if (!groupedPermissions[mod]) groupedPermissions[mod] = [];
+          groupedPermissions[mod].push(p);
+        });
+
+        const isOwnerRole = selectedRoleObj?.name === 'OWNER';
+        const grantedPermIds = new Set(
+          isOwnerRole
+            ? allPermissions.map((p) => p.id)
+            : (selectedRoleObj?.permissions || []).map((p: any) => p.permissionId || p.id || p)
+        );
+
+        // Filter permissions based on search query, module filter, and status filter
+        const matchingModules = Object.entries(groupedPermissions)
+          .map(([modName, perms]) => {
+            if (selectedModuleFilter !== 'ALL' && modName !== selectedModuleFilter.toUpperCase()) {
+              return null;
+            }
+
+            const filteredPerms = perms.filter((perm) => {
+              const isGranted = grantedPermIds.has(perm.id);
+              if (permFilterStatus === 'granted' && !isGranted) return false;
+              if (permFilterStatus === 'revoked' && isGranted) return false;
+
+              if (!permSearchQuery.trim()) return true;
+              const q = permSearchQuery.toLowerCase();
+              const meta = getPermissionMeta(perm);
+              return (
+                perm.code?.toLowerCase().includes(q) ||
+                meta.title.toLowerCase().includes(q) ||
+                meta.description.toLowerCase().includes(q) ||
+                modName.toLowerCase().includes(q)
+              );
+            });
+
+            if (filteredPerms.length === 0) return null;
+            return [modName, filteredPerms] as [string, any[]];
+          })
+          .filter(Boolean) as [string, any[]][];
+
+        const totalFilteredCount = matchingModules.reduce((acc, [, perms]) => acc + perms.length, 0);
+
+        // Matrix View filtered features
         const filteredFeatures = FEATURE_MATRIX_ITEMS.filter((item) => {
           const matchesCategory =
             selectedMatrixCategory === 'All' || item.category === selectedMatrixCategory;
@@ -2109,520 +2156,871 @@ export default function SettingsPage() {
         });
 
         return (
-          <div className="space-y-4">
-            {/* Top Bar: Horizontal Category Tabs + Scroll Track + Search */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                {/* Horizontal Category Pills */}
-                <div
-                  ref={categoryScrollRef}
-                  onScroll={updateCategoryScrollProgress}
-                  className="flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth pb-1"
-                  style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
-                >
-                  {MATRIX_CATEGORIES.map((cat) => {
-                    const isActive = selectedMatrixCategory === cat;
-                    return (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => setSelectedMatrixCategory(cat)}
-                        className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium whitespace-nowrap transition-all shrink-0 cursor-pointer ${
-                          isActive
-                            ? 'bg-[#0D7A70] text-white shadow-xs font-semibold'
-                            : 'bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
-                        }`}
-                      >
-                        {cat}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Scroll Indicator & Chevrons matching screenshot */}
-                <div className="flex items-center gap-1.5 mt-2">
+          <div className="space-y-6">
+            {/* Top Toolbar: View Mode Toggle & Global Utilities */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-1 border-b border-slate-200/80">
+              <div className="flex items-center gap-2">
+                <div className="inline-flex rounded-xl border border-slate-200 p-1 bg-slate-100/80">
                   <button
                     type="button"
-                    onClick={() => handleScrollCategories('left')}
-                    className="text-slate-400 hover:text-slate-700 transition-colors p-0.5 rounded cursor-pointer"
-                    title="Scroll categories left"
+                    onClick={() => setRolesViewMode('detail')}
+                    className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      rolesViewMode === 'detail'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    <ChevronLeft className="w-4 h-4" />
+                    <Shield className="w-3.5 h-3.5 text-blue-600" />
+                    Role View (Column & Row-Wise)
                   </button>
-                  <div className="w-56 h-1.5 bg-slate-200/90 rounded-full relative overflow-hidden">
-                    <div
-                      className="h-full bg-slate-500 rounded-full transition-all duration-150"
-                      style={{
-                        width: '35%',
-                        transform: `translateX(${(scrollProgress / 100) * (224 * 0.65)}px)`,
-                      }}
-                    />
-                  </div>
                   <button
                     type="button"
-                    onClick={() => handleScrollCategories('right')}
-                    className="text-slate-400 hover:text-slate-700 transition-colors p-0.5 rounded cursor-pointer"
-                    title="Scroll categories right"
+                    onClick={() => setRolesViewMode('matrix')}
+                    className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                      rolesViewMode === 'matrix'
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    <ChevronRight className="w-4 h-4" />
+                    <Layers className="w-3.5 h-3.5 text-[#0D7A70]" />
+                    All-Roles Matrix Table
                   </button>
                 </div>
               </div>
 
-              {/* Search Box on Right */}
-              <div className="relative shrink-0 w-full md:w-auto">
-                <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-                <input
-                  type="text"
-                  placeholder="Search features..."
-                  value={matrixSearchQuery}
-                  onChange={(e) => setMatrixSearchQuery(e.target.value)}
-                  className="pl-9 pr-3 py-2 text-xs md:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0D7A70]/20 focus:border-[#0D7A70] text-slate-800 placeholder:text-slate-400 w-full md:w-64 transition-all shadow-xs"
-                />
-              </div>
-            </div>
-
-            {/* Feature Access & Role Matrix Table */}
-            <div className="border border-slate-200/90 rounded-2xl bg-white shadow-xs overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200/90 bg-white">
-                      <th className="text-left text-sm font-bold text-slate-800 py-4 px-6 min-w-[340px]">
-                        Feature & Description
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[120px]">
-                        Master Switch
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[110px]">
-                        Admin / CEO
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[130px]">
-                        Operations Head
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[90px]">
-                        HR
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[120px]">
-                        Team Lead (TL)
-                      </th>
-                      <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[100px]">
-                        Employee
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 bg-white">
-                    {filteredFeatures.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="text-center py-12 text-slate-500 text-xs">
-                          <Search className="h-6 w-6 text-slate-400 mx-auto mb-2 opacity-60" />
-                          <p className="font-semibold text-slate-700">No features found</p>
-                          <p className="text-slate-400 mt-1">
-                            No features match &quot;{matrixSearchQuery}&quot; in {selectedMatrixCategory}.
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMatrixSearchQuery('');
-                              setSelectedMatrixCategory('All');
-                            }}
-                            className="mt-3 text-xs text-[#0D7A70] font-semibold hover:underline cursor-pointer"
-                          >
-                            Reset Search & Filters
-                          </button>
-                        </td>
-                      </tr>
-                    ) : (
-                      filteredFeatures.map((item) => {
-                        const itemState = matrixState[item.id] || {
-                          master: item.defaultMaster,
-                          roles: { ...item.defaultRoles },
-                        };
-                        const isMasterOn = itemState.master;
-
-                        return (
-                          <tr
-                            key={item.id}
-                            className="hover:bg-slate-50/60 transition-colors"
-                          >
-                            {/* Feature & Description */}
-                            <td className="py-4.5 px-6 text-left align-middle">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-bold text-[14px] text-slate-900 tracking-tight">
-                                  {item.title}
-                                </span>
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200/60">
-                                  {item.category}
-                                </span>
-                              </div>
-                              <p className="text-xs text-slate-500 mt-1.5 max-w-xl leading-relaxed">
-                                {item.description}
-                              </p>
-                            </td>
-
-                            {/* Master Switch */}
-                            <td className="py-4.5 px-4 text-center align-middle">
-                              <div className="flex flex-col items-center justify-center">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleMasterSwitch(item.id)}
-                                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                                    isMasterOn ? 'bg-[#0D7A70]' : 'bg-slate-300'
-                                  }`}
-                                >
-                                  <span
-                                    aria-hidden="true"
-                                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
-                                      isMasterOn ? 'translate-x-5' : 'translate-x-0'
-                                    }`}
-                                  />
-                                </button>
-                                <span
-                                  className={`text-[11px] mt-1.5 transition-colors ${
-                                    isMasterOn ? 'font-bold text-[#0D7A70]' : 'font-semibold text-slate-400'
-                                  }`}
-                                >
-                                  {isMasterOn ? 'Enabled' : 'Disabled'}
-                                </span>
-                              </div>
-                            </td>
-
-                            {/* Role Columns (Admin/CEO, Operations Head, HR, Team Lead, Employee) */}
-                            {ROLE_COLUMNS.map((col) => {
-                              const isRoleOn = isMasterOn && (itemState.roles[col.key] ?? item.defaultRoles[col.key]);
-                              const isLocked = !isMasterOn;
-
-                              return (
-                                <td key={col.key} className="py-4.5 px-4 text-center align-middle">
-                                  <div className="flex flex-col items-center justify-center">
-                                    <button
-                                      type="button"
-                                      disabled={isLocked}
-                                      onClick={() => handleToggleFeatureRole(item.id, col.key)}
-                                      className={`w-5 h-5 rounded-[4px] transition-all flex items-center justify-center ${
-                                        isLocked
-                                          ? 'border-2 border-slate-200 bg-slate-100 cursor-not-allowed opacity-50'
-                                          : isRoleOn
-                                          ? 'bg-[#0D7A70] text-white hover:bg-[#0B665E] shadow-2xs cursor-pointer'
-                                          : 'border-2 border-slate-300 bg-white hover:border-slate-400 cursor-pointer'
-                                      }`}
-                                    >
-                                      {isRoleOn && <Check className="w-3.5 h-3.5 stroke-[3]" />}
-                                    </button>
-                                    <span
-                                      className={`text-[11px] mt-1.5 transition-colors ${
-                                        isLocked
-                                          ? 'text-slate-300 font-medium'
-                                          : isRoleOn
-                                          ? 'font-bold text-[#0D7A70]'
-                                          : 'font-medium text-slate-400'
-                                      }`}
-                                    >
-                                      {isRoleOn ? 'On' : 'Off'}
-                                    </span>
-                                  </div>
-                                </td>
-                              );
-                            })}
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Secondary Actions & Tools Bar */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
               <div className="flex items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={handleExportMatrix}
-                  className="text-xs h-8 gap-1.5 text-slate-700"
+                  className="text-xs h-8 gap-1.5 text-slate-700 bg-white hover:bg-slate-50 border-slate-200"
                 >
-                  <Download className="w-3.5 h-3.5" />
-                  Export Access Matrix
+                  <Download className="w-3.5 h-3.5 text-slate-500" />
+                  Export Matrix
                 </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleResetMatrixDefaults}
-                  className="text-xs h-8 gap-1.5 text-slate-700"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  Reset to Defaults
-                </Button>
-              </div>
-
-              <div className="flex items-center gap-2">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   onClick={() => setShowAdvancedRoleTools(!showAdvancedRoleTools)}
-                  className="text-xs h-8 gap-1.5 text-slate-700"
+                  className="text-xs h-8 gap-1.5 text-slate-700 bg-white hover:bg-slate-50 border-slate-200"
                 >
-                  <Shield className="w-3.5 h-3.5 text-primary" />
-                  {showAdvancedRoleTools ? 'Hide Custom Roles & Diagnostics' : 'Custom Roles & Diagnostics'}
+                  <KeyRound className="w-3.5 h-3.5 text-primary" />
+                  {showAdvancedRoleTools ? 'Hide Diagnostics' : 'Access Diagnostics'}
                 </Button>
               </div>
             </div>
 
-            {/* Collapsible Advanced Role Management & Diagnostics */}
-            {showAdvancedRoleTools && (
-              <div className="space-y-6 pt-4 border-t border-slate-200">
-                <div className="grid gap-6 md:grid-cols-3">
-                  <div className="space-y-4">
-                    <Card className="border-border shadow-xs">
-                      <CardHeader className="pb-3 border-b border-border/50">
-                        <div className="flex items-center justify-between">
+            {/* PRIMARY VIEW: Workspace Roles as Column + Row-Wise Permission Access */}
+            {rolesViewMode === 'detail' && (
+              <div className="grid gap-6 lg:grid-cols-3 items-start">
+                {/* COLUMN 1 (Left): Workspace Roles (Exact match of reference image) */}
+                <div className="space-y-4">
+                  <Card className="border border-slate-200/90 shadow-xs bg-white rounded-2xl overflow-hidden">
+                    <CardHeader className="pb-3 border-b border-slate-100">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="h-8 w-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                            <Shield className="h-4.5 w-4.5" />
+                          </div>
                           <div>
-                            <CardTitle className="text-sm font-bold flex items-center gap-1.5">
-                              <Shield className="h-4 w-4 text-primary" />
+                            <CardTitle className="text-sm font-bold text-slate-900">
                               Workspace Roles
                             </CardTitle>
-                            <CardDescription className="text-xs mt-0.5">Select a role to inspect or edit</CardDescription>
+                            <CardDescription className="text-xs text-slate-500 mt-0.5">
+                              Select a role to inspect or edit permissions
+                            </CardDescription>
                           </div>
-                          <Badge variant="secondary" className="text-[10px] font-normal">
-                            {roles.length} roles
-                          </Badge>
                         </div>
-                      </CardHeader>
-                      <CardContent className="space-y-2 pt-3">
-                        {roles.map((r) => {
-                          const isSelected = selectedRoleId === r.id;
-                          const RoleIcon = getRoleIcon(r.name);
-                          const displayName = getRoleDisplayTitle(r.name);
-                          const assignedPermCount = r.name === 'OWNER' ? allPermissions.length : (r.permissions || []).length;
+                        <Badge variant="secondary" className="text-xs font-normal bg-slate-100 text-slate-600 border border-slate-200/60 px-2 py-0.5 rounded-md">
+                          {roles.length} roles
+                        </Badge>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-2.5 pt-3.5 px-3.5 pb-3.5">
+                      {roles.map((r) => {
+                        const isSelected = selectedRoleId === r.id;
+                        const RoleIcon = getRoleIcon(r.name);
+                        const displayName = getRoleDisplayTitle(r.name);
+                        const assignedPermCount = r.name === 'OWNER' ? allPermissions.length : (r.permissions || []).length;
 
-                          return (
-                            <div
-                              key={r.id}
-                              onClick={() => setSelectedRoleId(r.id)}
-                              className={`cursor-pointer p-3 rounded-lg text-xs transition-all border ${
-                                isSelected
-                                  ? 'border-primary bg-primary/10 text-primary shadow-xs ring-1 ring-primary/40'
-                                  : 'border-border/60 hover:bg-muted/40 hover:border-border text-foreground'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="flex items-center gap-2.5">
-                                  <div
-                                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
-                                      isSelected ? 'bg-primary text-primary-foreground shadow-xs' : 'bg-muted text-muted-foreground'
-                                    }`}
-                                  >
-                                    <RoleIcon className="h-4 w-4" />
-                                  </div>
-                                  <div>
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="font-bold text-xs text-foreground">{displayName}</span>
-                                      {!r.isActive && (
-                                        <Badge variant="outline" className="text-[8px] border-amber-500/40 text-amber-500 bg-amber-500/10 px-1 py-0">
-                                          Inactive
-                                        </Badge>
-                                      )}
-                                    </div>
-                                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                                      {r.isSystemRole ? 'Core Platform' : 'Custom Role'}
-                                    </div>
-                                  </div>
+                        return (
+                          <div
+                            key={r.id}
+                            onClick={() => setSelectedRoleId(r.id)}
+                            className={`cursor-pointer p-3.5 rounded-xl text-xs transition-all border ${
+                              isSelected
+                                ? 'border-blue-500 bg-blue-50/40 text-blue-950 shadow-xs ring-1 ring-blue-500/40'
+                                : 'border-slate-200/80 bg-white hover:bg-slate-50/80 hover:border-slate-300 text-slate-900'
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="flex items-center gap-3">
+                                <div
+                                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${
+                                    isSelected
+                                      ? 'bg-blue-600 text-white shadow-xs'
+                                      : 'bg-slate-100 text-slate-500'
+                                  }`}
+                                >
+                                  <RoleIcon className="h-5 w-5" />
                                 </div>
-
-                                <div className="flex items-center gap-1 shrink-0">
-                                  {r.isSystemRole ? (
-                                    <Badge variant="outline" className="text-[9px] font-medium bg-background/50">
-                                      System
-                                    </Badge>
-                                  ) : (
-                                    <Badge variant="secondary" className="text-[9px]">
-                                      {r._count?.memberships || 0} members
-                                    </Badge>
-                                  )}
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-sm text-slate-900">{displayName}</span>
+                                    {!r.isActive && (
+                                      <Badge variant="outline" className="text-[9px] border-amber-500/40 text-amber-600 bg-amber-50 px-1 py-0">
+                                        Inactive
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-slate-500 mt-0.5">
+                                    {r.isSystemRole ? 'Core Platform' : 'Custom Organization Role'}
+                                  </div>
                                 </div>
                               </div>
 
-                              <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-2.5 pt-2 border-t border-border/40">
-                                <span className="truncate max-w-[170px] font-medium">
-                                  {r.name === 'OWNER' ? 'Full platform access' : `${assignedPermCount} permissions active`}
-                                </span>
-                                <span className={`font-semibold ${isSelected ? 'text-primary' : ''}`}>
-                                  {isSelected ? 'Selected' : 'View'}
-                                </span>
+                              <div className="flex items-center gap-1 shrink-0">
+                                {r.isSystemRole ? (
+                                  <Badge variant="outline" className="text-[11px] font-normal bg-white text-slate-600 border border-slate-200 px-2 py-0.5 rounded-md">
+                                    System
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="text-[11px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-md">
+                                    {r._count?.memberships || 0} members
+                                  </Badge>
+                                )}
                               </div>
                             </div>
-                          );
-                        })}
-                      </CardContent>
-                    </Card>
 
-                    {/* Create Custom Role */}
-                    <Card className="border-border">
+                            <div className="flex items-center justify-between text-xs text-slate-500 mt-3 pt-2.5 border-t border-slate-100">
+                              <span className="truncate max-w-[190px] font-medium text-slate-500">
+                                {r.name === 'OWNER' ? 'Full platform access' : `${assignedPermCount} permissions active`}
+                              </span>
+                              <span className={`font-semibold text-xs ${isSelected ? 'text-blue-600 font-bold' : 'text-slate-500'}`}>
+                                {isSelected ? 'Selected' : 'View'}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </CardContent>
+                  </Card>
+
+                  {/* Selected Custom Role Lifecycle Actions */}
+                  {selectedRoleObj && !selectedRoleObj.isSystemRole && (
+                    <Card className="border border-slate-200/90 shadow-xs bg-white rounded-2xl">
                       <CardHeader className="pb-2">
-                        <CardTitle className="text-xs font-bold uppercase tracking-wider">Create Custom Role</CardTitle>
-                        <CardDescription className="text-[11px]">Define organization-specific permission sets</CardDescription>
+                        <CardTitle className="text-xs font-bold uppercase tracking-wider text-slate-700">Role Management</CardTitle>
+                        <CardDescription className="text-xs text-slate-500">Manage lifecycle for {selectedRoleObj.name}</CardDescription>
                       </CardHeader>
-                      <CardContent>
-                        <form onSubmit={handleCreateRole} className="space-y-2.5">
-                          <input
-                            type="text"
-                            required
-                            placeholder="Role Title (e.g. Auditor Level 2)"
-                            value={newRoleName}
-                            onChange={(e) => setNewRoleName(e.target.value)}
-                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Description"
-                            value={newRoleDesc}
-                            onChange={(e) => setNewRoleDesc(e.target.value)}
-                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                          />
-                          <Button type="submit" disabled={creatingRole} size="sm" className="w-full text-xs h-7">
-                            {creatingRole ? 'Creating...' : '+ Create Role'}
-                          </Button>
-                        </form>
-                      </CardContent>
-                    </Card>
-                  </div>
-
-                  {/* Access Diagnostics Inspector */}
-                  <div className="md:col-span-2 space-y-4">
-                    <Card className="border-border">
-                      <CardHeader>
-                        <CardTitle className="text-base font-bold flex items-center gap-2">
-                          <Shield className="h-5 w-5 text-primary" />
-                          Access Diagnostics & Effective Permissions Inspector
-                        </CardTitle>
-                        <CardDescription className="text-xs mt-1">
-                          Review effective permissions and diagnose why a user can or cannot perform an action, including data scope boundaries.
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-4">
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="space-y-1">
-                            <label className="text-xs font-semibold text-foreground">Select Member *</label>
-                            <select
-                              value={selectedDiagnosticMemberId}
-                              onChange={(e) => setSelectedDiagnosticMemberId(e.target.value)}
-                              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                            >
-                              <option value="">-- Choose Workspace Member --</option>
-                              {workspace?.memberships?.map((m: any) => (
-                                <option key={m.id} value={m.id}>
-                                  {m.user?.firstName} {m.user?.lastName} ({m.accessRole} • {m.user?.email})
-                                </option>
-                              ))}
-                            </select>
+                      <CardContent className="space-y-3 pt-0">
+                        {editingRoleId === selectedRoleObj.id ? (
+                          <div className="space-y-2 border border-slate-200 p-3 rounded-lg bg-slate-50/50">
+                            <input
+                              type="text"
+                              value={editRoleName}
+                              onChange={(e) => setEditRoleName(e.target.value)}
+                              placeholder="Role Name"
+                              className="w-full rounded border border-slate-200 bg-white px-3 py-1.5 text-xs"
+                            />
+                            <input
+                              type="text"
+                              value={editRoleDesc}
+                              onChange={(e) => setEditRoleDesc(e.target.value)}
+                              placeholder="Description"
+                              className="w-full rounded border border-slate-200 bg-white px-3 py-1.5 text-xs"
+                            />
+                            <div className="flex gap-2 pt-1">
+                              <Button size="sm" className="h-7 text-xs flex-1" onClick={() => handleRenameRole(selectedRoleObj.id)}>
+                                Save Changes
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingRoleId(null)}>
+                                Cancel
+                              </Button>
+                            </div>
                           </div>
-
-                          <div className="space-y-1">
-                            <label className="text-xs font-semibold text-foreground">Action / Permission to Test *</label>
-                            <select
-                              value={diagnosticPermissionToTest}
-                              onChange={(e) => setDiagnosticPermissionToTest(e.target.value)}
-                              className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
-                            >
-                              <option value="payroll:view">payroll:view (Restricted Payroll)</option>
-                              <option value="payroll:export">payroll:export (Payroll Export)</option>
-                              <option value="people:export">people:export (Directory Export)</option>
-                              <option value="people:manage">people:manage (Employee Management)</option>
-                              <option value="tasks:delete">tasks:delete (Task Deletion)</option>
-                              <option value="tasks:assign">tasks:assign (Task Assignment)</option>
-                              <option value="quality:audit">quality:audit (Conduct QA Audit)</option>
-                              <option value="roles:manage">roles:manage (Manage Roles)</option>
-                              <option value="billing:manage">billing:manage (Subscriptions & Billing)</option>
-                            </select>
-                          </div>
-
-                          <div className="flex items-end">
+                        ) : (
+                          <div className="flex flex-col gap-2">
                             <Button
                               size="sm"
-                              className="w-full text-xs h-8 gap-1"
-                              disabled={diagnosingAccess || !selectedDiagnosticMemberId}
-                              onClick={handleRunDiagnostic}
+                              variant="outline"
+                              className="text-xs h-8 justify-start text-slate-700"
+                              onClick={() => {
+                                setEditingRoleId(selectedRoleObj.id);
+                                setEditRoleName(selectedRoleObj.name);
+                                setEditRoleDesc(selectedRoleObj.description || '');
+                              }}
                             >
-                              {diagnosingAccess ? 'Evaluating...' : 'Run Access Diagnostic'}
+                              Rename / Edit Description
                             </Button>
-                          </div>
-                        </div>
-
-                        {/* Diagnostic Results Box */}
-                        {diagnosticResult && (
-                          <div className="p-4 rounded-lg border border-border bg-muted/20 space-y-3">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-border/80 pb-2.5 gap-2">
-                              <div>
-                                <span className="text-xs font-bold text-foreground">
-                                  {diagnosticResult.membership?.userName}
-                                </span>
-                                <span className="text-[11px] text-muted-foreground ml-2 font-mono">
-                                  ({diagnosticResult.membership?.userEmail})
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-1.5">
-                                <Badge variant="outline" className="text-[10px] font-mono">
-                                  Platform: {diagnosticResult.membership?.accessRole}
-                                </Badge>
-                                <Badge variant="secondary" className="text-[10px] font-mono">
-                                  Role: {diagnosticResult.membership?.role?.name} ({diagnosticResult.membership?.role?.isActive ? 'Active' : 'Inactive'})
-                                </Badge>
-                                <Badge variant="outline" className="text-[10px] font-mono">
-                                  Scope: {diagnosticResult.dataScopePolicy?.scope}
-                                </Badge>
-                              </div>
-                            </div>
-
-                            {/* Verdict Card */}
-                            {diagnosticResult.evaluation && (
-                              <div className={`p-3 rounded-md border text-xs flex items-start gap-2.5 ${
-                                diagnosticResult.evaluation.isAllowed
-                                  ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                  : 'border-destructive/30 bg-destructive/10 text-destructive'
-                              }`}>
-                                {diagnosticResult.evaluation.isAllowed ? (
-                                  <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
-                                ) : (
-                                  <AlertCircle className="h-5 w-5 shrink-0 text-destructive mt-0.5" />
-                                )}
-                                <div className="space-y-1">
-                                  <div className="font-bold flex items-center gap-2">
-                                    <span>Status: {diagnosticResult.evaluation.isAllowed ? 'ALLOWED' : 'DENIED'}</span>
-                                    <span className="font-mono text-[10px] opacity-80">({diagnosticResult.evaluation.permission})</span>
-                                  </div>
-                                  <p className="text-[11px] leading-relaxed opacity-90">{diagnosticResult.evaluation.reason}</p>
-                                  <p className="text-[10px] opacity-75 font-mono">Data Scope Boundary: {diagnosticResult.evaluation.dataScopeConstraint}</p>
-                                </div>
-                              </div>
+                            {selectedRoleObj.isActive ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs h-8 justify-start text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                                onClick={() => handleDeactivateRole(selectedRoleObj.id)}
+                              >
+                                Deactivate Role
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs h-8 justify-start text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50"
+                                onClick={() => handleReactivateRole(selectedRoleObj.id)}
+                              >
+                                Reactivate Role
+                              </Button>
                             )}
-
-                            {/* Effective Permissions Summary */}
-                            <div className="space-y-1.5 pt-1">
-                              <div className="flex items-center justify-between text-xs">
-                                <span className="font-semibold text-foreground">Granted Effective Permissions</span>
-                                <Badge variant="secondary" className="text-[10px]">
-                                  {diagnosticResult.effectivePermissionsCount} total granted
-                                </Badge>
-                              </div>
-                              <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-2 rounded bg-card border border-border">
-                                {diagnosticResult.effectivePermissions?.map((permCode: string) => (
-                                  <span key={permCode} className="text-[10px] font-mono bg-muted/60 px-1.5 py-0.5 rounded text-foreground">
-                                    {permCode}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-8 justify-start text-destructive hover:bg-destructive/10"
+                              onClick={() => setDeletingRoleId(selectedRoleObj.id)}
+                            >
+                              Delete Custom Role
+                            </Button>
                           </div>
                         )}
                       </CardContent>
                     </Card>
+                  )}
+
+                  {/* Create Custom Role Box */}
+                  <Card className="border border-slate-200/90 shadow-xs bg-white rounded-2xl">
+                    <CardHeader className="pb-2">
+                      <CardTitle className="text-xs font-bold uppercase tracking-wider text-slate-700">Create Custom Role</CardTitle>
+                      <CardDescription className="text-xs text-slate-500">Define specialized organizational permission sets</CardDescription>
+                    </CardHeader>
+                    <CardContent>
+                      <form onSubmit={handleCreateRole} className="space-y-2.5">
+                        <input
+                          type="text"
+                          required
+                          placeholder="Role Title (e.g. Auditor Level 2)"
+                          value={newRoleName}
+                          onChange={(e) => setNewRoleName(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none"
+                        />
+                        <input
+                          type="text"
+                          placeholder="Description"
+                          value={newRoleDesc}
+                          onChange={(e) => setNewRoleDesc(e.target.value)}
+                          className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none"
+                        />
+                        <Button type="submit" disabled={creatingRole} size="sm" className="w-full text-xs h-8">
+                          {creatingRole ? 'Creating...' : '+ Create Role'}
+                        </Button>
+                      </form>
+                    </CardContent>
+                  </Card>
+                </div>
+
+                {/* COLUMN 2 (Right): Permission Access (ROW-WISE) */}
+                <div className="lg:col-span-2 space-y-4">
+                  <Card className="border border-slate-200/90 shadow-xs bg-white rounded-2xl overflow-hidden">
+                    {/* Role Header Banner */}
+                    <div className="p-4 sm:p-5 border-b border-slate-100 bg-slate-50/50">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="flex items-center gap-3.5">
+                          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-xs">
+                            {(() => {
+                              const IconComp = getRoleIcon(selectedRoleObj?.name);
+                              return <IconComp className="h-5 w-5" />;
+                            })()}
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h2 className="text-base sm:text-lg font-bold text-slate-900">
+                                Permissions for {getRoleDisplayTitle(selectedRoleObj?.name)}
+                              </h2>
+                              {selectedRoleObj?.isActive ? (
+                                <Badge variant="outline" className="border-emerald-500/30 text-emerald-700 bg-emerald-50 text-[10px] px-2 py-0.5">
+                                  Active
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="border-amber-500/30 text-amber-700 bg-amber-50 text-[10px] px-2 py-0.5">
+                                  Inactive
+                                </Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {getRoleDescription(selectedRoleObj)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 self-start sm:self-center">
+                          <Badge variant="secondary" className="text-xs font-mono bg-white border border-slate-200 text-slate-700 px-2.5 py-1">
+                            {selectedRoleObj?.name === 'OWNER'
+                              ? `${allPermissions.length} / ${allPermissions.length} granted`
+                              : `${(selectedRoleObj?.permissions || []).length} / ${allPermissions.length} granted`}
+                          </Badge>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Search & Filter Controls */}
+                    <div className="p-4 border-b border-slate-100 space-y-3 bg-white">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                        {/* Search Input */}
+                        <div className="relative flex-1">
+                          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 pointer-events-none" />
+                          <input
+                            type="text"
+                            value={permSearchQuery}
+                            onChange={(e) => setPermSearchQuery(e.target.value)}
+                            placeholder="Search permissions by name, description, or code..."
+                            className="w-full rounded-xl border border-slate-200 bg-white pl-9 pr-3 py-2 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary text-slate-800 placeholder:text-slate-400"
+                          />
+                        </div>
+
+                        {/* Filter Status: All | Granted | Revoked */}
+                        <div className="inline-flex rounded-xl border border-slate-200 p-0.5 bg-slate-50/80 shrink-0">
+                          {(['all', 'granted', 'revoked'] as const).map((status) => (
+                            <button
+                              key={status}
+                              type="button"
+                              onClick={() => setPermFilterStatus(status)}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-lg capitalize transition-all cursor-pointer ${
+                                permFilterStatus === status
+                                  ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                                  : 'text-slate-500 hover:text-slate-800'
+                              }`}
+                            >
+                              {status}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Module Filter Pills */}
+                      <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedModuleFilter('ALL')}
+                          className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+                            selectedModuleFilter === 'ALL'
+                              ? 'bg-[#0D7A70] text-white shadow-2xs font-semibold'
+                              : 'bg-white border border-slate-200/90 text-slate-600 hover:bg-slate-50'
+                          }`}
+                        >
+                          All Modules
+                        </button>
+                        {Array.from(new Set(allPermissions.map((p) => p.module || 'system'))).sort().map((mod) => (
+                          <button
+                            key={mod}
+                            type="button"
+                            onClick={() => setSelectedModuleFilter(mod)}
+                            className={`px-3 py-1 rounded-lg text-xs font-medium whitespace-nowrap transition-all uppercase shrink-0 cursor-pointer ${
+                              selectedModuleFilter === mod
+                                ? 'bg-[#0D7A70] text-white shadow-2xs font-semibold'
+                                : 'bg-white border border-slate-200/90 text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {mod}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Permission Access ROW-WISE List */}
+                    <CardContent className="p-4 sm:p-5 space-y-6">
+                      {matchingModules.length === 0 ? (
+                        <div className="p-8 text-center border border-dashed border-slate-200 rounded-xl bg-slate-50/50 space-y-2">
+                          <Search className="h-6 w-6 text-slate-400 mx-auto opacity-60" />
+                          <p className="text-sm font-semibold text-slate-800">No permissions found</p>
+                          <p className="text-xs text-slate-500">
+                            No permissions match &quot;{permSearchQuery}&quot; with current filter status.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPermSearchQuery('');
+                              setPermFilterStatus('all');
+                              setSelectedModuleFilter('ALL');
+                            }}
+                            className="mt-2 text-xs text-[#0D7A70] font-semibold hover:underline cursor-pointer"
+                          >
+                            Reset Search & Filters
+                          </button>
+                        </div>
+                      ) : (
+                        matchingModules.map(([modName, perms]) => {
+                          const isLocked = isOwnerRole || !selectedRoleObj?.isActive;
+                          const ModuleIcon = getModuleIcon(modName);
+
+                          return (
+                            <div key={modName} className="space-y-2.5">
+                              {/* Module Group Bar */}
+                              <div className="flex items-center justify-between pb-1.5 border-b border-slate-100">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-6 w-6 rounded-md bg-slate-100 flex items-center justify-center text-slate-600">
+                                    <ModuleIcon className="h-3.5 w-3.5" />
+                                  </div>
+                                  <span className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                                    {modName}
+                                  </span>
+                                  <span className="text-[11px] text-slate-400 font-medium">
+                                    ({perms.length} {perms.length === 1 ? 'action' : 'actions'})
+                                  </span>
+                                </div>
+
+                                {/* Quick Batch Module Actions */}
+                                {!isLocked && (
+                                  <div className="flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleBatchToggleModulePermissions(selectedRoleId!, perms.map((p) => p.id), true)}
+                                      className="text-[11px] font-semibold text-[#0D7A70] hover:underline px-1.5 py-0.5 rounded cursor-pointer"
+                                    >
+                                      Grant All
+                                    </button>
+                                    <span className="text-slate-300">|</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleBatchToggleModulePermissions(selectedRoleId!, perms.map((p) => p.id), false)}
+                                      className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 hover:underline px-1.5 py-0.5 rounded cursor-pointer"
+                                    >
+                                      Revoke All
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Row-Wise Permission List */}
+                              <div className="space-y-2">
+                                {perms.map((perm) => {
+                                  const isGranted = isOwnerRole || grantedPermIds.has(perm.id);
+                                  const meta = getPermissionMeta(perm);
+
+                                  return (
+                                    <div
+                                      key={perm.id}
+                                      className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-xl border transition-all ${
+                                        isGranted
+                                          ? 'border-slate-200 bg-white hover:border-slate-300 shadow-2xs'
+                                          : 'border-slate-200/70 bg-slate-50/40 hover:bg-white hover:border-slate-300'
+                                      }`}
+                                    >
+                                      {/* Left Side: Permission Info */}
+                                      <div className="flex items-start gap-3 min-w-0 flex-1">
+                                        <div className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${
+                                          isGranted ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'
+                                        }`}>
+                                          <Check className={`h-4 w-4 stroke-[2.5] ${isGranted ? 'opacity-100' : 'opacity-30'}`} />
+                                        </div>
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex items-center gap-2 flex-wrap">
+                                            <span className="font-bold text-sm text-slate-900 tracking-tight">
+                                              {meta.title}
+                                            </span>
+                                            <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono bg-slate-100 text-slate-600 border border-slate-200/60">
+                                              {perm.code}
+                                            </span>
+                                            {isGranted ? (
+                                              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200/60">
+                                                <Check className="h-3 w-3 stroke-[3]" /> Enabled
+                                              </span>
+                                            ) : (
+                                              <span className="text-[11px] font-medium text-slate-400 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200/60">
+                                                Disabled
+                                              </span>
+                                            )}
+                                          </div>
+                                          <p className="text-xs text-slate-500 mt-1 leading-relaxed max-w-2xl">
+                                            {meta.description}
+                                          </p>
+                                        </div>
+                                      </div>
+
+                                      {/* Right Side: Row-Wise Toggle Switch */}
+                                      <div className="flex items-center justify-end gap-3 shrink-0 sm:pl-4 sm:border-l sm:border-slate-100">
+                                        <div className="text-right">
+                                          <span className={`block text-xs font-bold transition-colors ${
+                                            isGranted ? 'text-[#0D7A70]' : 'text-slate-400'
+                                          }`}>
+                                            {isGranted ? 'Enabled' : 'Disabled'}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400">
+                                            {isLocked ? (isOwnerRole ? 'Owner Root Access' : 'Role Inactive') : (isGranted ? 'Click to Revoke' : 'Click to Grant')}
+                                          </span>
+                                        </div>
+
+                                        <button
+                                          type="button"
+                                          disabled={isLocked}
+                                          onClick={() => handleTogglePermission(selectedRoleId!, perm.id)}
+                                          className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                            isLocked ? 'cursor-not-allowed opacity-60' : ''
+                                          } ${isGranted ? 'bg-[#0D7A70]' : 'bg-slate-300'}`}
+                                        >
+                                          <span
+                                            aria-hidden="true"
+                                            className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                                              isGranted ? 'translate-x-5' : 'translate-x-0'
+                                            }`}
+                                          />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            )}
+
+            {/* SECONDARY VIEW: All-Roles Matrix Table */}
+            {rolesViewMode === 'matrix' && (
+              <div className="space-y-4">
+                {/* Categories Bar & Search */}
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div
+                      ref={categoryScrollRef}
+                      onScroll={updateCategoryScrollProgress}
+                      className="flex items-center gap-2 overflow-x-auto no-scrollbar scroll-smooth pb-1"
+                      style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+                    >
+                      {MATRIX_CATEGORIES.map((cat) => {
+                        const isActive = selectedMatrixCategory === cat;
+                        return (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => setSelectedMatrixCategory(cat)}
+                            className={`px-4 py-2 rounded-lg text-xs md:text-sm font-medium whitespace-nowrap transition-all shrink-0 cursor-pointer ${
+                              isActive
+                                ? 'bg-[#0D7A70] text-white shadow-xs font-semibold'
+                                : 'bg-white border border-slate-200/90 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
+                            }`}
+                          >
+                            {cat}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 mt-2">
+                      <button
+                        type="button"
+                        onClick={() => handleScrollCategories('left')}
+                        className="text-slate-400 hover:text-slate-700 transition-colors p-0.5 rounded cursor-pointer"
+                        title="Scroll categories left"
+                      >
+                        <ChevronLeft className="w-4 h-4" />
+                      </button>
+                      <div className="w-56 h-1.5 bg-slate-200/90 rounded-full relative overflow-hidden">
+                        <div
+                          className="h-full bg-slate-500 rounded-full transition-all duration-150"
+                          style={{
+                            width: '35%',
+                            transform: `translateX(${(scrollProgress / 100) * (224 * 0.65)}px)`,
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleScrollCategories('right')}
+                        className="text-slate-400 hover:text-slate-700 transition-colors p-0.5 rounded cursor-pointer"
+                        title="Scroll categories right"
+                      >
+                        <ChevronRight className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="relative shrink-0 w-full md:w-auto">
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+                    <input
+                      type="text"
+                      placeholder="Search features..."
+                      value={matrixSearchQuery}
+                      onChange={(e) => setMatrixSearchQuery(e.target.value)}
+                      className="pl-9 pr-3 py-2 text-xs md:text-sm bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#0D7A70]/20 focus:border-[#0D7A70] text-slate-800 placeholder:text-slate-400 w-full md:w-64 transition-all shadow-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Matrix Table */}
+                <div className="border border-slate-200/90 rounded-2xl bg-white shadow-xs overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-200/90 bg-white">
+                          <th className="text-left text-sm font-bold text-slate-800 py-4 px-6 min-w-[340px]">
+                            Feature & Description
+                          </th>
+                          <th className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[120px]">
+                            Master Switch
+                          </th>
+                          {ROLE_COLUMNS.map((col) => (
+                            <th key={col.key} className="text-center text-sm font-bold text-slate-800 py-4 px-4 min-w-[110px]">
+                              {col.label}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {filteredFeatures.length === 0 ? (
+                          <tr>
+                            <td colSpan={7} className="text-center py-12 text-slate-500 text-xs">
+                              <Search className="h-6 w-6 text-slate-400 mx-auto mb-2 opacity-60" />
+                              <p className="font-semibold text-slate-700">No features found</p>
+                              <p className="text-slate-400 mt-1">
+                                No features match &quot;{matrixSearchQuery}&quot; in {selectedMatrixCategory}.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setMatrixSearchQuery('');
+                                  setSelectedMatrixCategory('All');
+                                }}
+                                className="mt-3 text-xs text-[#0D7A70] font-semibold hover:underline cursor-pointer"
+                              >
+                                Reset Search & Filters
+                              </button>
+                            </td>
+                          </tr>
+                        ) : (
+                          filteredFeatures.map((item) => {
+                            const itemState = matrixState[item.id] || {
+                              master: item.defaultMaster,
+                              roles: { ...item.defaultRoles },
+                            };
+                            const isMasterOn = itemState.master;
+
+                            return (
+                              <tr
+                                key={item.id}
+                                className="hover:bg-slate-50/60 transition-colors"
+                              >
+                                <td className="py-4.5 px-6 text-left align-middle">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-bold text-[14px] text-slate-900 tracking-tight">
+                                      {item.title}
+                                    </span>
+                                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600 border border-slate-200/60">
+                                      {item.category}
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-slate-500 mt-1.5 max-w-xl leading-relaxed">
+                                    {item.description}
+                                  </p>
+                                </td>
+
+                                <td className="py-4.5 px-4 text-center align-middle">
+                                  <div className="flex flex-col items-center justify-center">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleToggleMasterSwitch(item.id)}
+                                      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                                        isMasterOn ? 'bg-[#0D7A70]' : 'bg-slate-300'
+                                      }`}
+                                    >
+                                      <span
+                                        aria-hidden="true"
+                                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                                          isMasterOn ? 'translate-x-5' : 'translate-x-0'
+                                        }`}
+                                      />
+                                    </button>
+                                    <span
+                                      className={`text-[11px] mt-1.5 transition-colors ${
+                                        isMasterOn ? 'font-bold text-[#0D7A70]' : 'font-semibold text-slate-400'
+                                      }`}
+                                    >
+                                      {isMasterOn ? 'Enabled' : 'Disabled'}
+                                    </span>
+                                  </div>
+                                </td>
+
+                                {ROLE_COLUMNS.map((col) => {
+                                  const isRoleOn = isMasterOn && (itemState.roles[col.key] ?? item.defaultRoles[col.key]);
+                                  const isLocked = !isMasterOn;
+
+                                  return (
+                                    <td key={col.key} className="py-4.5 px-4 text-center align-middle">
+                                      <div className="flex flex-col items-center justify-center">
+                                        <button
+                                          type="button"
+                                          disabled={isLocked}
+                                          onClick={() => handleToggleFeatureRole(item.id, col.key)}
+                                          className={`w-5 h-5 rounded-[4px] transition-all flex items-center justify-center ${
+                                            isLocked
+                                              ? 'border-2 border-slate-200 bg-slate-100 cursor-not-allowed opacity-50'
+                                              : isRoleOn
+                                              ? 'bg-[#0D7A70] text-white hover:bg-[#0B665E] shadow-2xs cursor-pointer'
+                                              : 'border-2 border-slate-300 bg-white hover:border-slate-400 cursor-pointer'
+                                          }`}
+                                        >
+                                          {isRoleOn && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                                        </button>
+                                        <span
+                                          className={`text-[11px] mt-1.5 transition-colors ${
+                                            isLocked
+                                              ? 'text-slate-300 font-medium'
+                                              : isRoleOn
+                                              ? 'font-bold text-[#0D7A70]'
+                                              : 'font-medium text-slate-400'
+                                          }`}
+                                        >
+                                          {isRoleOn ? 'On' : 'Off'}
+                                        </span>
+                                      </div>
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Collapsible Access Diagnostics Inspector */}
+            {showAdvancedRoleTools && (
+              <Card className="border border-slate-200 shadow-xs bg-white rounded-2xl overflow-hidden mt-6">
+                <CardHeader>
+                  <CardTitle className="text-base font-bold flex items-center gap-2">
+                    <Shield className="h-5 w-5 text-primary" />
+                    Access Diagnostics & Effective Permissions Inspector
+                  </CardTitle>
+                  <CardDescription className="text-xs mt-1">
+                    Review effective permissions and diagnose why a user can or cannot perform an action, including data scope boundaries.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-3">
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-foreground">Select Member *</label>
+                      <select
+                        value={selectedDiagnosticMemberId}
+                        onChange={(e) => setSelectedDiagnosticMemberId(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      >
+                        <option value="">-- Choose Workspace Member --</option>
+                        {workspace?.memberships?.map((m: any) => (
+                          <option key={m.id} value={m.id}>
+                            {m.user?.firstName} {m.user?.lastName} ({m.accessRole} • {m.user?.email})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-foreground">Action / Permission to Test *</label>
+                      <select
+                        value={diagnosticPermissionToTest}
+                        onChange={(e) => setDiagnosticPermissionToTest(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                      >
+                        <option value="payroll:view">payroll:view (Restricted Payroll)</option>
+                        <option value="payroll:export">payroll:export (Payroll Export)</option>
+                        <option value="people:export">people:export (Directory Export)</option>
+                        <option value="people:manage">people:manage (Employee Management)</option>
+                        <option value="tasks:delete">tasks:delete (Task Deletion)</option>
+                        <option value="tasks:assign">tasks:assign (Task Assignment)</option>
+                        <option value="quality:audit">quality:audit (Conduct QA Audit)</option>
+                        <option value="roles:manage">roles:manage (Manage Roles)</option>
+                        <option value="billing:manage">billing:manage (Subscriptions & Billing)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex items-end">
+                      <Button
+                        size="sm"
+                        className="w-full text-xs h-8 gap-1"
+                        disabled={diagnosingAccess || !selectedDiagnosticMemberId}
+                        onClick={handleRunDiagnostic}
+                      >
+                        {diagnosingAccess ? 'Evaluating...' : 'Run Access Diagnostic'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Diagnostic Results Box */}
+                  {diagnosticResult && (
+                    <div className="p-4 rounded-lg border border-border bg-muted/20 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-border/80 pb-2.5 gap-2">
+                        <div>
+                          <span className="text-xs font-bold text-foreground">
+                            {diagnosticResult.membership?.userName}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground ml-2 font-mono">
+                            ({diagnosticResult.membership?.userEmail})
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            Platform: {diagnosticResult.membership?.accessRole}
+                          </Badge>
+                          <Badge variant="secondary" className="text-[10px] font-mono">
+                            Role: {diagnosticResult.membership?.role?.name} ({diagnosticResult.membership?.role?.isActive ? 'Active' : 'Inactive'})
+                          </Badge>
+                          <Badge variant="outline" className="text-[10px] font-mono">
+                            Scope: {diagnosticResult.dataScopePolicy?.scope}
+                          </Badge>
+                        </div>
+                      </div>
+
+                      {/* Verdict Card */}
+                      {diagnosticResult.evaluation && (
+                        <div className={`p-3 rounded-md border text-xs flex items-start gap-2.5 ${
+                          diagnosticResult.evaluation.isAllowed
+                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                            : 'border-destructive/30 bg-destructive/10 text-destructive'
+                        }`}>
+                          {diagnosticResult.evaluation.isAllowed ? (
+                            <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-500 mt-0.5" />
+                          ) : (
+                            <AlertCircle className="h-5 w-5 shrink-0 text-destructive mt-0.5" />
+                          )}
+                          <div className="space-y-1">
+                            <div className="font-bold flex items-center gap-2">
+                              <span>Status: {diagnosticResult.evaluation.isAllowed ? 'ALLOWED' : 'DENIED'}</span>
+                              <span className="font-mono text-[10px] opacity-80">({diagnosticResult.evaluation.permission})</span>
+                            </div>
+                            <p className="text-[11px] leading-relaxed opacity-90">{diagnosticResult.evaluation.reason}</p>
+                            <p className="text-[10px] opacity-75 font-mono">Data Scope Boundary: {diagnosticResult.evaluation.dataScopeConstraint}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Effective Permissions Summary */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-semibold text-foreground">Granted Effective Permissions</span>
+                          <Badge variant="secondary" className="text-[10px]">
+                            {diagnosticResult.effectivePermissionsCount} total granted
+                          </Badge>
+                        </div>
+                        <div className="flex flex-wrap gap-1 max-h-24 overflow-y-auto p-2 rounded bg-card border border-border">
+                          {diagnosticResult.effectivePermissions?.map((permCode: string) => (
+                            <span key={permCode} className="text-[10px] font-mono bg-muted/60 px-1.5 py-0.5 rounded text-foreground">
+                              {permCode}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
           </div>
         );
