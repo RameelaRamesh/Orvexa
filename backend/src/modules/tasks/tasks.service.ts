@@ -1037,6 +1037,7 @@ export class TasksService implements OnModuleInit {
 
     return {
       ...task,
+      creatorMembershipId: metadata.creatorMembershipId || null,
       progress: metadata.progress !== undefined ? metadata.progress : task.status === 'COMPLETED' ? 100 : task.status === 'IN_PROGRESS' ? 25 : 0,
       startDate: metadata.startDate || null,
       commentsCount: comments.length,

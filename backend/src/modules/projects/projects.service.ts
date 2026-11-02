@@ -36,7 +36,7 @@ export class ProjectsService {
       data: {
         workspaceId,
         name: data.name,
-        key: data.key.toUpperCase(),
+        key: data.key.trim().toUpperCase(),
         clientId: data.clientId,
         description: data.description,
         priority: data.priority || 'MEDIUM',

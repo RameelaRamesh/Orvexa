@@ -201,6 +201,26 @@ export default function ProjectsPage() {
     return found;
   };
 
+  const getTaskAssigner = (task: any) => {
+    if (!task) return null;
+    const safeMembers = Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [];
+    const creatorId = task.creatorMembershipId || (task.sla as any)?.creatorMembershipId;
+    if (creatorId) {
+      const found = safeMembers.find((m) => m && (m.id === creatorId || m.userId === creatorId));
+      if (found) return found;
+    }
+    if (Array.isArray(task.activityLog) && task.activityLog.length > 0) {
+      const createdLog = task.activityLog.find((a: any) => a.action === 'CREATED') || task.activityLog[0];
+      if (createdLog?.actorId && createdLog.actorId !== 'SYSTEM') {
+        const found = safeMembers.find((m) => m && (m.id === createdLog.actorId || m.userId === createdLog.actorId));
+        if (found) return found;
+      }
+    }
+    // Fallback to workspace Owner or Admin if task was created during setup
+    const ownerOrAdmin = safeMembers.find((m) => m && (m.accessRole === 'OWNER' || m.accessRole === 'ADMIN'));
+    return ownerOrAdmin || null;
+  };
+
   const handleSaveAssignees = async () => {
     if (!selectedTask) return;
     setSavingAssignees(true);
@@ -533,6 +553,37 @@ export default function ProjectsPage() {
             ))}
           </div>
 
+          {/* Selected Project Details Card */}
+          {(() => {
+            const activeProj = projects.find((p) => p.id === selectedProjectId);
+            if (!activeProj) return null;
+            return (
+              <div className="p-3.5 rounded-lg border border-primary/20 bg-primary/5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Badge variant="outline" className="font-mono text-xs font-bold text-primary border-primary/30">
+                      {activeProj.key}
+                    </Badge>
+                    <span className="font-semibold text-foreground text-sm">{activeProj.name}</span>
+                    <Badge variant="secondary" className="text-[10px]">{activeProj.status}</Badge>
+                  </div>
+                  {activeProj.description && (
+                    <p className="text-muted-foreground text-xs mt-1">{activeProj.description}</p>
+                  )}
+                </div>
+                <div className="text-left sm:text-right text-muted-foreground text-[11px] shrink-0 space-y-0.5">
+                  <div className="flex items-center sm:justify-end gap-1">
+                    <Calendar className="h-3 w-3 text-primary inline" />
+                    <span>Project Created: <strong className="text-foreground">{new Date(activeProj.createdAt).toLocaleDateString()}</strong></span>
+                  </div>
+                  {activeProj.priority && (
+                    <div>Priority: <strong className="uppercase text-foreground">{activeProj.priority}</strong></div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* Filters Bar */}
           <Card>
             <CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3">
@@ -586,7 +637,7 @@ export default function ProjectsPage() {
                     <tr className="border-b border-border text-xs uppercase text-muted-foreground bg-surface-secondary/50">
                       <th className="py-3.5 px-4">Work Item Title</th>
                       <th className="py-3.5 px-4">Context / Project</th>
-                      <th className="py-3.5 px-4">Assignee</th>
+                      <th className="py-3.5 px-4">Assignee & Assigner</th>
                       <th className="py-3.5 px-4">Progress</th>
                       <th className="py-3.5 px-4">Priority</th>
                       <th className="py-3.5 px-4">Status</th>
@@ -608,30 +659,58 @@ export default function ProjectsPage() {
                           {t.description && (
                             <div className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{t.description}</div>
                           )}
+                          <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
+                            <Clock className="h-3 w-3 inline text-muted-foreground" />
+                            Created {new Date(t.createdAt).toLocaleDateString()}
+                          </div>
                         </td>
                         <td className="py-3.5 px-4 text-xs">
-                          {t.project ? (
-                            <Badge variant="outline" className="font-mono text-[11px]">
-                              {t.project.key}: {t.project.name}
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="text-[11px]">
-                              Standalone
-                            </Badge>
-                          )}
+                          <div className="space-y-1">
+                            {t.project ? (
+                              <Badge variant="outline" className="font-mono text-[11px]">
+                                {t.project.key}: {t.project.name}
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[11px]">
+                                Standalone
+                              </Badge>
+                            )}
+                            <div className="text-[10px] text-muted-foreground">
+                              {t.project?.createdAt
+                                ? `Project Created: ${new Date(t.project.createdAt).toLocaleDateString()}`
+                                : `Created: ${new Date(t.createdAt).toLocaleDateString()}`}
+                            </div>
+                          </div>
                         </td>
                         <td className="py-3.5 px-4 text-xs text-foreground">
-                          {getTaskAssignees(t).length > 0 ? (
-                            <div className="flex flex-wrap gap-1 max-w-[200px]">
-                              {getTaskAssignees(t).map((m: any) => (
-                                <Badge key={m.id} variant="secondary" className="text-[10px] py-0 px-1.5 font-normal">
-                                  {getMemberDisplayName(m)}
-                                </Badge>
-                              ))}
+                          <div className="space-y-1.5">
+                            <div>
+                              <span className="text-[10px] text-muted-foreground font-semibold uppercase block">
+                                Assignee(s):
+                              </span>
+                              {getTaskAssignees(t).length > 0 ? (
+                                <div className="flex flex-wrap gap-1 max-w-[200px]">
+                                  {getTaskAssignees(t).map((m: any) => (
+                                    <Badge key={m.id} variant="secondary" className="text-[10px] py-0 px-1.5 font-normal">
+                                      {getMemberDisplayName(m)}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className="text-muted-foreground italic text-[11px]">Unassigned</span>
+                              )}
                             </div>
-                          ) : (
-                            <span className="text-muted-foreground italic">Unassigned</span>
-                          )}
+                            {getTaskAssigner(t) && (
+                              <div className="pt-0.5">
+                                <span className="text-[10px] text-muted-foreground font-semibold uppercase block">
+                                  Assigner:
+                                </span>
+                                <span className="text-xs font-medium text-foreground">
+                                  {getMemberDisplayName(getTaskAssigner(t))}
+                                </span>
+                              </div>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3.5 px-4">
                           <div className="w-24 bg-muted rounded-full h-2 overflow-hidden">
@@ -1096,7 +1175,49 @@ export default function ProjectsPage() {
                       </div>
                     )}
                   </div>
-                  <div>
+
+                  {/* Assigner (Who created the task / project) */}
+                  <div className="pt-2 border-t border-border/50">
+                    <span className="text-muted-foreground font-semibold">Assigner (Created By):</span>
+                    <div className="text-foreground mt-0.5 font-medium flex items-center gap-1.5">
+                      {getTaskAssigner(selectedTask) ? (
+                        <Badge variant="outline" className="text-xs py-0.5 px-2 font-medium">
+                          {getMemberDisplayName(getTaskAssigner(selectedTask))}
+                          {getMemberDeptName(getTaskAssigner(selectedTask)) !== 'General' && (
+                            <span className="text-[10px] text-muted-foreground ml-1">
+                              ({getMemberDeptName(getTaskAssigner(selectedTask))})
+                            </span>
+                          )}
+                        </Badge>
+                      ) : (
+                        <span className="text-muted-foreground italic text-xs">Workspace Administrator</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Date Created */}
+                  <div className="pt-2 border-t border-border/50">
+                    <span className="text-muted-foreground font-semibold">Date Created:</span>
+                    <div className="text-foreground mt-0.5 font-medium">
+                      {new Date(selectedTask.createdAt).toLocaleDateString()} at {new Date(selectedTask.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                  </div>
+
+                  {/* Project Info & Project Created Date if linked */}
+                  {selectedTask.project && (
+                    <div className="pt-2 border-t border-border/50">
+                      <span className="text-muted-foreground font-semibold">Project ({selectedTask.project.key}):</span>
+                      <div className="text-foreground mt-0.5 font-medium">
+                        {selectedTask.project.name}
+                      </div>
+                      <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
+                        <Calendar className="h-3 w-3 text-primary inline" />
+                        <span>Project Created: <strong>{new Date(selectedTask.project.createdAt).toLocaleDateString()}</strong></span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 border-t border-border/50">
                     <span className="text-muted-foreground font-semibold">Due Date:</span>
                     <div className="text-foreground mt-0.5 font-medium">
                       {selectedTask.dueDate ? new Date(selectedTask.dueDate).toLocaleDateString() : 'None set'}
@@ -1513,16 +1634,18 @@ export default function ProjectsPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-muted-foreground">Project Key (Short Prefix) *</label>
+                <label className="text-xs font-semibold text-muted-foreground">Project Key / Prefix *</label>
                 <input
                   type="text"
                   required
-                  maxLength={5}
-                  placeholder="INFRA"
+                  placeholder="e.g. MARKETING, IOS-DEV, APP-2026"
                   value={newProject.key}
                   onChange={(e) => setNewProject({ ...newProject, key: e.target.value.toUpperCase() })}
-                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1"
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 font-mono"
                 />
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Unique project prefix / identifier. No character limit restriction.
+                </p>
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground">Description</label>
