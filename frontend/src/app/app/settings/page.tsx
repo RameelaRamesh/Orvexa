@@ -42,53 +42,8 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
-  Crown,
 } from 'lucide-react';
 import { toast } from 'sonner';
-
-const getRoleDisplayTitle = (name?: string) => {
-  if (!name) return 'Role';
-  if (name === 'OWNER') return 'WORKSPACE OWNER';
-  if (name === 'ADMIN') return 'HR EXECUTIVE';
-  if (name === 'MANAGER') return 'TEAM MANAGER';
-  if (name === 'MEMBER') return 'TEAM MEMBER';
-  return name;
-};
-
-const getRoleIcon = (name?: string) => {
-  if (name === 'OWNER') return Crown;
-  if (name === 'ADMIN') return ShieldAlert;
-  if (name === 'MANAGER') return Briefcase;
-  if (name === 'MEMBER') return UserCheck;
-  return Sparkles;
-};
-
-const getAssignedPermLabel = (r: any, allPermsLength: number) => {
-  if (r.name === 'OWNER') return 'Full platform access';
-  const count = (r.permissions || []).length;
-  if (count > 0) return `${count} permissions active`;
-  if (r.name === 'ADMIN') return `${allPermsLength || 60} permissions active`;
-  if (r.name === 'MANAGER') return '33 permissions active';
-  if (r.name === 'MEMBER') return '15 permissions active';
-  return `${count} permissions active`;
-};
-
-const getRoleDescription = (r?: any) => {
-  if (!r) return '';
-  if (r.name === 'OWNER') {
-    return 'Permanent root authority holding full, unrestricted access across all modules, billing, and organizational recovery.';
-  }
-  if (r.name === 'ADMIN') {
-    return 'People Operations and HR Executives managing member onboarding, departments, structural permissions, and approvals.';
-  }
-  if (r.name === 'MANAGER') {
-    return 'Team and operational leads managing projects, delegating work, approving timesheets, and auditing deliverables.';
-  }
-  if (r.name === 'MEMBER') {
-    return 'Individual contributors completing assigned work items, logging attendance, and collaborating on projects.';
-  }
-  return r.description || 'Custom workspace role configured with specific module capabilities.';
-};
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'details' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
@@ -264,7 +219,7 @@ export default function SettingsPage() {
       const rawRoles = await rolesRes.json();
       const rolesData = rawRoles.data !== undefined ? rawRoles.data : rawRoles;
       if (Array.isArray(rolesData)) {
-        const systemOrder = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'];
+        const systemOrder = ['ADMIN', 'MANAGER', 'MEMBER', 'OWNER'];
         const sorted = [...rolesData].sort((a, b) => {
           const aIndex = systemOrder.indexOf(a.name);
           const bIndex = systemOrder.indexOf(b.name);
@@ -275,7 +230,7 @@ export default function SettingsPage() {
         });
         setRoles(sorted);
         if (sorted.length > 0 && !selectedRoleId) {
-          const defaultRole = sorted.find((r) => r.name === 'OWNER') || sorted[0];
+          const defaultRole = sorted.find((r) => r.name === 'ADMIN') || sorted[0];
           setSelectedRoleId(defaultRole.id);
         }
       }
@@ -1395,81 +1350,42 @@ export default function SettingsPage() {
             <div className="space-y-4">
               {/* Workspace Roles Card */}
               <div className="rounded-xl border border-border/80 bg-card p-5 shadow-xs">
-                <div className="flex items-center justify-between mb-3.5">
-                  <div>
-                    <h3 className="text-sm font-bold text-foreground">Workspace Roles</h3>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Select a role to inspect or edit permissions
-                    </p>
-                  </div>
-                  <span className="text-xs font-normal bg-muted text-muted-foreground border border-border/60 px-2 py-0.5 rounded-md">
-                    {roles.length} roles
-                  </span>
-                </div>
+                <h3 className="text-sm font-bold text-foreground">Workspace Roles</h3>
+                <p className="text-xs text-muted-foreground mt-0.5 mb-3.5">
+                  Select a role to inspect or edit permissions
+                </p>
 
-                <div className="space-y-3">
+                <div className="space-y-2">
                   {roles.map((r) => {
                     const isSelected = selectedRoleId === r.id;
-                    const RoleIcon = getRoleIcon(r.name);
-                    const displayName = getRoleDisplayTitle(r.name);
-                    const assignedPermCount = r.name === 'OWNER' ? allPermissions.length : (r.permissions || []).length;
-
                     return (
                       <div
                         key={r.id}
                         onClick={() => setSelectedRoleId(r.id)}
-                        className={`cursor-pointer p-3.5 rounded-2xl text-xs transition-all border ${
+                        className={`cursor-pointer p-3 rounded-lg text-xs transition-all flex items-center justify-between border ${
                           isSelected
-                            ? 'border-blue-500 bg-white dark:bg-card shadow-xs ring-1 ring-blue-500'
-                            : 'border-slate-200/90 dark:border-border/80 bg-white dark:bg-card hover:border-slate-300 dark:hover:border-border'
+                            ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 shadow-xs'
+                            : 'border-border/80 bg-card hover:border-border hover:bg-muted/30'
                         }`}
                       >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-3">
-                            <div
-                              className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all ${
-                                isSelected
-                                  ? 'bg-blue-600 text-white shadow-xs'
-                                  : 'bg-slate-100 dark:bg-muted text-slate-500 dark:text-muted-foreground'
-                              }`}
-                            >
-                              <RoleIcon className="h-5 w-5" />
-                            </div>
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold text-sm text-foreground">{displayName}</span>
-                                {!r.isActive && (
-                                  <span className="text-[9px] border border-amber-500/40 text-amber-600 bg-amber-50 dark:bg-amber-950/20 px-1 py-0 rounded">
-                                    Inactive
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-xs text-muted-foreground mt-0.5">
-                                {r.isSystemRole ? 'Core Platform' : 'Custom Organization Role'}
-                              </div>
-                            </div>
+                        <div className="min-w-0 pr-2">
+                          <div className={`font-bold ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-foreground'}`}>
+                            {r.name}
                           </div>
-
-                          <div className="shrink-0 flex items-center gap-1">
-                            {r.isSystemRole ? (
-                              <span className="text-[11px] font-normal bg-white dark:bg-background text-slate-600 dark:text-muted-foreground border border-slate-200 dark:border-border/80 px-2.5 py-0.5 rounded-md">
-                                System
-                              </span>
-                            ) : (
-                              <span className="text-[11px] bg-slate-100 dark:bg-muted text-muted-foreground px-2 py-0.5 rounded-md font-medium">
-                                {r._count?.memberships || 0} members
-                              </span>
-                            )}
+                          <div className="text-[11px] text-muted-foreground font-normal truncate mt-0.5 max-w-[190px]">
+                            {r.description || 'Workspace role'}
                           </div>
                         </div>
-
-                        <div className="flex items-center justify-between text-xs text-muted-foreground mt-3 pt-2.5 border-t border-slate-100 dark:border-border/60">
-                          <span className="truncate max-w-[190px] font-medium text-slate-500 dark:text-muted-foreground">
-                            {getAssignedPermLabel(r, allPermissions.length)}
-                          </span>
-                          <span className={`font-semibold text-xs ${isSelected ? 'text-blue-600 dark:text-blue-400 font-bold' : 'text-[#4F75AD] dark:text-blue-400/80 hover:text-blue-600'}`}>
-                            {isSelected ? 'Selected' : 'View'}
-                          </span>
+                        <div className="shrink-0 flex items-center gap-1">
+                          {r.isSystemRole ? (
+                            <span className="text-[10px] text-muted-foreground border border-border/80 px-2 py-0.5 rounded-md bg-background font-medium">
+                              System
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-md font-medium">
+                              {r._count?.memberships || 0} members
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
@@ -1563,7 +1479,7 @@ export default function SettingsPage() {
                                   .filter((r) => r.id !== selectedRoleObj.id)
                                   .map((r) => (
                                     <option key={r.id} value={r.id}>
-                                      {getRoleDisplayTitle(r.name)} {r.isSystemRole ? '(System)' : ''}
+                                      {r.name} {r.isSystemRole ? '(System)' : ''}
                                     </option>
                                   ))}
                               </select>
@@ -1642,7 +1558,7 @@ export default function SettingsPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="text-base font-bold text-foreground">
-                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{getRoleDisplayTitle(selectedRoleObj?.name) || 'WORKSPACE OWNER'}</span>
+                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{selectedRoleObj?.name || 'ADMIN'}</span>
                       </h3>
                       <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                         Active
