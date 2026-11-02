@@ -681,22 +681,17 @@ export default function ProjectsPage() {
                             const projectCreatedAt = projectInfo?.createdAt;
                             return (
                               <div className="space-y-1.5">
-                                {projectInfo ? (
-                                  <div className="flex items-start gap-1.5">
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-primary/10 text-primary border border-primary/20 shrink-0 mt-0.5 tracking-wider">
-                                      {projectInfo.key}
-                                    </span>
-                                    <span className="font-semibold text-xs text-foreground leading-snug">
-                                      {projectInfo.name}
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <div>
-                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                                <div>
+                                  {projectInfo ? (
+                                    <Badge variant="secondary" className="text-[11px] font-normal">
+                                      {projectInfo.key ? `${projectInfo.key}: ${projectInfo.name}` : projectInfo.name}
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="secondary" className="text-[11px] font-normal">
                                       Standalone
-                                    </span>
-                                  </div>
-                                )}
+                                    </Badge>
+                                  )}
+                                </div>
                                 <div className="space-y-0.5 text-[11px] text-muted-foreground">
                                   <div className="flex items-center gap-1.5">
                                     <Calendar className="h-3 w-3 text-muted-foreground/70 shrink-0" />
@@ -1201,18 +1196,13 @@ export default function ProjectsPage() {
                     <span className="text-muted-foreground font-semibold">Context / Project:</span>
                     <div className="mt-1">
                       {selectedTask.project ? (
-                        <div className="flex items-start gap-1.5">
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-primary/10 text-primary border border-primary/20 shrink-0 mt-0.5 tracking-wider">
-                            {selectedTask.project.key}
-                          </span>
-                          <span className="font-semibold text-xs text-foreground leading-snug">
-                            {selectedTask.project.name}
-                          </span>
-                        </div>
+                        <Badge variant="secondary" className="text-[11px] font-normal">
+                          {selectedTask.project.key}: {selectedTask.project.name}
+                        </Badge>
                       ) : (
-                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                        <Badge variant="secondary" className="text-[11px] font-normal">
                           Standalone
-                        </span>
+                        </Badge>
                       )}
                     </div>
                     <div className="text-[11px] text-muted-foreground mt-1.5 flex items-center gap-1.5">
