@@ -42,23 +42,13 @@ import {
 import { toast } from 'sonner';
 
 export default function PeoplePage() {
-  const [activeTab, setActiveTab] = useState<'members' | 'invitations' | 'roles'>('members');
+  const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
   const [members, setMembers] = useState<any[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [designations, setDesignations] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
-  const [allPermissions, setAllPermissions] = useState<any[]>([]);
-  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
-  const [newRoleName, setNewRoleName] = useState('');
-  const [newRoleDesc, setNewRoleDesc] = useState('');
-  const [creatingRole, setCreatingRole] = useState(false);
-  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
-  const [editRoleName, setEditRoleName] = useState('');
-  const [editRoleDesc, setEditRoleDesc] = useState('');
-  const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
-  const [deleteReassignRoleId, setDeleteReassignRoleId] = useState<string>('');
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
   const [loading, setLoading] = useState(true);
 
@@ -352,14 +342,13 @@ export default function PeoplePage() {
     if (!token || !wsId) return;
     try {
       const activeHeaders = getHeaders();
-      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, permsRes, meRes] = await Promise.all([
+      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/people/invitations`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/designations`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
-        fetch(`${BRANDING.apiUrl}/roles/permissions`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
       ]);
 
@@ -369,7 +358,6 @@ export default function PeoplePage() {
       const rawDesig = await desigRes.json();
       const rawTeam = await teamRes.json();
       const rawRole = await roleRes.json();
-      const rawPerms = permsRes.ok ? await permsRes.json() : [];
       const rawMe = await meRes.json();
 
       const memData = rawMem.data !== undefined ? rawMem.data : rawMem;
@@ -378,34 +366,13 @@ export default function PeoplePage() {
       const desigData = rawDesig.data !== undefined ? rawDesig.data : rawDesig;
       const teamData = rawTeam.data !== undefined ? rawTeam.data : rawTeam;
       const roleData = rawRole.data !== undefined ? rawRole.data : rawRole;
-      const permsData = rawPerms.data !== undefined ? rawPerms.data : rawPerms;
 
       setMembers(Array.isArray(memData) ? memData : []);
       setInvitations(Array.isArray(invData) ? invData : []);
       setDepartments(Array.isArray(deptData) ? deptData : []);
       setDesignations(Array.isArray(desigData) ? desigData : []);
       setTeams(Array.isArray(teamData) ? teamData : []);
-      
-      const roleList = Array.isArray(roleData) ? roleData : [];
-      const systemOrder = ['ADMIN', 'MANAGER', 'MEMBER', 'OWNER'];
-      const sortedRoles = [...roleList].sort((a: any, b: any) => {
-        const aIndex = systemOrder.indexOf(a.name);
-        const bIndex = systemOrder.indexOf(b.name);
-        if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
-        if (aIndex !== -1) return -1;
-        if (bIndex !== -1) return 1;
-        return (a.name || '').localeCompare(b.name || '');
-      });
-      setRoles(sortedRoles);
-      setAllPermissions(Array.isArray(permsData) ? permsData : []);
-
-      if (sortedRoles.length > 0) {
-        setSelectedRoleId((prev) => {
-          if (prev && sortedRoles.some((r: any) => r.id === prev)) return prev;
-          const adminRole = sortedRoles.find((r: any) => r.name === 'ADMIN') || sortedRoles[0];
-          return adminRole.id;
-        });
-      }
+      setRoles(Array.isArray(roleData) ? roleData : []);
 
       const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
       if (meData?.memberships) {
@@ -683,98 +650,6 @@ export default function PeoplePage() {
     }
   };
 
-  const handleTogglePermission = async (roleId: string, permId: string) => {
-    const role = roles.find((r) => r.id === roleId);
-    if (!role) return;
-
-    const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.id || p);
-    let updatedPermIds: string[];
-
-    if (currentPermIds.includes(permId)) {
-      updatedPermIds = currentPermIds.filter((id) => id !== permId);
-    } else {
-      updatedPermIds = [...currentPermIds, permId];
-    }
-
-    try {
-      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}/permissions`, {
-        method: 'PUT',
-        headers: getHeaders(),
-        body: JSON.stringify({ permissionIds: updatedPermIds }),
-      });
-      if (!res.ok) throw new Error('Failed to update permissions');
-      const updated = await res.json();
-      setRoles((prev) =>
-        prev.map((r) =>
-          r.id === roleId ? { ...r, permissions: updated.permissions || updatedPermIds } : r
-        )
-      );
-      toast.success('Role permissions updated');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update permissions');
-    }
-  };
-
-  const handleCreateRole = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newRoleName.trim()) return;
-    setCreatingRole(true);
-    try {
-      const res = await fetch(`${BRANDING.apiUrl}/roles`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({ name: newRoleName.trim(), description: newRoleDesc.trim() }),
-      });
-      if (!res.ok) throw new Error('Failed to create role');
-      const data = await res.json();
-      toast.success('Custom role created');
-      setNewRoleName('');
-      setNewRoleDesc('');
-      await loadData();
-      if (data?.id) setSelectedRoleId(data.id);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to create role');
-    } finally {
-      setCreatingRole(false);
-    }
-  };
-
-  const handleRenameRole = async (roleId: string) => {
-    if (!editRoleName.trim()) return;
-    try {
-      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}`, {
-        method: 'PATCH',
-        headers: getHeaders(),
-        body: JSON.stringify({ name: editRoleName.trim(), description: editRoleDesc.trim() }),
-      });
-      if (!res.ok) throw new Error('Failed to update role');
-      toast.success('Role updated');
-      setEditingRoleId(null);
-      await loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update role');
-    }
-  };
-
-  const handleDeleteRole = async (roleId: string) => {
-    try {
-      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}`, {
-        method: 'DELETE',
-        headers: getHeaders(),
-        body: JSON.stringify({ reassignRoleId: deleteReassignRoleId || undefined }),
-      });
-      if (!res.ok) throw new Error('Failed to delete role');
-      toast.success('Role deleted');
-      setDeletingRoleId(null);
-      setDeleteReassignRoleId('');
-      await loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to delete role');
-    }
-  };
-
-  const selectedRoleObj = roles.find((r) => r.id === selectedRoleId) || roles.find((r) => r.name === 'ADMIN') || roles[0];
-
   const filteredMembers = members.filter((m) => {
     const name = `${m.user?.firstName} ${m.user?.lastName}`.toLowerCase();
     const email = m.user?.email?.toLowerCase() || '';
@@ -800,14 +675,6 @@ export default function PeoplePage() {
               Transfer Ownership
             </Button>
           )}
-          <Button
-            variant={activeTab === 'roles' ? 'default' : 'outline'}
-            size="sm"
-            className="gap-1.5 text-xs"
-            onClick={() => setActiveTab('roles')}
-          >
-            <Shield className="h-3.5 w-3.5 text-primary" /> Roles & Permissions
-          </Button>
           {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
             <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2">
               <UserPlus className="h-4 w-4" /> Invite Member
@@ -838,16 +705,6 @@ export default function PeoplePage() {
             }`}
           >
             <Mail className="h-4 w-4" /> Pending Invitations ({invitations.filter((i) => i.status === 'PENDING').length})
-          </button>
-          <button
-            onClick={() => setActiveTab('roles')}
-            className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
-              activeTab === 'roles'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Shield className="h-4 w-4" /> Roles & Permissions
           </button>
         </div>
 
@@ -1143,302 +1000,6 @@ export default function PeoplePage() {
             </div>
           </CardContent>
         </Card>
-      )}
-
-      {/* TAB 3: Roles & Permissions */}
-      {activeTab === 'roles' && (
-        <div className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-3">
-            {/* Roles List & Create */}
-            <div className="space-y-4">
-              {/* Workspace Roles Card */}
-              <div className="rounded-xl border border-border/80 bg-card p-5 shadow-xs">
-                <h3 className="text-sm font-bold text-foreground">Workspace Roles</h3>
-                <p className="text-xs text-muted-foreground mt-0.5 mb-3.5">
-                  Select a role to inspect or edit permissions
-                </p>
-
-                <div className="space-y-2">
-                  {roles.map((r) => {
-                    const isSelected = selectedRoleObj?.id === r.id;
-                    return (
-                      <div
-                        key={r.id}
-                        onClick={() => setSelectedRoleId(r.id)}
-                        className={`cursor-pointer p-3 rounded-lg text-xs transition-all flex items-center justify-between border ${
-                          isSelected
-                            ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 shadow-xs'
-                            : 'border-border/80 bg-card hover:border-border hover:bg-muted/30'
-                        }`}
-                      >
-                        <div className="min-w-0 pr-2">
-                          <div className={`font-bold ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-foreground'}`}>
-                            {r.name}
-                          </div>
-                          <div className="text-[11px] text-muted-foreground font-normal truncate mt-0.5 max-w-[190px]">
-                            {r.description || 'Workspace role'}
-                          </div>
-                        </div>
-                        <div className="shrink-0 flex items-center gap-1">
-                          {r.isSystemRole ? (
-                            <span className="text-[10px] text-muted-foreground border border-border/80 px-2 py-0.5 rounded-md bg-background font-medium">
-                              System
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-md font-medium">
-                              {r._count?.memberships || 0} members
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Selected Role Actions (For Custom Roles) */}
-              {selectedRoleObj && !selectedRoleObj.isSystemRole && (
-                <Card className="border-border bg-card">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-xs font-bold uppercase tracking-wider">Role Configuration</CardTitle>
-                    <CardDescription className="text-[11px]">Manage lifecycle for {selectedRoleObj.name}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3 pt-0">
-                    {editingRoleId === selectedRoleObj.id ? (
-                      <div className="space-y-2 border border-border p-2.5 rounded-md bg-muted/20">
-                        <input
-                          type="text"
-                          value={editRoleName}
-                          onChange={(e) => setEditRoleName(e.target.value)}
-                          placeholder="Role Name"
-                          className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-                        />
-                        <input
-                          type="text"
-                          value={editRoleDesc}
-                          onChange={(e) => setEditRoleDesc(e.target.value)}
-                          placeholder="Description"
-                          className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-                        />
-                        <div className="flex gap-1.5 pt-1">
-                          <Button size="sm" className="h-7 text-xs flex-1" onClick={() => handleRenameRole(selectedRoleObj.id)}>
-                            Save
-                          </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingRoleId(null)}>
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-1.5">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-xs h-7 justify-start gap-1.5"
-                          onClick={() => {
-                            setEditingRoleId(selectedRoleObj.id);
-                            setEditRoleName(selectedRoleObj.name);
-                            setEditRoleDesc(selectedRoleObj.description || '');
-                          }}
-                        >
-                          <Pencil className="h-3 w-3" /> Edit Name & Description
-                        </Button>
-
-                        {deletingRoleId === selectedRoleObj.id ? (
-                          <div className="space-y-2 border border-destructive/30 p-2.5 rounded-md bg-destructive/5 mt-1">
-                            <p className="text-[11px] text-destructive font-medium">Reassign active members before deletion:</p>
-                            {selectedRoleObj._count?.memberships > 0 && (
-                              <select
-                                value={deleteReassignRoleId}
-                                onChange={(e) => setDeleteReassignRoleId(e.target.value)}
-                                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-                              >
-                                <option value="">-- Select Fallback Role --</option>
-                                {roles
-                                  .filter((r) => r.id !== selectedRoleObj.id)
-                                  .map((r) => (
-                                    <option key={r.id} value={r.id}>
-                                      {r.name} {r.isSystemRole ? '(System)' : ''}
-                                    </option>
-                                  ))}
-                              </select>
-                            )}
-                            <div className="flex gap-1.5">
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                className="h-7 text-xs flex-1"
-                                disabled={selectedRoleObj._count?.memberships > 0 && !deleteReassignRoleId}
-                                onClick={() => handleDeleteRole(selectedRoleObj.id)}
-                              >
-                                Confirm Delete
-                              </Button>
-                              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDeletingRoleId(null)}>
-                                Cancel
-                              </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-xs h-7 justify-start text-destructive hover:bg-destructive/10"
-                            onClick={() => {
-                              setDeletingRoleId(selectedRoleObj.id);
-                              setDeleteReassignRoleId('');
-                            }}
-                          >
-                            Delete Custom Role
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              )}
-
-              {/* CREATE CUSTOM ROLE Card */}
-              <div className="rounded-xl border border-border/80 bg-card p-5 shadow-xs">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-foreground mb-3">
-                  CREATE CUSTOM ROLE
-                </h4>
-                <form onSubmit={handleCreateRole} className="space-y-2.5">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Role Title (e.g. Auditor Level 2)"
-                    value={newRoleName}
-                    onChange={(e) => setNewRoleName(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Description"
-                    value={newRoleDesc}
-                    onChange={(e) => setNewRoleDesc(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button
-                    type="submit"
-                    disabled={creatingRole}
-                    className="w-full mt-2 rounded-md border border-border/80 bg-muted/40 hover:bg-muted py-2 text-xs font-medium text-foreground transition-colors flex items-center justify-center gap-1"
-                  >
-                    {creatingRole ? 'Creating...' : '+ Create Role'}
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            {/* Right Column: Permissions for Selected Role */}
-            <div className="lg:col-span-2 space-y-4">
-              <div className="rounded-xl border border-border/80 bg-card p-6 shadow-xs">
-                {/* Header */}
-                <div className="flex items-start justify-between pb-5 border-b border-border/60">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold text-foreground">
-                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{selectedRoleObj?.name || 'ADMIN'}</span>
-                      </h3>
-                      <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
-                        Active
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Configure fine-grained module actions and permissions for this role.
-                    </p>
-                  </div>
-                  {selectedRoleObj?.isSystemRole && (
-                    <span className="text-xs font-medium text-foreground border border-border px-3 py-1 rounded-md bg-background shrink-0">
-                      Core Platform Role
-                    </span>
-                  )}
-                </div>
-
-                {!selectedRoleObj?.isActive && (
-                  <div className="mt-4 p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 flex items-center gap-2">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>This role is currently deactivated. Permissions are suspended for all assigned members.</span>
-                  </div>
-                )}
-
-                {/* Permissions by Module */}
-                <div className="space-y-6 max-h-[620px] overflow-y-auto pr-2 mt-6">
-                  {Array.from(new Set(allPermissions.map((p) => p.module || 'General')))
-                    .sort((a, b) => a.localeCompare(b))
-                    .map((modName) => {
-                      const modPerms = allPermissions
-                        .filter((p) => (p.module || 'General') === modName)
-                        .sort((a, b) => a.code.localeCompare(b.code));
-
-                      return (
-                        <div key={modName} className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-foreground tracking-wider uppercase">
-                              {modName}
-                            </h4>
-                            <span className="text-[10px] text-muted-foreground bg-muted font-medium px-2 py-0.5 rounded-md">
-                              {modPerms.length} actions
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {modPerms.map((perm) => {
-                              const assignedPerms: any[] = selectedRoleObj?.permissions || [];
-                              const isGranted = assignedPerms.some(
-                                (p: any) =>
-                                  p === perm.id ||
-                                  p.permissionId === perm.id ||
-                                  p.id === perm.id ||
-                                  p.permission?.id === perm.id ||
-                                  p.permission?.code === perm.code ||
-                                  p.code === perm.code
-                              );
-
-                              return (
-                                <div
-                                  key={perm.id}
-                                  onClick={() => {
-                                    if (selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive) {
-                                      handleTogglePermission(selectedRoleObj.id, perm.id);
-                                    }
-                                  }}
-                                  className={`flex items-start justify-between p-3.5 rounded-lg border text-xs transition-all cursor-pointer ${
-                                    isGranted
-                                      ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900/60 dark:bg-blue-950/20'
-                                      : 'border-border/80 bg-card hover:border-border hover:bg-muted/10'
-                                  }`}
-                                >
-                                  <div className="pr-3 flex-1 min-w-0">
-                                    <div className="font-bold text-foreground text-xs leading-none">
-                                      {perm.code}
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
-                                      {perm.name}
-                                    </div>
-                                  </div>
-                                  <div className="shrink-0 mt-0.5">
-                                    <div
-                                      className={`h-4 w-4 rounded flex items-center justify-center transition-colors ${
-                                        isGranted
-                                          ? 'bg-blue-600 border border-blue-600 text-white'
-                                          : 'border border-border/80 bg-background'
-                                      }`}
-                                    >
-                                      {isGranted && <Check className="h-3 w-3 stroke-[3]" />}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
       )}
 
       {/* MODAL 1: Invite Member Modal */}
@@ -1859,27 +1420,22 @@ export default function PeoplePage() {
                     </div>
                   </div>
 
-                  {/* Direct access to Roles & Permissions tab */}
+                  {/* Direct link to Settings > Roles */}
                   <div className="mt-3 p-3 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
                     <div className="space-y-0.5">
                       <span className="font-semibold text-foreground flex items-center gap-1.5 text-xs">
-                        <Shield className="h-3.5 w-3.5 text-primary" /> Roles & Permissions Management
+                        <Shield className="h-3.5 w-3.5 text-primary" /> Workspace Roles & Permissions
                       </span>
                       <p className="text-[11px] text-muted-foreground">
-                        Configure granular module policies, permissions matrix, and custom workspace roles.
+                        Configure module capabilities and permission matrices in Settings.
                       </p>
                     </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-7 text-xs gap-1"
-                      onClick={() => {
-                        setSelectedMember(null);
-                        setActiveTab('roles');
-                      }}
+                    <Link
+                      href="/app/settings?tab=roles"
+                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
                     >
-                      Open Roles & Permissions <Shield className="h-3 w-3 ml-1" />
-                    </Button>
+                      Settings Roles <ArrowUpRight className="h-3 w-3" />
+                    </Link>
                   </div>
                 </div>
               )}
@@ -2092,16 +1648,12 @@ export default function PeoplePage() {
                 <div className="space-y-1">
                   <div className="flex items-center justify-between">
                     <label className="font-semibold text-foreground">System Access Role *</label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowEditModal(false);
-                        setActiveTab('roles');
-                      }}
+                    <Link
+                      href="/app/settings?tab=roles"
                       className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
                     >
-                      <Shield className="h-3 w-3" /> View Roles & Permissions
-                    </button>
+                      <Shield className="h-3 w-3" /> View Roles in Settings
+                    </Link>
                   </div>
                   <select
                     value={editForm.accessRole}
@@ -2242,16 +1794,12 @@ export default function PeoplePage() {
                       Need custom granular permissions?
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowEditModal(false);
-                      setActiveTab('roles');
-                    }}
+                  <Link
+                    href="/app/settings?tab=roles"
                     className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
                   >
-                    Go to Roles & Permissions <ArrowUpRight className="h-3 w-3" />
-                  </button>
+                    Go to Settings Roles <ArrowUpRight className="h-3 w-3" />
+                  </Link>
                 </div>
               </CardContent>
 
