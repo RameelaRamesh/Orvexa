@@ -626,6 +626,28 @@ export class AuthService {
     return user;
   }
 
+  async refreshToken(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        status: true,
+        tokenVersion: true,
+      },
+    });
+
+    if (!user || user.status !== 'ACTIVE') {
+      throw new UnauthorizedException('User account is invalid or inactive');
+    }
+
+    const token = this.generateToken(user.id, user.email, user.tokenVersion);
+    return {
+      message: 'Session refreshed successfully',
+      accessToken: token,
+    };
+  }
+
   async updateProfile(userId: string, dto: UpdateProfileDto) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');

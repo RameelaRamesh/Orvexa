@@ -78,7 +78,10 @@ export default function RootLayout({
                         try {
                           sessionStorage.setItem(key, value);
                         } catch (e) {}
-                        return; // Prevent writing to shared localStorage
+                        try {
+                          originalSetItem(key, value);
+                        } catch (e) {}
+                        return;
                       }
                       originalSetItem(key, value);
                     };

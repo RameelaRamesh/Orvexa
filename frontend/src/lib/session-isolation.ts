@@ -45,8 +45,9 @@ export function initSessionIsolation() {
       try {
         sessionStorage.setItem(key, value);
       } catch {}
-      // Crucial: DO NOT write to shared localStorage!
-      // This prevents a login in Tab B from overwriting Tab A's credentials.
+      try {
+        originalSetItem(key, value);
+      } catch {}
       return;
     }
     originalSetItem(key, value);

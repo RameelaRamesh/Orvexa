@@ -84,6 +84,12 @@ export class AuthController {
   }
 
   @UseGuards(JwtAuthGuard)
+  @Post('refresh')
+  async refresh(@CurrentUser('id') userId: string) {
+    return this.authService.refreshToken(userId);
+  }
+
+  @UseGuards(JwtAuthGuard)
   @Patch('me')
   async updateProfile(@CurrentUser('id') userId: string, @Body() dto: UpdateProfileDto) {
     return this.authService.updateProfile(userId, dto);

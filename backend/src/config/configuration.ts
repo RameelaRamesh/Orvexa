@@ -9,7 +9,7 @@ export default () => ({
   },
   auth: {
     jwtSecret: process.env.JWT_SECRET || 'orvexa-super-secret-jwt-key-2026',
-    jwtExpiration: process.env.JWT_EXPIRATION || '7d',
+    jwtExpiration: process.env.JWT_EXPIRATION || '30d',
     refreshSecret: process.env.JWT_REFRESH_SECRET || 'orvexa-super-secret-refresh-key-2026',
   },
   razorpay: {

@@ -70,6 +70,14 @@ export default function LoginPage() {
       }
       if (memberships && memberships.length > 0) {
         localStorage.setItem('activeWorkspaceId', memberships[0].workspaceId);
+        try {
+          localStorage.setItem('orvexa_cached_workspace', JSON.stringify(memberships[0]));
+        } catch {}
+      }
+      if (payload.user) {
+        try {
+          localStorage.setItem('orvexa_cached_profile', JSON.stringify({ ...payload.user, memberships }));
+        } catch {}
       }
 
       toast.success('Welcome back to ' + BRANDING.name);
@@ -110,6 +118,14 @@ export default function LoginPage() {
       }
       if (memberships && memberships.length > 0) {
         localStorage.setItem('activeWorkspaceId', memberships[0].workspaceId);
+        try {
+          localStorage.setItem('orvexa_cached_workspace', JSON.stringify(memberships[0]));
+        } catch {}
+      }
+      if (payload.user) {
+        try {
+          localStorage.setItem('orvexa_cached_profile', JSON.stringify({ ...payload.user, memberships }));
+        } catch {}
       }
 
       toast.success('Two-factor verification successful! Welcome back.');

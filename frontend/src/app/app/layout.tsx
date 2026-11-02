@@ -37,29 +37,109 @@ import { toast } from 'sonner';
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const [profile, setProfile] = useState<any>(null);
-  const [activeWorkspace, setActiveWorkspace] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_profile');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    try {
+      const token = localStorage.getItem('accessToken');
+      const cached = localStorage.getItem('orvexa_cached_profile');
+      return !(token && cached);
+    } catch {
+      return true;
+    }
+  });
 
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
+    let token = localStorage.getItem('accessToken');
     if (!token) {
       router.push('/login');
       return;
     }
 
-    const fetchProfile = async () => {
+    let isMounted = true;
+
+    const fetchProfile = async (retryCount = 0) => {
       try {
         const res = await fetch(`${BRANDING.apiUrl}/auth/me`, {
           headers: { Authorization: `Bearer ${token}` },
         });
 
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.message);
+        // If explicitly unauthorized, attempt silent token renewal before logging out
+        if (res.status === 401) {
+          try {
+            const refreshRes = await fetch(`${BRANDING.apiUrl}/auth/refresh`, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            if (refreshRes.ok) {
+              const refreshData = await refreshRes.json();
+              const newToken = refreshData.data?.accessToken || refreshData.accessToken;
+              if (newToken) {
+                token = newToken;
+                localStorage.setItem('accessToken', newToken);
+                return fetchProfile(retryCount);
+              }
+            }
+          } catch {}
 
-        setProfile(data.data);
-        const memberships = data.data.memberships || [];
+          // Refresh failed and session is genuinely invalid
+          toast.error('Session expired. Please log in again.');
+          try {
+            sessionStorage.removeItem('accessToken');
+            sessionStorage.removeItem('activeWorkspaceId');
+            sessionStorage.removeItem('orvexa_cached_profile');
+            sessionStorage.removeItem('orvexa_cached_workspace');
+          } catch {}
+          localStorage.removeItem('accessToken');
+          localStorage.removeItem('activeWorkspaceId');
+          localStorage.removeItem('orvexa_cached_profile');
+          localStorage.removeItem('orvexa_cached_workspace');
+          router.push('/login');
+          return;
+        }
+
+        // If backend returned 502/503/504 (cold start / waking up from idle) or transient server errors:
+        if (!res.ok && res.status >= 500 && retryCount < 3) {
+          console.warn(`[Orvexa Auth] Backend server warming up (${res.status}). Retrying in ${(retryCount + 1) * 1500}ms...`);
+          setTimeout(() => {
+            if (isMounted) fetchProfile(retryCount + 1);
+          }, (retryCount + 1) * 1500);
+          return;
+        }
+
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.message || 'Authentication error');
+
+        if (!isMounted) return;
+
+        const profileData = data.data !== undefined ? data.data : data;
+        setProfile(profileData);
+        try {
+          localStorage.setItem('orvexa_cached_profile', JSON.stringify(profileData));
+        } catch {}
+
+        const memberships = profileData.memberships || [];
         const savedWsId = localStorage.getItem('activeWorkspaceId');
 
         let activeMem = memberships.find((m: any) => m.workspaceId === savedWsId);
@@ -69,25 +149,78 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         }
 
         setActiveWorkspace(activeMem);
+        try {
+          if (activeMem) {
+            localStorage.setItem('orvexa_cached_workspace', JSON.stringify(activeMem));
+          }
+        } catch {}
       } catch (err: any) {
-        toast.error('Session expired. Please log in again.');
-        localStorage.removeItem('accessToken');
-        router.push('/login');
+        console.error('[Orvexa Auth] Profile fetch error:', err);
+
+        // Transient network error (e.g. waking up backend, network reconnecting):
+        if (retryCount < 3) {
+          console.warn(`[Orvexa Auth] Network error / server warming up. Retrying in ${(retryCount + 1) * 1500}ms...`);
+          setTimeout(() => {
+            if (isMounted) fetchProfile(retryCount + 1);
+          }, (retryCount + 1) * 1500);
+          return;
+        }
+
+        // If retries failed due to backend sleeping or connection hiccup, DO NOT logout!
+        const cached = localStorage.getItem('orvexa_cached_profile');
+        if (!cached) {
+          toast.error('Unable to reach server. Please check your connection.');
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false);
+        }
       }
     };
 
     fetchProfile();
+
+    // Keep-alive heartbeat: ping backend every 4 minutes while tab is open
+    // Keeps cloud instances warm and prevents idle container sleep
+    const heartbeatInterval = setInterval(() => {
+      const currentToken = localStorage.getItem('accessToken');
+      if (currentToken) {
+        fetch(`${BRANDING.apiUrl}/auth/me`, {
+          headers: { Authorization: `Bearer ${currentToken}` },
+        }).catch(() => {});
+      }
+    }, 4 * 60 * 1000);
+
+    // Revalidate when user returns to tab after idle
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const currentToken = localStorage.getItem('accessToken');
+        if (currentToken) {
+          fetchProfile(0);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      isMounted = false;
+      clearInterval(heartbeatInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [router]);
 
   const handleLogout = () => {
     try {
       sessionStorage.removeItem('accessToken');
       sessionStorage.removeItem('activeWorkspaceId');
+      sessionStorage.removeItem('orvexa_cached_profile');
+      sessionStorage.removeItem('orvexa_cached_workspace');
     } catch {}
     localStorage.removeItem('accessToken');
     localStorage.removeItem('activeWorkspaceId');
+    localStorage.removeItem('orvexa_cached_profile');
+    localStorage.removeItem('orvexa_cached_workspace');
     toast.info('Logged out successfully');
     router.push('/login');
   };
@@ -97,6 +230,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     if (newMem) {
       localStorage.setItem('activeWorkspaceId', newWsId);
       setActiveWorkspace(newMem);
+      try {
+        localStorage.setItem('orvexa_cached_workspace', JSON.stringify(newMem));
+      } catch {}
       toast.success(`Switched to workspace: ${newMem.workspace?.name}`);
       window.location.reload();
     }
