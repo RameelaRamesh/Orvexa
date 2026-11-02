@@ -41,8 +41,292 @@ import {
   ShieldAlert,
   Eye,
   EyeOff,
+  CheckSquare,
+  FolderKanban,
+  CheckCheck,
+  Crown,
+  Search,
+  Filter,
 } from 'lucide-react';
 import { toast } from 'sonner';
+
+// Human-friendly dictionary mapping raw database permissions into clear, actionable titles and descriptions
+const PERMISSION_FRIENDLY_META: Record<string, { title: string; description: string }> = {
+  // Approvals
+  'approvals:approve': {
+    title: 'Approve or Reject Requests',
+    description: 'Authorize or reject operational submissions, leave applications, task completions, and expenses.',
+  },
+  'approvals:manage': {
+    title: 'Configure Approval Chains',
+    description: 'Define approval thresholds, routing rules, multi-stage workflows, and designated approvers.',
+  },
+  'approvals:view': {
+    title: 'View Pending Approvals',
+    description: 'Browse through active queues and inspect requests awaiting department or executive approval.',
+  },
+
+  // Attendance
+  'attendance:clock': {
+    title: 'Clock In, Out & Shift Tracker',
+    description: 'Enables user to punch in for shifts, record meal/rest breaks, and track daily working hours.',
+  },
+  'attendance:edit': {
+    title: 'Adjust Attendance Records',
+    description: 'Modify time punch records, fix missed clocks, and manually update regular and overtime hours.',
+  },
+  'attendance:export': {
+    title: 'Export Attendance Reports',
+    description: 'Download full CSV and Excel summaries of team shift attendance, late arrivals, and total hours.',
+  },
+  'attendance:manage': {
+    title: 'Full Attendance Administration',
+    description: 'Configure shift schedules, overtime policies, grace periods, biometric sync, and attendance policies.',
+  },
+  'attendance:view': {
+    title: 'View Attendance Records & History',
+    description: 'View daily office presence, historical punch cards, timesheets, and attendance logs for staff.',
+  },
+
+  // Billing
+  'billing:manage': {
+    title: 'Manage Subscriptions & Billing',
+    description: 'Change workspace plan tier, manage payment methods, download VAT/tax invoices, and adjust seats.',
+  },
+
+  // People
+  'people:view': {
+    title: 'View Employee Directory & Profiles',
+    description: 'Search workspace member roster, view employee details, department placements, and contact cards.',
+  },
+  'people:create': {
+    title: 'Add & Invite Team Members',
+    description: 'Send invitation emails and onboard new hires into departments, reporting lines, and teams.',
+  },
+  'people:edit': {
+    title: 'Edit Member Profiles & Assignments',
+    description: 'Update designations, department assignments, reporting managers, core roles, and data scopes.',
+  },
+  'people:delete': {
+    title: 'Deactivate & Offboard Members',
+    description: 'Suspend workspace access, offboard employees, revoke active sessions, and reassign tasks.',
+  },
+  'people:export': {
+    title: 'Export Member Directory',
+    description: 'Download employee roster, staff IDs, department lists, and contact data into spreadsheets.',
+  },
+  'people:manage': {
+    title: 'Full Workforce Administration',
+    description: 'Comprehensive administration of team roster, role templates, access levels, and member records.',
+  },
+
+  // Projects
+  'projects:view': {
+    title: 'View Projects & Milestones',
+    description: 'Access project boards, see created dates, assigners, deliverables, and progress trackers.',
+  },
+  'projects:create': {
+    title: 'Create New Projects',
+    description: 'Start new internal or client projects, set keys and prefixes, and define milestone schedules.',
+  },
+  'projects:edit': {
+    title: 'Edit Project Settings & Scope',
+    description: 'Modify project scope, update project assigners, assign team members, and adjust goals.',
+  },
+  'projects:delete': {
+    title: 'Archive or Delete Projects',
+    description: 'Retire finished initiatives or permanently remove canceled project records from workspace.',
+  },
+  'projects:manage': {
+    title: 'Full Project Administration',
+    description: 'Oversee all workspace projects, custom workflows, and global project portfolio rules.',
+  },
+
+  // Tasks
+  'tasks:view': {
+    title: 'View Tasks & Work Queue',
+    description: 'Access work items, inspect progression percentages (0%, 25%, 75%, 100%), and review deadlines.',
+  },
+  'tasks:create': {
+    title: 'Create & Assign Tasks',
+    description: 'Create new work items, set estimated hours, configure priority, and assign team members.',
+  },
+  'tasks:edit': {
+    title: 'Update Task Progress & Status',
+    description: 'Transition tasks across stages (Todo, In Progress, In Review, Completed) and update notes.',
+  },
+  'tasks:delete': {
+    title: 'Delete Work Items',
+    description: 'Permanently remove duplicate, test, or invalid work items from the board.',
+  },
+  'tasks:assign': {
+    title: 'Reassign Task Ownership',
+    description: 'Transfer work items and delegate tasks between team members and specialists.',
+  },
+  'tasks:manage': {
+    title: 'Full Work Queue Administration',
+    description: 'Oversee all workspace tasks, workflow triggers, and team allocations.',
+  },
+
+  // Time
+  'time:log': {
+    title: 'Log Work Hours',
+    description: 'Enter manual time entries against tasks and client projects for tracking and billing.',
+  },
+  'time:view': {
+    title: 'View Time Sheets & Logs',
+    description: 'Inspect logged hours, billable ratios, and team timesheet summaries.',
+  },
+  'time:approve': {
+    title: 'Approve Timesheets',
+    description: 'Authorize submitted weekly timesheets for payroll and billing calculations.',
+  },
+  'time:manage': {
+    title: 'Configure Time Tracking Rules',
+    description: 'Set maximum daily hours, billable rate categories, and timesheet submission periods.',
+  },
+
+  // Payroll
+  'payroll:view': {
+    title: 'View Payroll & Compensation',
+    description: 'Access compensation records, salary bands, and calculated pay period reports.',
+  },
+  'payroll:calculate': {
+    title: 'Run Payroll Calculations',
+    description: 'Compute gross pay, allowances, overtime, and deductions for payroll cycles.',
+  },
+  'payroll:export': {
+    title: 'Export Payroll & Bank Files',
+    description: 'Generate bank transfer files, tax compliance reports, and pay stubs for distribution.',
+  },
+  'payroll:manage': {
+    title: 'Full Compensation Administration',
+    description: 'Manage salary structures, deduction formulas, and global payroll processing.',
+  },
+
+  // Quality
+  'quality:view': {
+    title: 'View Quality Audits',
+    description: 'Browse QA scorecards, audit reviews, and compliance records across departments.',
+  },
+  'quality:audit': {
+    title: 'Perform Quality Inspections',
+    description: 'Audit deliverables, record defect logs, and score work item compliance against guidelines.',
+  },
+  'quality:manage': {
+    title: 'Configure Quality Standards',
+    description: 'Build audit checklists, defect classifications, and scoring thresholds.',
+  },
+
+  // SLA
+  'sla:view': {
+    title: 'View SLA Timers & Deadlines',
+    description: 'Track resolution deadlines, breach countdowns, and escalation alerts in real time.',
+  },
+  'sla:manage': {
+    title: 'Configure SLA Policies & Escalations',
+    description: 'Define service level targets, warning thresholds, and executive alert chains.',
+  },
+
+  // Organization & Settings
+  'org:manage': {
+    title: 'Manage Organization Profile',
+    description: 'Update company legal name, contact email, country, and logo.',
+  },
+  'invitations:manage': {
+    title: 'Manage Invitations & Links',
+    description: 'Resend, copy, or regenerate pending invitation links for members.',
+  },
+  'roles:manage': {
+    title: 'Configure Custom Roles & Permissions',
+    description: 'Create custom roles and fine-tune permission matrices for team roles.',
+  },
+  'departments:manage': {
+    title: 'Manage Departments & Teams',
+    description: 'Create, rename, and structure organizational departments and sub-teams.',
+  },
+  'settings:manage': {
+    title: 'Manage Workspace Settings',
+    description: 'Configure active modules, business type, and default workspace preferences.',
+  },
+};
+
+const getPermissionMeta = (perm: any) => {
+  const code = perm.code || '';
+  if (PERMISSION_FRIENDLY_META[code]) {
+    return {
+      title: PERMISSION_FRIENDLY_META[code].title,
+      description: PERMISSION_FRIENDLY_META[code].description,
+      code,
+    };
+  }
+  const title = perm.name || code.split(':')[1]?.replace(/_/g, ' ') || code;
+  const description = `Controls access to the ${code} action within the ${perm.module || 'system'} module.`;
+  return { title, description, code };
+};
+
+const getRoleDisplayTitle = (name?: string) => {
+  if (!name) return 'Role';
+  if (name === 'ADMIN') return 'HR EXECUTIVE';
+  if (name === 'OWNER') return 'WORKSPACE OWNER';
+  if (name === 'MANAGER') return 'OPERATIONS MANAGER';
+  if (name === 'MEMBER') return 'TEAM MEMBER';
+  return name;
+};
+
+const getRoleIcon = (name?: string) => {
+  if (name === 'OWNER') return Crown;
+  if (name === 'ADMIN') return ShieldAlert;
+  if (name === 'MANAGER') return Briefcase;
+  if (name === 'MEMBER') return UserCheck;
+  return Sparkles;
+};
+
+const getRoleDescription = (r?: any) => {
+  if (!r) return '';
+  if (r.name === 'OWNER') {
+    return 'Permanent root authority holding full, unrestricted access across all modules, billing, and organizational recovery.';
+  }
+  if (r.name === 'ADMIN') {
+    return 'People Operations and HR Executives managing member onboarding, departments, structural permissions, and approvals.';
+  }
+  if (r.name === 'MANAGER') {
+    return 'Team and operational leads managing projects, delegating work, approving timesheets, and auditing deliverables.';
+  }
+  if (r.name === 'MEMBER') {
+    return 'Individual contributors completing assigned work items, logging attendance, and collaborating on projects.';
+  }
+  return r.description || 'Custom workspace role configured with specific module capabilities.';
+};
+
+const getModuleIcon = (modName: string) => {
+  const lower = modName.toLowerCase();
+  if (lower.includes('approval')) return CheckCheck;
+  if (lower.includes('attendance')) return Clock;
+  if (lower.includes('people') || lower.includes('invitation')) return Users;
+  if (lower.includes('project')) return FolderKanban;
+  if (lower.includes('task') || lower.includes('work')) return CheckSquare;
+  if (lower.includes('time')) return Clock;
+  if (lower.includes('payroll') || lower.includes('billing')) return CreditCard;
+  if (lower.includes('quality')) return Award;
+  if (lower.includes('sla')) return ShieldAlert;
+  if (lower.includes('setting') || lower.includes('org') || lower.includes('role') || lower.includes('department')) return SettingsIcon;
+  return Shield;
+};
+
+const getModuleColorClass = (modName: string) => {
+  const lower = modName.toLowerCase();
+  if (lower.includes('approval')) return 'text-blue-500 bg-blue-500/10 border-blue-500/20';
+  if (lower.includes('attendance')) return 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20';
+  if (lower.includes('people')) return 'text-violet-500 bg-violet-500/10 border-violet-500/20';
+  if (lower.includes('project')) return 'text-sky-500 bg-sky-500/10 border-sky-500/20';
+  if (lower.includes('task')) return 'text-indigo-500 bg-indigo-500/10 border-indigo-500/20';
+  if (lower.includes('payroll')) return 'text-emerald-600 bg-emerald-600/10 border-emerald-600/20';
+  if (lower.includes('billing')) return 'text-amber-500 bg-amber-500/10 border-amber-500/20';
+  if (lower.includes('quality')) return 'text-purple-500 bg-purple-500/10 border-purple-500/20';
+  if (lower.includes('sla')) return 'text-rose-500 bg-rose-500/10 border-rose-500/20';
+  return 'text-primary bg-primary/10 border-primary/20';
+};
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'details' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
@@ -88,6 +372,9 @@ export default function SettingsPage() {
   const [newRoleName, setNewRoleName] = useState('');
   const [newRoleDesc, setNewRoleDesc] = useState('');
   const [creatingRole, setCreatingRole] = useState(false);
+  const [permSearchQuery, setPermSearchQuery] = useState('');
+  const [permFilterStatus, setPermFilterStatus] = useState<'all' | 'granted' | 'revoked'>('all');
+  const [selectedModuleFilter, setSelectedModuleFilter] = useState<string>('ALL');
 
   // Custom Role Lifecycle & Access Diagnostics
   const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
@@ -418,6 +705,81 @@ export default function SettingsPage() {
       toast.success('Role permissions updated');
     } catch (err: any) {
       toast.error(err.message || 'Error updating role permission');
+    }
+  };
+
+  // Handler 5a: Batch Toggle Module Permissions (Grant All / Revoke All for a Module)
+  const handleBatchToggleModulePermissions = async (roleId: string, permIds: string[], grantAll: boolean) => {
+    const role = roles.find((r) => r.id === roleId);
+    if (!role || role.name === 'OWNER' || !role.isActive) return;
+
+    const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.id || p);
+    let updatedPermIds: string[];
+
+    if (grantAll) {
+      const set = new Set([...currentPermIds, ...permIds]);
+      updatedPermIds = Array.from(set);
+    } else {
+      const toRemove = new Set(permIds);
+      updatedPermIds = currentPermIds.filter((id) => !toRemove.has(id));
+    }
+
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}/permissions`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({ permissionIds: updatedPermIds }),
+      });
+
+      if (!res.ok) throw new Error('Failed to update permissions');
+
+      setRoles(
+        roles.map((r) => {
+          if (r.id === roleId) {
+            return {
+              ...r,
+              permissions: updatedPermIds.map((id) => ({ permissionId: id })),
+            };
+          }
+          return r;
+        }),
+      );
+      toast.success(grantAll ? 'All module permissions granted' : 'Module permissions revoked');
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating permissions');
+    }
+  };
+
+  // Handler 5a2: Toggle All Role Permissions (Full Access / Clear All)
+  const handleToggleAllRolePermissions = async (roleId: string, grantAll: boolean) => {
+    const role = roles.find((r) => r.id === roleId);
+    if (!role || role.name === 'OWNER' || !role.isActive) return;
+
+    const updatedPermIds = grantAll ? allPermissions.map((p) => p.id) : [];
+
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}/permissions`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({ permissionIds: updatedPermIds }),
+      });
+
+      if (!res.ok) throw new Error('Failed to update permissions');
+
+      setRoles(
+        roles.map((r) => {
+          if (r.id === roleId) {
+            return {
+              ...r,
+              permissions: updatedPermIds.map((id) => ({ permissionId: id })),
+            };
+          }
+          return r;
+        }),
+      );
+      toast.success(grantAll ? 'Full platform access granted to role' : 'All permissions cleared from role');
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating permissions');
     }
   };
 
@@ -1327,49 +1689,82 @@ export default function SettingsPage() {
           <div className="grid gap-6 md:grid-cols-3">
             {/* Roles List & Create */}
             <div className="space-y-4">
-              <Card className="border-border">
-                <CardHeader className="pb-3">
-                  <CardTitle className="text-sm font-bold">Workspace Roles</CardTitle>
-                  <CardDescription className="text-xs">Select a role to inspect or edit permissions</CardDescription>
+              <Card className="border-border shadow-xs">
+                <CardHeader className="pb-3 border-b border-border/50">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-sm font-bold flex items-center gap-1.5">
+                        <Shield className="h-4 w-4 text-primary" />
+                        Workspace Roles
+                      </CardTitle>
+                      <CardDescription className="text-xs mt-0.5">Select a role to inspect or edit permissions</CardDescription>
+                    </div>
+                    <Badge variant="secondary" className="text-[10px] font-normal">
+                      {roles.length} roles
+                    </Badge>
+                  </div>
                 </CardHeader>
-                <CardContent className="space-y-1.5 pt-0">
+                <CardContent className="space-y-2 pt-3">
                   {roles.map((r) => {
                     const isSelected = selectedRoleId === r.id;
+                    const RoleIcon = getRoleIcon(r.name);
+                    const displayName = getRoleDisplayTitle(r.name);
+                    const assignedPermCount = r.name === 'OWNER' ? allPermissions.length : (r.permissions || []).length;
+
                     return (
                       <div
                         key={r.id}
                         onClick={() => setSelectedRoleId(r.id)}
-                        className={`cursor-pointer p-2.5 rounded-md text-xs transition-all flex items-center justify-between border ${
+                        className={`cursor-pointer p-3 rounded-lg text-xs transition-all border ${
                           isSelected
-                            ? 'border-primary bg-primary/10 text-primary font-semibold shadow-sm'
-                            : 'border-border/60 hover:bg-muted/40 text-foreground'
+                            ? 'border-primary bg-primary/10 text-primary shadow-xs ring-1 ring-primary/40'
+                            : 'border-border/60 hover:bg-muted/40 hover:border-border text-foreground'
                         }`}
                       >
-                        <div className="truncate max-w-[170px]">
-                          <div className="flex items-center gap-1.5">
-                            <span className="truncate">{r.name}</span>
-                            {!r.isActive && (
-                              <Badge variant="outline" className="text-[8px] border-amber-500/40 text-amber-500 bg-amber-500/10 px-1 py-0">
-                                Inactive
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-center gap-2.5">
+                            <div
+                              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${
+                                isSelected ? 'bg-primary text-primary-foreground shadow-xs' : 'bg-muted text-muted-foreground'
+                              }`}
+                            >
+                              <RoleIcon className="h-4 w-4" />
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-bold text-xs text-foreground">{displayName}</span>
+                                {!r.isActive && (
+                                  <Badge variant="outline" className="text-[8px] border-amber-500/40 text-amber-500 bg-amber-500/10 px-1 py-0">
+                                    Inactive
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground mt-0.5">
+                                {r.isSystemRole ? 'Core Platform' : 'Custom Role'}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            {r.isSystemRole ? (
+                              <Badge variant="outline" className="text-[9px] font-medium bg-background/50">
+                                System
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary" className="text-[9px]">
+                                {r._count?.memberships || 0} members
                               </Badge>
                             )}
                           </div>
-                          {r.description && (
-                            <div className="text-[10px] font-normal text-muted-foreground truncate mt-0.5">
-                              {r.description}
-                            </div>
-                          )}
                         </div>
-                        <div className="flex items-center gap-1 shrink-0">
-                          {r.isSystemRole ? (
-                            <Badge variant="outline" className="text-[9px]">
-                              System
-                            </Badge>
-                          ) : (
-                            <Badge variant="secondary" className="text-[9px]">
-                              {r._count?.memberships || 0} members
-                            </Badge>
-                          )}
+
+                        <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-2.5 pt-2 border-t border-border/40">
+                          <span className="truncate max-w-[170px] font-medium">
+                            {r.name === 'OWNER' ? 'Full platform access' : `${assignedPermCount} permissions active`}
+                          </span>
+                          <span className={`font-semibold ${isSelected ? 'text-primary' : ''}`}>
+                            {isSelected ? 'Selected' : 'View'}
+                          </span>
                         </div>
                       </div>
                     );
@@ -1536,88 +1931,377 @@ export default function SettingsPage() {
 
             {/* Permission Matrix */}
             <div className="md:col-span-2 space-y-4">
-              <Card className="border-border">
-                <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <CardTitle className="text-base font-bold">
-                          Permissions for <span className="text-primary">{selectedRoleObj?.name || 'Selected Role'}</span>
-                        </CardTitle>
-                        {selectedRoleObj && (
+              <Card className="border-border shadow-xs overflow-hidden">
+                {/* Role Header Banner */}
+                <div className="bg-gradient-to-r from-primary/10 via-background to-card p-4 sm:p-5 border-b border-border">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="flex items-start sm:items-center gap-3.5">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm">
+                        {(() => {
+                          const IconComp = getRoleIcon(selectedRoleObj?.name);
+                          return <IconComp className="h-5 w-5" />;
+                        })()}
+                      </div>
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-base sm:text-lg font-bold text-foreground">
+                            {getRoleDisplayTitle(selectedRoleObj?.name)}
+                          </h2>
+                          {selectedRoleObj?.isSystemRole && (
+                            <Badge variant="outline" className="text-[10px] font-medium bg-background/80">
+                              Core Platform Role
+                            </Badge>
+                          )}
                           <Badge
-                            variant={selectedRoleObj.isActive ? 'default' : 'secondary'}
+                            variant="outline"
                             className={`text-[10px] ${
-                              !selectedRoleObj.isActive
-                                ? 'bg-amber-500/10 text-amber-500 border-amber-500/30'
-                                : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30'
+                              selectedRoleObj?.isActive
+                                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                                : 'border-amber-500/30 bg-amber-500/10 text-amber-600'
                             }`}
                           >
-                            {selectedRoleObj.isActive ? 'Active' : 'Deactivated'}
+                            {selectedRoleObj?.isActive ? 'Active' : 'Deactivated'}
                           </Badge>
-                        )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5 max-w-xl">
+                          {getRoleDescription(selectedRoleObj)}
+                        </p>
                       </div>
-                      <CardDescription className="text-xs mt-1">
-                        {selectedRoleObj?.name === 'OWNER'
-                          ? 'Organization Owner holds root authority for recovery protection and billing.'
-                          : 'Configure fine-grained module actions and permissions for this role.'}
-                      </CardDescription>
                     </div>
-                    {selectedRoleObj?.isSystemRole && (
-                      <Badge variant="outline" className="text-[10px]">Core Platform Role</Badge>
-                    )}
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {!selectedRoleObj?.isActive && (
-                    <div className="mb-4 p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 flex items-center gap-2">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
-                      <span>This role is currently deactivated. Permissions are suspended for all assigned members.</span>
-                    </div>
-                  )}
 
-                  {/* Group permissions by module */}
-                  <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1">
-                    {Array.from(new Set(allPermissions.map((p) => p.module || 'General'))).map((modName) => {
-                      const modPerms = allPermissions.filter((p) => (p.module || 'General') === modName);
+                    {/* Live Permission Counter Pill */}
+                    {(() => {
+                      const assignedPerms: any[] = selectedRoleObj?.permissions || [];
+                      const grantedTotal = selectedRoleObj?.name === 'OWNER'
+                        ? allPermissions.length
+                        : allPermissions.filter((p) =>
+                            assignedPerms.some((ap: any) => ap.permissionId === p.id || ap.id === p.id || ap === p.id || ap.permission?.code === p.code || ap.code === p.code)
+                          ).length;
+                      const coveragePct = allPermissions.length > 0 ? Math.round((grantedTotal / allPermissions.length) * 100) : 0;
+
                       return (
-                        <div key={modName} className="border border-border/80 rounded-lg p-3 bg-card space-y-2">
-                          <div className="flex items-center justify-between border-b border-border/60 pb-1.5">
-                            <span className="text-xs font-bold text-foreground uppercase tracking-wider">{modName}</span>
-                            <Badge variant="secondary" className="text-[9px]">{modPerms.length} actions</Badge>
+                        <div className="flex flex-col sm:items-end gap-1 shrink-0 bg-background/80 dark:bg-card/80 backdrop-blur-xs p-2.5 rounded-lg border border-border/80">
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground font-medium">Access Coverage</span>
+                            <span className="text-xs font-bold text-foreground">
+                              {grantedTotal} / {allPermissions.length} Active ({coveragePct}%)
+                            </span>
                           </div>
-                          <div className="grid gap-2 sm:grid-cols-2">
-                            {modPerms.map((perm) => {
-                              const assignedPerms: any[] = selectedRoleObj?.permissions || [];
-                              const isGranted = assignedPerms.some(
-                                (p) => p.permissionId === perm.id || p.id === perm.id || p === perm.id || p.permission?.code === perm.code,
-                              );
-
-                              return (
-                                <div
-                                  key={perm.id}
-                                  className={`flex items-start justify-between p-2 rounded border text-xs transition-colors ${
-                                    isGranted ? 'border-primary/40 bg-primary/5' : 'border-border/60 bg-muted/10'
-                                  }`}
-                                >
-                                  <div className="pr-2">
-                                    <div className="font-semibold text-foreground text-[11px] font-mono">{perm.code}</div>
-                                    <div className="text-[10px] text-muted-foreground mt-0.5">{perm.name}</div>
-                                  </div>
-                                  <input
-                                    type="checkbox"
-                                    checked={isGranted}
-                                    disabled={selectedRoleObj?.name === 'OWNER' || !selectedRoleObj?.isActive}
-                                    onChange={() => handleTogglePermission(selectedRoleObj.id, perm.id)}
-                                    className="h-4 w-4 text-primary rounded border-input cursor-pointer mt-0.5"
-                                  />
-                                </div>
-                              );
-                            })}
+                          <div className="w-40 sm:w-44 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div
+                              className={`h-full transition-all duration-300 ${
+                                coveragePct === 100 ? 'bg-emerald-500' : coveragePct > 50 ? 'bg-primary' : 'bg-amber-500'
+                              }`}
+                              style={{ width: `${coveragePct}%` }}
+                            />
                           </div>
                         </div>
                       );
-                    })}
+                    })()}
+                  </div>
+
+                  {/* Quick Action Buttons (Grant All / Revoke All) if not OWNER */}
+                  {selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive && (
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-3 mt-3 border-t border-border/60">
+                      <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                        <Sparkles className="h-3.5 w-3.5 text-primary" />
+                        <span>Toggle individual actions below or use quick actions for this role:</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[11px] gap-1 hover:border-emerald-500/40 hover:text-emerald-600 hover:bg-emerald-500/10"
+                          onClick={() => handleToggleAllRolePermissions(selectedRoleObj.id, true)}
+                        >
+                          <CheckCheck className="h-3.5 w-3.5" />
+                          Grant All Permissions
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-[11px] gap-1 hover:border-destructive/40 hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => handleToggleAllRolePermissions(selectedRoleObj.id, false)}
+                        >
+                          <X className="h-3.5 w-3.5" />
+                          Clear All
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <CardContent className="p-4 sm:p-5 space-y-4">
+                  {!selectedRoleObj?.isActive && (
+                    <div className="p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 flex items-center gap-2">
+                      <AlertCircle className="h-4 w-4 shrink-0" />
+                      <span>This role is currently deactivated. All permissions are suspended for assigned members.</span>
+                    </div>
+                  )}
+
+                  {/* Search and Filters Bar */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-muted/20 p-2.5 rounded-lg border border-border/60">
+                    <div className="relative flex-1">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                      <input
+                        type="text"
+                        value={permSearchQuery}
+                        onChange={(e) => setPermSearchQuery(e.target.value)}
+                        placeholder="Search by action name or keyword (e.g. approve, clock, export, payroll)..."
+                        className="w-full pl-8 pr-7 py-1.5 text-xs bg-background rounded-md border border-input focus:outline-none focus:ring-1 focus:ring-primary"
+                      />
+                      {permSearchQuery && (
+                        <button
+                          type="button"
+                          onClick={() => setPermSearchQuery('')}
+                          className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground text-xs"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Filter Pills */}
+                    {(() => {
+                      const assignedPerms: any[] = selectedRoleObj?.permissions || [];
+                      const isPermActive = (p: any) =>
+                        selectedRoleObj?.name === 'OWNER' ||
+                        assignedPerms.some((ap: any) => ap.permissionId === p.id || ap.id === p.id || ap === p.id || ap.permission?.code === p.code || ap.code === p.code);
+                      const grantedCount = allPermissions.filter(isPermActive).length;
+                      const revokedCount = allPermissions.length - grantedCount;
+
+                      return (
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={permFilterStatus === 'all' ? 'secondary' : 'ghost'}
+                            className="h-7 text-[11px] px-2.5 font-medium"
+                            onClick={() => setPermFilterStatus('all')}
+                          >
+                            All ({allPermissions.length})
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={permFilterStatus === 'granted' ? 'secondary' : 'ghost'}
+                            className={`h-7 text-[11px] px-2.5 font-medium ${
+                              permFilterStatus === 'granted' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/30' : ''
+                            }`}
+                            onClick={() => setPermFilterStatus('granted')}
+                          >
+                            Granted ({grantedCount})
+                          </Button>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant={permFilterStatus === 'revoked' ? 'secondary' : 'ghost'}
+                            className="h-7 text-[11px] px-2.5 font-medium"
+                            onClick={() => setPermFilterStatus('revoked')}
+                          >
+                            Revoked ({revokedCount})
+                          </Button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Group permissions by module with rich styling */}
+                  <div className="space-y-4 max-h-[620px] overflow-y-auto pr-1">
+                    {(() => {
+                      const assignedPerms: any[] = selectedRoleObj?.permissions || [];
+                      const isPermActive = (p: any) =>
+                        selectedRoleObj?.name === 'OWNER' ||
+                        assignedPerms.some((ap: any) => ap.permissionId === p.id || ap.id === p.id || ap === p.id || ap.permission?.code === p.code || ap.code === p.code);
+
+                      const query = permSearchQuery.trim().toLowerCase();
+                      const allModules = Array.from(new Set(allPermissions.map((p) => p.module || 'General')));
+
+                      let totalMatched = 0;
+
+                      const renderedModules = allModules.map((modName) => {
+                        const modPerms = allPermissions.filter((p) => (p.module || 'General') === modName);
+                        const filteredModPerms = modPerms.filter((perm) => {
+                          const meta = getPermissionMeta(perm);
+                          const matchesQuery =
+                            !query ||
+                            meta.title.toLowerCase().includes(query) ||
+                            meta.description.toLowerCase().includes(query) ||
+                            (perm.code || '').toLowerCase().includes(query) ||
+                            modName.toLowerCase().includes(query);
+
+                          if (!matchesQuery) return false;
+
+                          const active = isPermActive(perm);
+                          if (permFilterStatus === 'granted' && !active) return false;
+                          if (permFilterStatus === 'revoked' && active) return false;
+
+                          return true;
+                        });
+
+                        totalMatched += filteredModPerms.length;
+                        if (filteredModPerms.length === 0) return null;
+
+                        const ModuleIcon = getModuleIcon(modName);
+                        const colorClass = getModuleColorClass(modName);
+                        const grantedInMod = modPerms.filter(isPermActive).length;
+                        const isAllGrantedInMod = grantedInMod === modPerms.length && modPerms.length > 0;
+                        const modPermIds = modPerms.map((p) => p.id);
+
+                        return (
+                          <div key={modName} className="border border-border/80 rounded-xl p-4 bg-card shadow-xs space-y-3">
+                            {/* Module Header Bar */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border/60 pb-3">
+                              <div className="flex items-center gap-2.5">
+                                <div className={`flex h-7 w-7 items-center justify-center rounded-lg border ${colorClass}`}>
+                                  <ModuleIcon className="h-3.5 w-3.5" />
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-foreground uppercase tracking-wider">{modName}</span>
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[9px] font-medium ${
+                                      isAllGrantedInMod
+                                        ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                                        : grantedInMod > 0
+                                        ? 'bg-primary/10 text-primary border-primary/30'
+                                        : 'bg-muted text-muted-foreground'
+                                    }`}
+                                  >
+                                    {grantedInMod} / {modPerms.length} Granted
+                                  </Badge>
+                                </div>
+                              </div>
+
+                              {/* Module Quick Batch Buttons */}
+                              {selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive && (
+                                <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                                  {!isAllGrantedInMod && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-2 text-[10px] text-primary hover:bg-primary/10 hover:text-primary font-medium"
+                                      onClick={() => handleBatchToggleModulePermissions(selectedRoleObj.id, modPermIds, true)}
+                                    >
+                                      Grant All ({modPerms.length})
+                                    </Button>
+                                  )}
+                                  {grantedInMod > 0 && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-6 px-2 text-[10px] text-muted-foreground hover:bg-destructive/10 hover:text-destructive font-medium"
+                                      onClick={() => handleBatchToggleModulePermissions(selectedRoleObj.id, modPermIds, false)}
+                                    >
+                                      Revoke All
+                                    </Button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Permission Cards Grid */}
+                            <div className="grid gap-2.5 sm:grid-cols-2">
+                              {filteredModPerms.map((perm) => {
+                                const isGranted = isPermActive(perm);
+                                const meta = getPermissionMeta(perm);
+                                const isLocked = selectedRoleObj?.name === 'OWNER' || !selectedRoleObj?.isActive;
+
+                                return (
+                                  <div
+                                    key={perm.id}
+                                    onClick={() => {
+                                      if (!isLocked) {
+                                        handleTogglePermission(selectedRoleObj.id, perm.id);
+                                      }
+                                    }}
+                                    className={`group relative flex flex-col justify-between p-3 rounded-lg border transition-all select-none ${
+                                      isGranted
+                                        ? 'border-emerald-500/40 bg-emerald-500/[0.04] dark:bg-emerald-950/20 shadow-xs'
+                                        : 'border-border/60 bg-muted/10 hover:bg-muted/30 hover:border-border'
+                                    } ${isLocked ? 'cursor-default' : 'cursor-pointer hover:shadow-xs'}`}
+                                  >
+                                    <div>
+                                      <div className="flex items-start justify-between gap-2">
+                                        <h4 className="font-semibold text-xs text-foreground group-hover:text-primary transition-colors leading-tight">
+                                          {meta.title}
+                                        </h4>
+                                        <span className="font-mono text-[9px] text-muted-foreground/70 bg-muted/60 px-1.5 py-0.5 rounded shrink-0">
+                                          {perm.code}
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-muted-foreground mt-1.5 leading-relaxed line-clamp-2">
+                                        {meta.description}
+                                      </p>
+                                    </div>
+
+                                    <div className="flex items-center justify-between pt-2.5 mt-2 border-t border-border/40">
+                                      <div className="flex items-center gap-1.5">
+                                        {isGranted ? (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[10px] font-medium bg-emerald-500/10 text-emerald-600 border-emerald-500/30 px-1.5 py-0 gap-1"
+                                          >
+                                            <Check className="h-2.5 w-2.5" />
+                                            Enabled
+                                          </Badge>
+                                        ) : (
+                                          <span className="text-[11px] text-muted-foreground/80 font-medium">Disabled</span>
+                                        )}
+                                      </div>
+
+                                      {/* Custom Switch Component */}
+                                      <div
+                                        className={`relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                                          isGranted ? 'bg-emerald-500' : 'bg-muted-foreground/30'
+                                        } ${isLocked ? 'cursor-not-allowed opacity-60' : ''}`}
+                                      >
+                                        <span
+                                          aria-hidden="true"
+                                          className={`pointer-events-none inline-block h-3 w-3 transform rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out ${
+                                            isGranted ? 'translate-x-3' : 'translate-x-0'
+                                          }`}
+                                        />
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      });
+
+                      if (totalMatched === 0) {
+                        return (
+                          <div className="p-8 text-center border border-dashed border-border rounded-xl bg-muted/10 space-y-2">
+                            <Search className="h-6 w-6 text-muted-foreground mx-auto" />
+                            <p className="text-xs font-semibold text-foreground">No permissions found</p>
+                            <p className="text-[11px] text-muted-foreground">
+                              No actions match &quot;{permSearchQuery}&quot; with current filter status.
+                            </p>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="h-7 text-xs mt-2"
+                              onClick={() => {
+                                setPermSearchQuery('');
+                                setPermFilterStatus('all');
+                              }}
+                            >
+                              Reset Search & Filters
+                            </Button>
+                          </div>
+                        );
+                      }
+
+                      return renderedModules;
+                    })()}
                   </div>
                 </CardContent>
               </Card>
