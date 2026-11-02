@@ -385,7 +385,16 @@ export default function SettingsPage() {
         }),
       });
 
-      if (!res.ok) throw new Error('Failed to update modules');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || 'Failed to update modules');
+
+      setWorkspace((prev: any) => ({
+        ...prev,
+        settings: {
+          ...(prev?.settings || {}),
+          enabledModules,
+        },
+      }));
       toast.success('Workspace module entitlements updated!');
     } catch (err: any) {
       toast.error(err.message || 'Error saving modules');

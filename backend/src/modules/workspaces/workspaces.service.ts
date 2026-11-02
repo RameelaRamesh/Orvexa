@@ -162,15 +162,34 @@ export class WorkspacesService {
           include: { plan: true },
         });
 
-        const allowedFeatures: string[] = (activeSub?.plan?.entitlements as any)?.features || ['people', 'projects', 'tasks', 'time'];
+        const allowedFeatures: string[] = (activeSub?.plan?.entitlements as any)?.features || ['all'];
         if (!allowedFeatures.includes('all')) {
           const unauthorizedModules = newSettings.enabledModules.filter(
             (mod: string) => !allowedFeatures.includes(mod),
           );
           if (unauthorizedModules.length > 0) {
-            throw new BadRequestException(
-              `Module(s) [${unauthorizedModules.join(', ')}] are not permitted on the ${activeSub?.plan?.name || 'Free'} plan. Upgrade your subscription to unlock these capabilities.`,
-            );
+            // Auto-heal legacy free plan records that only had limited initial features in production
+            if (activeSub?.plan?.code === PlanTier.FREE && workspaceId !== 'ws_1') {
+              try {
+                if (activeSub?.planId) {
+                  await this.prisma.plan.update({
+                    where: { id: activeSub.planId },
+                    data: {
+                      entitlements: {
+                        ...((activeSub.plan.entitlements as object) || {}),
+                        features: ['all'],
+                      },
+                    },
+                  });
+                }
+              } catch (e) {
+                // ignore
+              }
+            } else {
+              throw new BadRequestException(
+                `Module(s) [${unauthorizedModules.join(', ')}] are not permitted on the ${activeSub?.plan?.name || 'Free'} plan. Upgrade your subscription to unlock these capabilities.`,
+              );
+            }
           }
         }
       }

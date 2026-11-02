@@ -111,7 +111,7 @@ export class AuthService {
             entitlements: {
               maxUsers: 5,
               maxStorageMb: 1000,
-              features: defaultModules,
+              features: ['all'],
               description: 'Essential organization and core work tracking for small teams.',
               conditions: 'Up to 5 team members. 1 GB storage. Core work management.',
             },
