@@ -115,7 +115,7 @@ export class TasksService implements OnModuleInit {
       where,
       include: {
         project: {
-          select: { id: true, name: true, key: true, status: true, clientId: true },
+          select: { id: true, name: true, key: true, status: true, clientId: true, createdAt: true },
         },
         assignee: {
           include: {

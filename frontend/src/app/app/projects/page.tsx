@@ -542,13 +542,22 @@ export default function ProjectsPage() {
               <button
                 key={p.id}
                 onClick={() => setSelectedProjectId(p.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
                   selectedProjectId === p.id
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-card border-border text-foreground hover:bg-surface-secondary'
                 }`}
               >
-                {p.key}: {p.name}
+                <span
+                  className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold tracking-wide ${
+                    selectedProjectId === p.id
+                      ? 'bg-primary-foreground/20 text-primary-foreground'
+                      : 'bg-primary/10 text-primary border border-primary/20'
+                  }`}
+                >
+                  {p.key}
+                </span>
+                <span>{p.name}</span>
               </button>
             ))}
           </div>
@@ -667,34 +676,40 @@ export default function ProjectsPage() {
                           </div>
                         </td>
                         <td className="py-3.5 px-4 text-xs align-top">
-                          <div className="space-y-1.5">
-                            <div>
-                              {t.project ? (
-                                <Badge variant="outline" className="font-mono text-[11px] font-medium border-primary/30 text-primary">
-                                  {t.project.key}: {t.project.name}
-                                </Badge>
-                              ) : (
-                                <Badge variant="secondary" className="text-[11px] font-medium">
-                                  Standalone
-                                </Badge>
-                              )}
-                            </div>
-                            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                              <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
-                              <span>
-                                {t.project?.createdAt
-                                  ? `Project Created: ${new Date(t.project.createdAt).toLocaleDateString()}`
-                                  : `Created: ${new Date(t.createdAt).toLocaleDateString()}`}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
-                              <UserCheck className="h-3 w-3 text-muted-foreground shrink-0" />
-                              <span>Assigner:</span>
-                              <span className="font-medium text-foreground">
-                                {getTaskAssigner(t) ? getMemberDisplayName(getTaskAssigner(t)) : 'Workspace Admin'}
-                              </span>
-                            </div>
-                          </div>
+                          {(() => {
+                            const projectInfo = t.project || (t.projectId ? projects.find((p) => p.id === t.projectId) : null);
+                            const projectCreatedAt = projectInfo?.createdAt;
+                            return (
+                              <div className="space-y-1.5">
+                                {projectInfo ? (
+                                  <div className="flex items-start gap-1.5">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-primary/10 text-primary border border-primary/20 shrink-0 mt-0.5 tracking-wider">
+                                      {projectInfo.key}
+                                    </span>
+                                    <span className="font-semibold text-xs text-foreground leading-snug">
+                                      {projectInfo.name}
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                                      Standalone
+                                    </span>
+                                  </div>
+                                )}
+                                <div className="space-y-0.5 text-[11px] text-muted-foreground">
+                                  <div className="flex items-center gap-1.5">
+                                    <Calendar className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                                    <span>Created: <span className="text-foreground/90 font-medium">{projectCreatedAt ? new Date(projectCreatedAt).toLocaleDateString() : new Date(t.createdAt).toLocaleDateString()}</span></span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5">
+                                    <UserCheck className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                                    <span>Assigner: <span className="text-foreground/90 font-medium">{getTaskAssigner(t) ? getMemberDisplayName(getTaskAssigner(t)) : 'Workspace Admin'}</span></span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </td>
                         <td className="py-3.5 px-4 text-xs align-top">
                           {getTaskAssignees(t).length > 0 ? (
@@ -1184,32 +1199,36 @@ export default function ProjectsPage() {
                   {/* Context / Project */}
                   <div className="pt-2 border-t border-border/50">
                     <span className="text-muted-foreground font-semibold">Context / Project:</span>
-                    <div className="text-foreground mt-0.5 font-medium">
+                    <div className="mt-1">
                       {selectedTask.project ? (
-                        <Badge variant="outline" className="font-mono text-xs py-0.5 px-2 font-medium border-primary/30 text-primary">
-                          {selectedTask.project.key}: {selectedTask.project.name}
-                        </Badge>
+                        <div className="flex items-start gap-1.5">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold uppercase bg-primary/10 text-primary border border-primary/20 shrink-0 mt-0.5 tracking-wider">
+                            {selectedTask.project.key}
+                          </span>
+                          <span className="font-semibold text-xs text-foreground leading-snug">
+                            {selectedTask.project.name}
+                          </span>
+                        </div>
                       ) : (
-                        <Badge variant="secondary" className="text-xs py-0.5 px-2">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
                           Standalone
-                        </Badge>
+                        </span>
                       )}
                     </div>
-                    <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
-                      <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                    <div className="text-[11px] text-muted-foreground mt-1.5 flex items-center gap-1.5">
+                      <Calendar className="h-3 w-3 text-muted-foreground/70 shrink-0" />
                       <span>
-                        {selectedTask.project?.createdAt
-                          ? `Project Created: ${new Date(selectedTask.project.createdAt).toLocaleDateString()}`
-                          : `Created: ${new Date(selectedTask.createdAt).toLocaleDateString()}`}
+                        Created: <span className="text-foreground/90 font-medium">
+                          {selectedTask.project?.createdAt
+                            ? new Date(selectedTask.project.createdAt).toLocaleDateString()
+                            : new Date(selectedTask.createdAt).toLocaleDateString()}
+                        </span>
                       </span>
                     </div>
                     {/* Assigner under Created Date */}
                     <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1.5">
-                      <UserCheck className="h-3 w-3 text-muted-foreground shrink-0" />
-                      <span>Assigner:</span>
-                      <span className="font-medium text-foreground">
-                        {getTaskAssigner(selectedTask) ? getMemberDisplayName(getTaskAssigner(selectedTask)) : 'Workspace Administrator'}
-                      </span>
+                      <UserCheck className="h-3 w-3 text-muted-foreground/70 shrink-0" />
+                      <span>Assigner: <span className="text-foreground/90 font-medium">{getTaskAssigner(selectedTask) ? getMemberDisplayName(getTaskAssigner(selectedTask)) : 'Workspace Administrator'}</span></span>
                       {getTaskAssigner(selectedTask) && getMemberDeptName(getTaskAssigner(selectedTask)) !== 'General' && (
                         <span className="text-[10px] text-muted-foreground">
                           ({getMemberDeptName(getTaskAssigner(selectedTask))})
@@ -1320,7 +1339,7 @@ export default function ProjectsPage() {
                     <option value="">Select target project...</option>
                     {projects.map((p) => (
                       <option key={p.id} value={p.id}>
-                        {p.key}: {p.name}
+                        [{p.key}] {p.name}
                       </option>
                     ))}
                   </select>
