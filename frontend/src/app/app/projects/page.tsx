@@ -635,123 +635,128 @@ export default function ProjectsPage() {
                 <table className="w-full text-left text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-border text-xs uppercase text-muted-foreground bg-surface-secondary/50">
-                      <th className="py-3.5 px-4">Work Item Title</th>
-                      <th className="py-3.5 px-4">Context / Project</th>
-                      <th className="py-3.5 px-4">Assignee & Assigner</th>
-                      <th className="py-3.5 px-4">Progress</th>
-                      <th className="py-3.5 px-4">Priority</th>
-                      <th className="py-3.5 px-4">Status</th>
-                      <th className="py-3.5 px-4 text-right">Action</th>
+                      <th className="py-3.5 px-4 font-semibold">Work Item Title</th>
+                      <th className="py-3.5 px-4 font-semibold">Context / Project</th>
+                      <th className="py-3.5 px-4 font-semibold">Assignee</th>
+                      <th className="py-3.5 px-4 font-semibold">Progress</th>
+                      <th className="py-3.5 px-4 font-semibold">Priority</th>
+                      <th className="py-3.5 px-4 font-semibold">Status</th>
+                      <th className="py-3.5 px-4 font-semibold text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
                     {filteredTasks.map((t) => (
                       <tr key={t.id} className="hover:bg-surface-secondary/20 transition-colors">
-                        <td className="py-3.5 px-4">
-                          <div className="font-semibold text-foreground text-sm flex items-center gap-2">
-                            {t.title}
-                            {t.isRework && (
-                              <Badge variant="destructive" className="text-[10px] py-0 px-1.5">
-                                REWORK #{t.reworkCount}
-                              </Badge>
-                            )}
-                          </div>
-                          {t.description && (
-                            <div className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{t.description}</div>
-                          )}
-                          <div className="text-[10px] text-muted-foreground mt-1 flex items-center gap-1">
-                            <Clock className="h-3 w-3 inline text-muted-foreground" />
-                            Created {new Date(t.createdAt).toLocaleDateString()}
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-xs">
+                        <td className="py-3.5 px-4 align-top">
                           <div className="space-y-1">
-                            {t.project ? (
-                              <Badge variant="outline" className="font-mono text-[11px]">
-                                {t.project.key}: {t.project.name}
-                              </Badge>
-                            ) : (
-                              <Badge variant="secondary" className="text-[11px]">
-                                Standalone
-                              </Badge>
-                            )}
-                            <div className="text-[10px] text-muted-foreground">
-                              {t.project?.createdAt
-                                ? `Project Created: ${new Date(t.project.createdAt).toLocaleDateString()}`
-                                : `Created: ${new Date(t.createdAt).toLocaleDateString()}`}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-xs text-foreground">
-                          <div className="space-y-1.5">
-                            <div>
-                              <span className="text-[10px] text-muted-foreground font-semibold uppercase block">
-                                Assignee(s):
-                              </span>
-                              {getTaskAssignees(t).length > 0 ? (
-                                <div className="flex flex-wrap gap-1 max-w-[200px]">
-                                  {getTaskAssignees(t).map((m: any) => (
-                                    <Badge key={m.id} variant="secondary" className="text-[10px] py-0 px-1.5 font-normal">
-                                      {getMemberDisplayName(m)}
-                                    </Badge>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground italic text-[11px]">Unassigned</span>
+                            <div className="font-semibold text-foreground text-sm flex items-center gap-2">
+                              <span>{t.title}</span>
+                              {t.isRework && (
+                                <Badge variant="destructive" className="text-[10px] py-0 px-1.5 shrink-0">
+                                  REWORK #{t.reworkCount}
+                                </Badge>
                               )}
                             </div>
-                            {getTaskAssigner(t) && (
-                              <div className="pt-0.5">
-                                <span className="text-[10px] text-muted-foreground font-semibold uppercase block">
-                                  Assigner:
-                                </span>
-                                <span className="text-xs font-medium text-foreground">
-                                  {getMemberDisplayName(getTaskAssigner(t))}
-                                </span>
-                              </div>
+                            {t.description && (
+                              <div className="text-xs text-muted-foreground line-clamp-1">{t.description}</div>
                             )}
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-1 pt-0.5">
+                              <Clock className="h-3 w-3 inline text-muted-foreground shrink-0" />
+                              <span>Created: {new Date(t.createdAt).toLocaleDateString()}</span>
+                            </div>
                           </div>
                         </td>
-                        <td className="py-3.5 px-4">
-                          <div className="w-24 bg-muted rounded-full h-2 overflow-hidden">
-                            <div
-                              className="bg-primary h-full transition-all"
-                              style={{ width: `${t.progress || 0}%` }}
-                            />
+                        <td className="py-3.5 px-4 text-xs align-top">
+                          <div className="space-y-1.5">
+                            <div>
+                              {t.project ? (
+                                <Badge variant="outline" className="font-mono text-[11px] font-medium border-primary/30 text-primary">
+                                  {t.project.key}: {t.project.name}
+                                </Badge>
+                              ) : (
+                                <Badge variant="secondary" className="text-[11px] font-medium">
+                                  Standalone
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+                              <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                              <span>
+                                {t.project?.createdAt
+                                  ? `Project Created: ${new Date(t.project.createdAt).toLocaleDateString()}`
+                                  : `Created: ${new Date(t.createdAt).toLocaleDateString()}`}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-muted-foreground flex items-center gap-1.5">
+                              <UserCheck className="h-3 w-3 text-muted-foreground shrink-0" />
+                              <span>Assigner:</span>
+                              <span className="font-medium text-foreground">
+                                {getTaskAssigner(t) ? getMemberDisplayName(getTaskAssigner(t)) : 'Workspace Admin'}
+                              </span>
+                            </div>
                           </div>
-                          <span className="text-[10px] text-muted-foreground mt-0.5 block">{t.progress || 0}%</span>
                         </td>
-                        <td className="py-3.5 px-4">
-                          <Badge
-                            variant={
-                              t.priority === 'URGENT'
-                                ? 'destructive'
-                                : t.priority === 'HIGH'
-                                ? 'outline'
-                                : 'secondary'
-                            }
-                            className="text-xs"
-                          >
-                            {t.priority}
-                          </Badge>
+                        <td className="py-3.5 px-4 text-xs align-top">
+                          {getTaskAssignees(t).length > 0 ? (
+                            <div className="flex flex-col gap-1">
+                              {getTaskAssignees(t).map((m: any) => (
+                                <div key={m.id}>
+                                  <Badge variant="secondary" className="text-[11px] py-0.5 px-2 font-normal">
+                                    {getMemberDisplayName(m)}
+                                  </Badge>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground italic text-[11px]">Unassigned</span>
+                          )}
                         </td>
-                        <td className="py-3.5 px-4">
-                          <Badge
-                            variant={
-                              t.status === 'COMPLETED'
-                                ? 'success'
-                                : t.status === 'IN_REVIEW'
-                                ? 'outline'
-                                : 'secondary'
-                            }
-                            className="text-xs"
-                          >
-                            {t.status}
-                            {t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'COMPLETED' && ' (Overdue)'}
-                          </Badge>
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="space-y-1">
+                            <div className="w-24 bg-muted rounded-full h-2 overflow-hidden mt-1">
+                              <div
+                                className="bg-primary h-full transition-all"
+                                style={{ width: `${t.progress || 0}%` }}
+                              />
+                            </div>
+                            <span className="text-[11px] text-muted-foreground font-medium block">{t.progress || 0}%</span>
+                          </div>
                         </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <Button size="sm" variant="ghost" onClick={() => openTaskDetail(t.id)} className="text-xs gap-1">
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="mt-0.5">
+                            <Badge
+                              variant={
+                                t.priority === 'URGENT'
+                                  ? 'destructive'
+                                  : t.priority === 'HIGH'
+                                  ? 'outline'
+                                  : 'secondary'
+                              }
+                              className="text-xs"
+                            >
+                              {t.priority}
+                            </Badge>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 align-top">
+                          <div className="mt-0.5">
+                            <Badge
+                              variant={
+                                t.status === 'COMPLETED'
+                                  ? 'success'
+                                  : t.status === 'IN_REVIEW'
+                                  ? 'outline'
+                                  : 'secondary'
+                              }
+                              className="text-xs"
+                            >
+                              {t.status}
+                              {t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'COMPLETED' && ' (Overdue)'}
+                            </Badge>
+                          </div>
+                        </td>
+                        <td className="py-3.5 px-4 text-right align-top">
+                          <Button size="sm" variant="ghost" onClick={() => openTaskDetail(t.id)} className="text-xs gap-1 h-8">
                             Inspect <ArrowRight className="h-3 w-3" />
                           </Button>
                         </td>
@@ -1176,46 +1181,53 @@ export default function ProjectsPage() {
                     )}
                   </div>
 
-                  {/* Assigner (Who created the task / project) */}
+                  {/* Context / Project */}
                   <div className="pt-2 border-t border-border/50">
-                    <span className="text-muted-foreground font-semibold">Assigner (Created By):</span>
-                    <div className="text-foreground mt-0.5 font-medium flex items-center gap-1.5">
-                      {getTaskAssigner(selectedTask) ? (
-                        <Badge variant="outline" className="text-xs py-0.5 px-2 font-medium">
-                          {getMemberDisplayName(getTaskAssigner(selectedTask))}
-                          {getMemberDeptName(getTaskAssigner(selectedTask)) !== 'General' && (
-                            <span className="text-[10px] text-muted-foreground ml-1">
-                              ({getMemberDeptName(getTaskAssigner(selectedTask))})
-                            </span>
-                          )}
+                    <span className="text-muted-foreground font-semibold">Context / Project:</span>
+                    <div className="text-foreground mt-0.5 font-medium">
+                      {selectedTask.project ? (
+                        <Badge variant="outline" className="font-mono text-xs py-0.5 px-2 font-medium border-primary/30 text-primary">
+                          {selectedTask.project.key}: {selectedTask.project.name}
                         </Badge>
                       ) : (
-                        <span className="text-muted-foreground italic text-xs">Workspace Administrator</span>
+                        <Badge variant="secondary" className="text-xs py-0.5 px-2">
+                          Standalone
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
+                      <Calendar className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span>
+                        {selectedTask.project?.createdAt
+                          ? `Project Created: ${new Date(selectedTask.project.createdAt).toLocaleDateString()}`
+                          : `Created: ${new Date(selectedTask.createdAt).toLocaleDateString()}`}
+                      </span>
+                    </div>
+                    {/* Assigner under Created Date */}
+                    <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1.5">
+                      <UserCheck className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span>Assigner:</span>
+                      <span className="font-medium text-foreground">
+                        {getTaskAssigner(selectedTask) ? getMemberDisplayName(getTaskAssigner(selectedTask)) : 'Workspace Administrator'}
+                      </span>
+                      {getTaskAssigner(selectedTask) && getMemberDeptName(getTaskAssigner(selectedTask)) !== 'General' && (
+                        <span className="text-[10px] text-muted-foreground">
+                          ({getMemberDeptName(getTaskAssigner(selectedTask))})
+                        </span>
                       )}
                     </div>
                   </div>
 
-                  {/* Date Created */}
+                  {/* Work Item Date Created */}
                   <div className="pt-2 border-t border-border/50">
-                    <span className="text-muted-foreground font-semibold">Date Created:</span>
-                    <div className="text-foreground mt-0.5 font-medium">
-                      {new Date(selectedTask.createdAt).toLocaleDateString()} at {new Date(selectedTask.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    <span className="text-muted-foreground font-semibold">Work Item Created:</span>
+                    <div className="text-foreground mt-0.5 font-medium flex items-center gap-1">
+                      <Clock className="h-3 w-3 text-muted-foreground shrink-0" />
+                      <span>
+                        {new Date(selectedTask.createdAt).toLocaleDateString()} at {new Date(selectedTask.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
                     </div>
                   </div>
-
-                  {/* Project Info & Project Created Date if linked */}
-                  {selectedTask.project && (
-                    <div className="pt-2 border-t border-border/50">
-                      <span className="text-muted-foreground font-semibold">Project ({selectedTask.project.key}):</span>
-                      <div className="text-foreground mt-0.5 font-medium">
-                        {selectedTask.project.name}
-                      </div>
-                      <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-1">
-                        <Calendar className="h-3 w-3 text-primary inline" />
-                        <span>Project Created: <strong>{new Date(selectedTask.project.createdAt).toLocaleDateString()}</strong></span>
-                      </div>
-                    </div>
-                  )}
 
                   <div className="pt-2 border-t border-border/50">
                     <span className="text-muted-foreground font-semibold">Due Date:</span>
