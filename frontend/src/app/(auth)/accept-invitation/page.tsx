@@ -132,6 +132,11 @@ function AcceptInvitationContent() {
             <CardDescription className="text-xs leading-relaxed text-muted-foreground">
               {error || 'This invitation link is invalid, has expired, or was revoked by the workspace administrator.'}
             </CardDescription>
+            {error && error.toLowerCase().includes('expired') && (
+              <p className="text-xs text-muted-foreground bg-muted/40 p-3 rounded-md border border-border text-left">
+                This invitation link has expired. Your workspace administrator can regenerate a fresh link directly from the People directory to re-activate this invitation.
+              </p>
+            )}
           </CardHeader>
           <CardFooter className="flex flex-col gap-2 pt-2">
             <Link href="/login" className="w-full">

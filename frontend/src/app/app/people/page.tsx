@@ -665,6 +665,36 @@ export default function PeoplePage() {
                               </Button>
                             </>
                           )}
+                          {inv.status === 'EXPIRED' && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs px-2.5 text-primary border-primary/30 hover:bg-primary/10 gap-1 font-medium"
+                                onClick={() => handleResendInvite(inv.id)}
+                              >
+                                <RotateCcw className="h-3 w-3" /> Regenerate Link
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs px-2 text-destructive"
+                                onClick={() => handleRevokeInvite(inv.id)}
+                              >
+                                Revoke
+                              </Button>
+                            </>
+                          )}
+                          {inv.status === 'REVOKED' && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs px-2.5 text-muted-foreground hover:text-foreground gap-1"
+                              onClick={() => handleResendInvite(inv.id)}
+                            >
+                              <RotateCcw className="h-3 w-3" /> Re-invite
+                            </Button>
+                          )}
                         </td>
                       </tr>
                     ))

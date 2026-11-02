@@ -595,6 +595,17 @@ export class PeopleService {
   }
 
   async listInvitations(workspaceId: string) {
+    // Automatically transition any PENDING invitations past their expiry date to EXPIRED
+    const now = new Date();
+    await this.prisma.invitation.updateMany({
+      where: {
+        workspaceId,
+        status: 'PENDING',
+        expiresAt: { lt: now },
+      },
+      data: { status: 'EXPIRED' },
+    });
+
     const list = await this.prisma.invitation.findMany({
       where: { workspaceId },
       include: {
@@ -621,6 +632,10 @@ export class PeopleService {
     });
 
     if (!invitation) throw new NotFoundException('Invitation not found');
+
+    if (invitation.status === 'ACCEPTED') {
+      throw new BadRequestException('This invitation has already been accepted and the account is active');
+    }
 
     let senderUser = invitation.invitedBy;
     if (resendByUserId) {
