@@ -48,9 +48,9 @@ import { toast } from 'sonner';
 
 const getRoleDisplayTitle = (name?: string) => {
   if (!name) return 'Role';
-  if (name === 'ADMIN') return 'HR EXECUTIVE';
   if (name === 'OWNER') return 'WORKSPACE OWNER';
-  if (name === 'MANAGER') return 'OPERATIONS MANAGER';
+  if (name === 'ADMIN') return 'HR EXECUTIVE';
+  if (name === 'MANAGER') return 'TEAM MANAGER';
   if (name === 'MEMBER') return 'TEAM MEMBER';
   return name;
 };
@@ -254,7 +254,7 @@ export default function SettingsPage() {
       const rawRoles = await rolesRes.json();
       const rolesData = rawRoles.data !== undefined ? rawRoles.data : rawRoles;
       if (Array.isArray(rolesData)) {
-        const systemOrder = ['ADMIN', 'MANAGER', 'MEMBER', 'OWNER'];
+        const systemOrder = ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'];
         const sorted = [...rolesData].sort((a, b) => {
           const aIndex = systemOrder.indexOf(a.name);
           const bIndex = systemOrder.indexOf(b.name);
@@ -265,7 +265,7 @@ export default function SettingsPage() {
         });
         setRoles(sorted);
         if (sorted.length > 0 && !selectedRoleId) {
-          const defaultRole = sorted.find((r) => r.name === 'ADMIN') || sorted[0];
+          const defaultRole = sorted.find((r) => r.name === 'OWNER') || sorted[0];
           setSelectedRoleId(defaultRole.id);
         }
       }
@@ -1623,7 +1623,7 @@ export default function SettingsPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <h3 className="text-base font-bold text-foreground">
-                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{getRoleDisplayTitle(selectedRoleObj?.name) || 'HR EXECUTIVE'}</span>
+                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{getRoleDisplayTitle(selectedRoleObj?.name) || 'WORKSPACE OWNER'}</span>
                       </h3>
                       <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                         Active
