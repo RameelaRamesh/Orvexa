@@ -288,12 +288,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       visible: true,
     },
     {
-      name: 'Operations Queue',
-      href: '/app/work-queue',
-      icon: Layers,
-      visible: hasPerm('work_items:view') && rawEnabledModules.includes('work_queue'),
-    },
-    {
       name: 'People Directory',
       href: '/app/people',
       icon: Users,
@@ -304,18 +298,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       href: '/app/time',
       icon: Clock,
       visible: (hasPerm('time:view') || hasPerm('attendance:view') || hasPerm('attendance:clock')) && (enabledModules.includes('time') || enabledModules.includes('attendance')),
-    },
-    {
-      name: 'Leave & PTO',
-      href: '/app/time?tab=leave',
-      icon: Calendar,
-      visible: true,
-    },
-    {
-      name: 'Quality Scorecards',
-      href: '/app/quality',
-      icon: Award,
-      visible: hasPerm('quality:view') && enabledModules.includes('quality'),
     },
     {
       name: 'Team Communication',
