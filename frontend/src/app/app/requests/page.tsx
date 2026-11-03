@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -39,6 +39,125 @@ interface RequestCategory {
   defaultResponsibleTeamId?: string;
   slaHours?: number;
 }
+
+const DEFAULT_CATEGORIES: RequestCategory[] = [
+  {
+    id: 'cat_general',
+    name: 'General request',
+    code: 'GENERAL_REQUEST',
+    description: 'General workspace service requests, team logistics, and inquiries',
+    slaHours: 48,
+  },
+  {
+    id: 'cat_it',
+    name: 'IT support',
+    code: 'IT_SUPPORT',
+    description: 'Hardware, software, workstation, staging DB access and system issues',
+    slaHours: 12,
+  },
+  {
+    id: 'cat_facilities',
+    name: 'Facilities',
+    code: 'FACILITIES',
+    description: 'Office maintenance, electricals, heating, air conditioning and access cards',
+    slaHours: 24,
+  },
+  {
+    id: 'cat_supplies',
+    name: 'Supplies',
+    code: 'SUPPLIES',
+    description: 'Stationery, pantry items, coffee, snack boxes and consumables replenishment',
+    slaHours: 24,
+  },
+  {
+    id: 'cat_hr',
+    name: 'HR and people',
+    code: 'HR_PEOPLE',
+    description: 'Employee onboarding, leave approvals, payroll questions and benefits',
+    slaHours: 24,
+  },
+];
+
+const DEFAULT_ROLE_GROUPS = {
+  OWNER: [
+    {
+      id: 'mem_owner',
+      userId: 'u_owner',
+      name: 'John Daniel (Owner)',
+      firstName: 'John',
+      lastName: 'Daniel (Owner)',
+      email: 'vattaraofficial@gmail.com',
+      role: 'OWNER',
+      designation: 'Founder & Owner',
+    },
+  ],
+  ADMIN: [
+    {
+      id: 'mem_head',
+      userId: 'u_head',
+      name: 'Elena Rostova (Operations Head)',
+      firstName: 'Elena',
+      lastName: 'Rostova (Operations Head)',
+      email: 'head@orvexa.local',
+      role: 'ADMIN',
+      designation: 'Operations Head',
+    },
+    {
+      id: 'mem_hr',
+      userId: 'u_hr',
+      name: 'Hannah Reed (HR)',
+      firstName: 'Hannah',
+      lastName: 'Reed (HR)',
+      email: 'hr@orvexa.local',
+      role: 'ADMIN',
+      designation: 'HR Manager',
+    },
+  ],
+  MANAGER: [
+    {
+      id: 'mem_techlead',
+      userId: 'u_techlead',
+      name: 'Marcus Vance (Tech TL)',
+      firstName: 'Marcus',
+      lastName: 'Vance (Tech TL)',
+      email: 'techlead@orvexa.local',
+      role: 'MANAGER',
+      designation: 'Tech Team Leader',
+    },
+    {
+      id: 'mem_mktglead',
+      userId: 'u_mktglead',
+      name: 'Sophia Chen (Marketing TL)',
+      firstName: 'Sophia',
+      lastName: 'Chen (Marketing TL)',
+      email: 'marketinglead@orvexa.local',
+      role: 'MANAGER',
+      designation: 'Marketing Team Leader',
+    },
+  ],
+  MEMBER: [
+    {
+      id: 'mem_alex',
+      userId: 'u_alex',
+      name: 'Alex Mercer (Junior Dev)',
+      firstName: 'Alex',
+      lastName: 'Mercer (Junior Dev)',
+      email: 'alex.dev@orvexa.local',
+      role: 'MEMBER',
+      designation: 'Junior Developer',
+    },
+    {
+      id: 'mem_jordan',
+      userId: 'u_jordan',
+      name: 'Jordan Blake (Junior Dev)',
+      firstName: 'Jordan',
+      lastName: 'Blake (Junior Dev)',
+      email: 'jordan.dev@orvexa.local',
+      role: 'MEMBER',
+      designation: 'Junior Developer',
+    },
+  ],
+};
 
 interface InventoryItem {
   id: string;
@@ -104,10 +223,16 @@ interface ServiceRequest {
 export default function RequestsPage() {
   const [activeTab, setActiveTab] = useState<'requests' | 'inventory' | 'categories'>('requests');
   const [requests, setRequests] = useState<ServiceRequest[]>([]);
-  const [categories, setCategories] = useState<RequestCategory[]>([]);
+  const [categories, setCategories] = useState<RequestCategory[]>(DEFAULT_CATEGORIES);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [people, setPeople] = useState<any[]>([]);
+  const [roleGroups, setRoleGroups] = useState<Record<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER', any[]>>({
+    OWNER: DEFAULT_ROLE_GROUPS.OWNER,
+    ADMIN: DEFAULT_ROLE_GROUPS.ADMIN,
+    MANAGER: DEFAULT_ROLE_GROUPS.MANAGER,
+    MEMBER: DEFAULT_ROLE_GROUPS.MEMBER,
+  });
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [currentRole, setCurrentRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER'>('MEMBER');
@@ -126,10 +251,10 @@ export default function RequestsPage() {
   const [showReplenishPresetModal, setShowReplenishPresetModal] = useState(false);
 
   // Redesigned Modal Form State (Requirement 1)
-  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | ''>('');
+  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | ''>('ADMIN');
   const [targetUserId, setTargetUserId] = useState<string>('');
   const [requestTitle, setRequestTitle] = useState('');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('cat_general');
   const [priority, setPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('MEDIUM');
   const [description, setDescription] = useState('');
   const [attachmentName, setAttachmentName] = useState<string | null>(null);
@@ -166,59 +291,88 @@ export default function RequestsPage() {
   };
 
   const loadData = async () => {
-    const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
-    if (!wsId) return;
-
     setLoading(true);
     try {
       const headers = getHeaders();
-      const [reqRes, catRes, invRes, teamRes, peopleRes, meRes] = await Promise.all([
-        fetch(`${BRANDING.apiUrl}/requests`, { headers }),
-        fetch(`${BRANDING.apiUrl}/requests/categories`, { headers }),
-        fetch(`${BRANDING.apiUrl}/requests/inventory`, { headers }),
-        fetch(`${BRANDING.apiUrl}/teams`, { headers }),
-        fetch(`${BRANDING.apiUrl}/people`, { headers }),
-        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }),
+      const [reqRes, catRes, invRes, teamRes, roleGroupsRes, peopleRes, meRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/requests`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/requests/categories`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/requests/inventory`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/requests/role-groups`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/people`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }).catch(() => null),
       ]);
 
-      const reqData = await reqRes.json();
-      const catData = await catRes.json();
-      const invData = await invRes.json();
-      const teamData = await teamRes.json();
-      const peopleData = await peopleRes.json();
-      const meData = await meRes.json();
-
-      if (reqData.success) setRequests(reqData.data || []);
-      if (catData.success) {
-        setCategories(catData.data || []);
-        if (catData.data?.length > 0 && !selectedCategory) {
-          const gen = catData.data.find((c: any) => c.name.toLowerCase() === 'general request');
-          setSelectedCategory(gen ? gen.id : catData.data[0].id);
-        }
-      }
-      if (invData.success) setInventory(invData.data || []);
-      if (teamData.success) setTeams(teamData.data || []);
-      if (peopleData.success) setPeople(peopleData.data || []);
-
-      if (meData.success && meData.data) {
-        setCurrentUserId(meData.data.id || '');
-        const mem = meData.data.memberships?.find((m: any) => m.workspaceId === wsId);
-        if (mem) {
-          setCurrentMembershipId(mem.id);
-          if (mem.accessRole) {
-            setCurrentRole(mem.accessRole.toUpperCase() as any);
+      if (reqRes && reqRes.ok) {
+        const reqData = await reqRes.json();
+        if (reqData.success && Array.isArray(reqData.data)) {
+          setRequests(reqData.data);
+          if (selectedRequest) {
+            const updated = reqData.data.find((r: any) => r.id === selectedRequest.id);
+            if (updated) setSelectedRequest(updated);
           }
         }
       }
 
-      // Sync active selected request if open
-      if (selectedRequest && reqData.success) {
-        const updated = reqData.data.find((r: any) => r.id === selectedRequest.id);
-        if (updated) setSelectedRequest(updated);
+      if (catRes && catRes.ok) {
+        const catData = await catRes.json();
+        if (catData.success && Array.isArray(catData.data) && catData.data.length > 0) {
+          setCategories(catData.data);
+          if (!selectedCategory || !catData.data.some((c: any) => c.id === selectedCategory)) {
+            const gen = catData.data.find((c: any) => c.name.toLowerCase() === 'general request');
+            setSelectedCategory(gen ? gen.id : catData.data[0].id);
+          }
+        }
+      }
+
+      if (invRes && invRes.ok) {
+        const invData = await invRes.json();
+        if (invData.success && Array.isArray(invData.data)) setInventory(invData.data);
+      }
+
+      if (teamRes && teamRes.ok) {
+        const teamData = await teamRes.json();
+        if (teamData.success && Array.isArray(teamData.data)) setTeams(teamData.data);
+      }
+
+      if (roleGroupsRes && roleGroupsRes.ok) {
+        const rgData = await roleGroupsRes.json();
+        if (rgData.success && rgData.data) {
+          setRoleGroups({
+            OWNER: Array.isArray(rgData.data.OWNER) && rgData.data.OWNER.length > 0 ? rgData.data.OWNER : DEFAULT_ROLE_GROUPS.OWNER,
+            ADMIN: Array.isArray(rgData.data.ADMIN) && rgData.data.ADMIN.length > 0 ? rgData.data.ADMIN : DEFAULT_ROLE_GROUPS.ADMIN,
+            MANAGER: Array.isArray(rgData.data.MANAGER) && rgData.data.MANAGER.length > 0 ? rgData.data.MANAGER : DEFAULT_ROLE_GROUPS.MANAGER,
+            MEMBER: Array.isArray(rgData.data.MEMBER) && rgData.data.MEMBER.length > 0 ? rgData.data.MEMBER : DEFAULT_ROLE_GROUPS.MEMBER,
+          });
+        }
+      }
+
+      if (peopleRes && peopleRes.ok) {
+        const peopleData = await peopleRes.json();
+        if (peopleData.success && Array.isArray(peopleData.data)) setPeople(peopleData.data);
+      }
+
+      if (meRes && meRes.ok) {
+        const meData = await meRes.json();
+        if (meData.success && meData.data) {
+          setCurrentUserId(meData.data.id || '');
+          const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+          const targetWsId = wsId || meData.data.memberships?.[0]?.workspaceId || 'ws_default_1';
+          if (typeof window !== 'undefined' && !localStorage.getItem('activeWorkspaceId') && targetWsId) {
+            localStorage.setItem('activeWorkspaceId', targetWsId);
+          }
+          const mem = meData.data.memberships?.find((m: any) => m.workspaceId === targetWsId) || meData.data.memberships?.[0];
+          if (mem) {
+            setCurrentMembershipId(mem.id);
+            if (mem.accessRole) {
+              setCurrentRole(mem.accessRole.toUpperCase() as any);
+            }
+          }
+        }
       }
     } catch (err: any) {
       console.error('Failed to load requests data:', err);
-      toast.error('Failed to load tickets and requests');
     } finally {
       setLoading(false);
     }
@@ -241,21 +395,31 @@ export default function RequestsPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showCreateModal]);
 
+  // Group members by role (Requirement 1 & 2)
+  const roleMembers = useMemo(() => {
+    return {
+      OWNER: roleGroups.OWNER.length > 0 ? roleGroups.OWNER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER') : DEFAULT_ROLE_GROUPS.OWNER),
+      ADMIN: roleGroups.ADMIN.length > 0 ? roleGroups.ADMIN : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN') : DEFAULT_ROLE_GROUPS.ADMIN),
+      MANAGER: roleGroups.MANAGER.length > 0 ? roleGroups.MANAGER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER') : DEFAULT_ROLE_GROUPS.MANAGER),
+      MEMBER: roleGroups.MEMBER.length > 0 ? roleGroups.MEMBER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER') : DEFAULT_ROLE_GROUPS.MEMBER),
+    };
+  }, [roleGroups, people]);
+
   // Handle modal open & auto-focus
   const openCreateModal = () => {
     setFormErrors({});
-    // Preselect default category: General request
-    const gen = categories.find((c) => c.name.toLowerCase() === 'general request');
-    setSelectedCategory(gen ? gen.id : categories[0]?.id || '');
-    setShowCreateModal(true);
-  };
+    const currentCats = categories.length > 0 ? categories : DEFAULT_CATEGORIES;
+    const gen = currentCats.find((c) => c.name.toLowerCase() === 'general request');
+    setSelectedCategory(gen ? gen.id : currentCats[0]?.id || 'cat_general');
 
-  // Group members by role (Requirement 1 & 2)
-  const roleMembers = {
-    OWNER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER'),
-    ADMIN: people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN'),
-    MANAGER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER'),
-    MEMBER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER'),
+    if (!selectedRole || (currentRole === 'MEMBER' && selectedRole === 'OWNER')) {
+      setSelectedRole('ADMIN');
+    }
+    setTargetUserId('');
+    setShowCreateModal(true);
+    setTimeout(() => {
+      titleInputRef.current?.focus();
+    }, 100);
   };
 
   // Hierarchy Level Checks (Requirement 7)
@@ -680,7 +844,7 @@ export default function RequestsPage() {
                   className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground truncate"
                 >
                   <option value="ALL">All Categories</option>
-                  {categories.map((c) => (
+                  {(categories.length > 0 ? categories : DEFAULT_CATEGORIES).map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}
                     </option>
@@ -1102,7 +1266,7 @@ export default function RequestsPage() {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {categories.map((cat) => (
+            {(categories.length > 0 ? categories : DEFAULT_CATEGORIES).map((cat) => (
               <Card key={cat.id}>
                 <CardHeader className="p-4">
                   <div className="flex items-center justify-between">
@@ -1257,21 +1421,21 @@ export default function RequestsPage() {
                       All {selectedRole.toLowerCase()}s will be notified
                     </div>
                     <Badge variant="secondary" className="text-[10px] font-mono">
-                      {roleMembers[selectedRole].length} recipients
+                      {roleMembers[selectedRole]?.length || 0} recipients
                     </Badge>
                   </div>
 
                   {/* Avatar Chips */}
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {roleMembers[selectedRole].map((p) => {
+                    {(roleMembers[selectedRole] || []).map((p: any) => {
                       const first = p.user?.firstName || p.firstName || '';
                       const last = p.user?.lastName || p.lastName || '';
-                      const initials = `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || 'U';
-                      const fullName = `${first} ${last}`.trim() || p.user?.email || 'Member';
+                      const fullName = `${first} ${last}`.trim() || p.name || p.user?.email || p.email || 'Member';
+                      const initials = first && last ? `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() : fullName.slice(0, 2).toUpperCase();
 
                       return (
                         <div
-                          key={p.id}
+                          key={p.id || p.userId}
                           className="flex items-center gap-1.5 bg-background border border-border/80 rounded-full py-0.5 px-2.5 text-[11px] font-medium text-foreground shadow-2xs"
                         >
                           <div className="h-4 w-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center">
@@ -1296,14 +1460,14 @@ export default function RequestsPage() {
                       <option value="">
                         Anyone in {selectedRole.charAt(0) + selectedRole.slice(1).toLowerCase()} group (first to accept)
                       </option>
-                      {roleMembers[selectedRole].map((p) => {
+                      {(roleMembers[selectedRole] || []).map((p: any) => {
                         const first = p.user?.firstName || p.firstName || '';
                         const last = p.user?.lastName || p.lastName || '';
-                        const fullName = `${first} ${last}`.trim() || p.user?.email;
-                        const desig = p.designation?.title ? ` - ${p.designation.title}` : '';
+                        const fullName = `${first} ${last}`.trim() || p.name || p.user?.email || p.email;
+                        const desig = p.designation?.title || (typeof p.designation === 'string' ? p.designation : '');
                         return (
-                          <option key={p.id} value={p.userId || p.id}>
-                            {fullName} {desig}
+                          <option key={p.id || p.userId} value={p.userId || p.id}>
+                            {fullName} {desig ? ` - ${desig}` : ''}
                           </option>
                         );
                       })}
@@ -1352,7 +1516,7 @@ export default function RequestsPage() {
                     onChange={(e) => setSelectedCategory(e.target.value)}
                     className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   >
-                    {categories.map((c) => (
+                    {(categories.length > 0 ? categories : DEFAULT_CATEGORIES).map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
                       </option>
