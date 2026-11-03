@@ -112,6 +112,10 @@ export class DisableMfaDto {
 }
 
 export class UpdateProfileDto {
+  @IsEmail({}, { message: 'Enter a valid work email address.' })
+  @IsOptional()
+  email?: string;
+
   @IsString()
   @IsOptional()
   firstName?: string;

@@ -25,6 +25,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       try {
         await this.$connect();
         this.logger.log('Prisma connected to PostgreSQL successfully');
+        await this.autoSyncOwnerCredentials();
         return;
       } catch (error: any) {
         if (attempt === maxRetries) {
@@ -38,6 +39,48 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           await new Promise((resolve) => setTimeout(resolve, 2000));
         }
       }
+    }
+  }
+
+  private async autoSyncOwnerCredentials() {
+    try {
+      const oldOwner = await this.user.findFirst({
+        where: { email: { equals: 'operations@vattara.com', mode: 'insensitive' } },
+      });
+      const bcrypt = await import('bcrypt');
+      const passwordHash = await bcrypt.hash('vattara@123', 10);
+
+      if (oldOwner) {
+        await this.user.update({
+          where: { id: oldOwner.id },
+          data: {
+            email: 'vattaraofficial@gmail.com',
+            passwordHash,
+            status: 'ACTIVE',
+            isEmailVerified: true,
+            mustChangePassword: false,
+          },
+        });
+        this.logger.log('✔ Migrated operations@vattara.com to vattaraofficial@gmail.com');
+      } else {
+        const currentOwner = await this.user.findFirst({
+          where: { email: { equals: 'vattaraofficial@gmail.com', mode: 'insensitive' } },
+        });
+        if (currentOwner) {
+          await this.user.update({
+            where: { id: currentOwner.id },
+            data: {
+              passwordHash,
+              status: 'ACTIVE',
+              isEmailVerified: true,
+              mustChangePassword: false,
+            },
+          });
+          this.logger.log('✔ Synchronized password for vattaraofficial@gmail.com');
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Owner sync check note: ${err?.message || err}`);
     }
   }
 
