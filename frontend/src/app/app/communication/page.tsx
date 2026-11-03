@@ -27,10 +27,15 @@ import {
   Bell,
   BellRing,
   BellOff,
-  Volume2,
   VolumeX,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  showMessageNotification,
+  NotificationStatus,
+} from '@/lib/notifications';
 
 interface Message {
   id: string;
@@ -82,52 +87,20 @@ export default function CommunicationPage() {
   const [showDirectModal, setShowDirectModal] = useState(false);
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [showManageMembersModal, setShowManageMembersModal] = useState(false);
-  const [showNotificationModal, setShowNotificationModal] = useState(false);
-  const [dismissedBanner, setDismissedBanner] = useState(false);
-
-  // Chrome Desktop Notification states
-  const [notificationPermission, setNotificationPermission] = useState<
-    'default' | 'granted' | 'denied' | 'unsupported'
-  >('default');
-  const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(true);
-  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
-
-  // Synchronization refs for interval & background polling
-  const knownMessageIdsRef = useRef<Set<string>>(new Set());
-  const knownConversationsLastMessageRef = useRef<Map<string, string>>(new Map());
-  const initialLoadDoneRef = useRef<boolean>(false);
-  const activeConversationRef = useRef<Conversation | null>(null);
-  const conversationsRef = useRef<Conversation[]>([]);
-  const currentMembershipIdRef = useRef<string>('');
-  const notificationsEnabledRef = useRef<boolean>(true);
-  const soundEnabledRef = useRef<boolean>(true);
-
-  // Keep refs in sync with state
-  useEffect(() => {
-    activeConversationRef.current = activeConversation;
-  }, [activeConversation]);
-
-  useEffect(() => {
-    conversationsRef.current = conversations;
-  }, [conversations]);
-
-  useEffect(() => {
-    currentMembershipIdRef.current = currentMembershipId;
-  }, [currentMembershipId]);
-
-  useEffect(() => {
-    notificationsEnabledRef.current = notificationsEnabled;
-  }, [notificationsEnabled]);
-
-  useEffect(() => {
-    soundEnabledRef.current = soundEnabled;
-  }, [soundEnabled]);
 
   // Form states
   const [selectedRecipientId, setSelectedRecipientId] = useState('');
   const [groupName, setGroupName] = useState('');
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
   const [addMemberIds, setAddMemberIds] = useState<string[]>([]);
+
+  // Notifications
+  const [notificationPermission, setNotificationPermission] = useState<NotificationStatus>('default');
+  const [showPermissionBanner, setShowPermissionBanner] = useState(false);
+
+  const seenMessageIdsRef = useRef<Set<string>>(new Set());
+  const initialLoadedConvIdsRef = useRef<Set<string>>(new Set());
+  const lastKnownMessageAtRef = useRef<Record<string, string>>({});
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -145,276 +118,13 @@ export default function CommunicationPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  // Check Chrome notification support & restore saved preferences
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    if (!('Notification' in window)) {
-      setNotificationPermission('unsupported');
-      return;
-    }
-
-    setNotificationPermission(Notification.permission);
-
-    const savedEnabled = localStorage.getItem('orvexa_chrome_notifications_enabled');
-    if (savedEnabled !== null) {
-      setNotificationsEnabled(savedEnabled === 'true');
-    } else if (Notification.permission === 'granted') {
-      setNotificationsEnabled(true);
-    }
-
-    const savedSound = localStorage.getItem('orvexa_chrome_notification_sound');
-    if (savedSound !== null) {
-      setSoundEnabled(savedSound === 'true');
-    }
-  }, []);
-
-  // Web Audio synth chime for incoming messages (zero external dependencies)
-  const playNotificationChime = () => {
-    try {
-      if (typeof window === 'undefined') return;
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      const now = ctx.currentTime;
-
-      // Bell chime note 1 (E5: 659.25Hz)
-      const osc1 = ctx.createOscillator();
-      const gain1 = ctx.createGain();
-      osc1.type = 'sine';
-      osc1.frequency.setValueAtTime(659.25, now);
-      gain1.gain.setValueAtTime(0.12, now);
-      gain1.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
-      osc1.connect(gain1);
-      gain1.connect(ctx.destination);
-      osc1.start(now);
-      osc1.stop(now + 0.3);
-
-      // Bell chime note 2 (A5: 880Hz)
-      const osc2 = ctx.createOscillator();
-      const gain2 = ctx.createGain();
-      osc2.type = 'sine';
-      osc2.frequency.setValueAtTime(880, now + 0.12);
-      gain2.gain.setValueAtTime(0.15, now + 0.12);
-      gain2.gain.exponentialRampToValueAtTime(0.0001, now + 0.5);
-      osc2.connect(gain2);
-      gain2.connect(ctx.destination);
-      osc2.start(now + 0.12);
-      osc2.stop(now + 0.5);
-    } catch {
-      // AudioContext autoplay policy or unsupported
-    }
-  };
-
-  // Dispatch Chrome desktop notification with click-to-focus and conversation jump
-  const sendChromeNotification = (
-    title: string,
-    body: string,
-    options?: { tag?: string; conversationId?: string },
-  ) => {
-    if (typeof window === 'undefined' || !('Notification' in window)) return;
-    if (Notification.permission !== 'granted') return;
-    if (!notificationsEnabledRef.current) return;
-
-    if (soundEnabledRef.current) {
-      playNotificationChime();
-    }
-
-    try {
-      const notif = new Notification(title, {
-        body: body || 'New message received',
-        tag: options?.tag || `orvexa-msg-${Date.now()}`,
-        icon: '/favicon.ico',
-        silent: true,
-      });
-
-      notif.onclick = () => {
-        try {
-          window.focus();
-        } catch {}
-        if (options?.conversationId) {
-          const target = conversationsRef.current.find((c) => c.id === options.conversationId);
-          if (target) {
-            setActiveConversation(target);
-          }
-        }
-        notif.close();
-      };
-    } catch (err) {
-      console.warn('Chrome notification dispatch error:', err);
-    }
-  };
-
-  // Request browser permission for Chrome desktop notifications
-  const requestNotificationPermission = async () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      toast.error('Chrome desktop notifications are not supported in this browser.');
-      return;
-    }
-
-    try {
-      const perm = await Notification.requestPermission();
-      setNotificationPermission(perm);
-
-      if (perm === 'granted') {
-        setNotificationsEnabled(true);
-        localStorage.setItem('orvexa_chrome_notifications_enabled', 'true');
-        toast.success('Chrome desktop notifications enabled!');
-        sendChromeNotification(
-          'Orvexa Team Communication',
-          'Chrome desktop notifications are now active for incoming messages.',
-          { tag: 'orvexa-permission-granted' },
-        );
-      } else if (perm === 'denied') {
-        setNotificationsEnabled(false);
-        toast.error(
-          'Notifications are blocked in Chrome. Click the lock/settings icon next to your URL bar to Allow notifications.',
-          { duration: 6000 },
-        );
-      }
-    } catch (err) {
-      console.error('Error requesting notification permission:', err);
-    }
-  };
-
-  // Test notification helper
-  const handleTestNotification = () => {
-    if (typeof window === 'undefined' || !('Notification' in window)) {
-      toast.error('Chrome desktop notifications are not supported.');
-      return;
-    }
-
-    if (Notification.permission !== 'granted') {
-      requestNotificationPermission();
-      return;
-    }
-
-    sendChromeNotification(
-      'Orvexa Communication • Test Alert',
-      'Test successful! Chrome notifications will alert you when teammates send messages.',
-      { tag: `test-notif-${Date.now()}` },
-    );
-    toast.success('Test Chrome notification dispatched! Check the corner of your screen.');
-  };
-
-  const explainBlockedPermission = () => {
-    toast.error(
-      'Notifications are blocked in Chrome. Click the lock/site settings icon in your Chrome address bar, set Notifications to "Allow", and reload.',
-      { duration: 7000 },
-    );
-  };
-
-  // Real-time synchronization & notification polling
-  const pollUpdates = async () => {
-    const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
-    if (!wsId) return;
-    const headers = getHeaders();
-    if (!headers.Authorization) return;
-
-    try {
-      // 1. Fetch conversations list updates
-      const convRes = await fetch(`${BRANDING.apiUrl}/communication/conversations`, { headers });
-      if (convRes.ok) {
-        const convData = await convRes.json();
-        if (convData.success && Array.isArray(convData.data)) {
-          const freshConvs: Conversation[] = convData.data;
-
-          if (initialLoadDoneRef.current) {
-            for (const conv of freshConvs) {
-              const previousLastAt = knownConversationsLastMessageRef.current.get(conv.id);
-              if (
-                conv.lastMessageAt &&
-                previousLastAt &&
-                new Date(conv.lastMessageAt).getTime() > new Date(previousLastAt).getTime()
-              ) {
-                // If it is NOT the currently active conversation, or if the tab is hidden
-                const isCurrentActive = activeConversationRef.current?.id === conv.id;
-                const isTabHidden = typeof document !== 'undefined' && document.hidden;
-                if (!isCurrentActive || isTabHidden) {
-                  const title = getConversationTitle(conv);
-                  sendChromeNotification(
-                    conv.type === 'GROUP' ? `${title}` : `Message from ${title}`,
-                    conv.lastMessageSnippet || 'New message in chat',
-                    {
-                      tag: `conv-${conv.id}-${conv.lastMessageAt}`,
-                      conversationId: conv.id,
-                    },
-                  );
-                }
-              }
-              if (conv.lastMessageAt) {
-                knownConversationsLastMessageRef.current.set(conv.id, conv.lastMessageAt);
-              }
-            }
-          } else {
-            freshConvs.forEach((c) => {
-              if (c.lastMessageAt) {
-                knownConversationsLastMessageRef.current.set(c.id, c.lastMessageAt);
-              }
-            });
-          }
-
-          setConversations(freshConvs);
-        }
-      }
-
-      // 2. If an active conversation is open, fetch its messages
-      const currentActive = activeConversationRef.current;
-      if (currentActive?.id) {
-        const msgRes = await fetch(
-          `${BRANDING.apiUrl}/communication/conversations/${currentActive.id}/messages`,
-          { headers },
-        );
-        if (msgRes.ok) {
-          const msgData = await msgRes.json();
-          if (msgData.success && Array.isArray(msgData.data)) {
-            const fetchedMsgs: Message[] = msgData.data;
-            let hasNewMsg = false;
-
-            for (const m of fetchedMsgs) {
-              if (!knownMessageIdsRef.current.has(m.id)) {
-                knownMessageIdsRef.current.add(m.id);
-                hasNewMsg = true;
-
-                // Fire notification if message is from another team member and initial load is complete
-                if (
-                  initialLoadDoneRef.current &&
-                  m.senderMembershipId !== currentMembershipIdRef.current
-                ) {
-                  const title =
-                    currentActive.type === 'GROUP'
-                      ? `${getConversationTitle(currentActive)}: ${m.senderName}`
-                      : `Message from ${m.senderName}`;
-                  sendChromeNotification(
-                    title,
-                    m.content || (m.attachments?.length ? 'Sent an attachment' : 'New message'),
-                    {
-                      tag: `msg-${m.id}`,
-                      conversationId: currentActive.id,
-                    },
-                  );
-
-                  // Auto mark read if user is actively viewing this tab
-                  if (typeof document !== 'undefined' && !document.hidden) {
-                    markMessageRead(currentActive.id, m.id);
-                  }
-                }
-              }
-            }
-
-            if (hasNewMsg) {
-              setMessages(fetchedMsgs);
-            }
-          }
-        }
-      }
-    } catch {
-      // Quietly ignore background network interruptions
-    }
-  };
-
   useEffect(() => {
     loadInitialData();
+    const perm = getNotificationPermission();
+    setNotificationPermission(perm);
+    if (perm === 'default') {
+      setShowPermissionBanner(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -427,24 +137,86 @@ export default function CommunicationPage() {
     scrollToBottom();
   }, [messages]);
 
-  // Background polling every 3.5 seconds + on window focus
+  // Real-time polling for active conversation messages (every 3.5s)
   useEffect(() => {
+    if (!activeConversation) return;
+
     const interval = setInterval(() => {
-      pollUpdates();
+      loadMessages(activeConversation.id, true);
     }, 3500);
 
-    const handleVisibility = () => {
-      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-        pollUpdates();
-      }
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
+    return () => clearInterval(interval);
+  }, [activeConversation?.id, currentMembershipId]);
 
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, []);
+  // Real-time polling for conversations list to detect messages in other chats (every 4s)
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const headers = getHeaders();
+        const res = await fetch(`${BRANDING.apiUrl}/communication/conversations`, { headers });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.success || !Array.isArray(data.data)) return;
+
+        const updatedConvs: Conversation[] = data.data;
+
+        for (const conv of updatedConvs) {
+          const prevLastAt = lastKnownMessageAtRef.current[conv.id];
+          if (conv.lastMessageAt && prevLastAt && conv.lastMessageAt !== prevLastAt) {
+            // New message in another conversation
+            if (conv.id !== activeConversation?.id) {
+              const title = getConversationTitle(conv);
+              const snippet = conv.lastMessageSnippet || (conv as any).lastMessage || 'New message';
+              showMessageNotification({
+                title,
+                senderName: title,
+                message: snippet,
+                conversationId: conv.id,
+                onOpen: () => {
+                  setActiveConversation(conv);
+                },
+              });
+            }
+          }
+          if (conv.lastMessageAt) {
+            lastKnownMessageAtRef.current[conv.id] = conv.lastMessageAt;
+          }
+        }
+
+        setConversations(updatedConvs);
+      } catch (err) {
+        // silent polling catch
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [activeConversation?.id]);
+
+  const handleEnableNotifications = async () => {
+    const perm = await requestNotificationPermission();
+    setNotificationPermission(perm);
+    if (perm === 'granted') {
+      setShowPermissionBanner(false);
+      toast.success('Chrome notifications enabled (silent, right corner)');
+      showMessageNotification({
+        title: 'Team Communication',
+        senderName: 'ORVEXA',
+        message: 'Chrome notifications are active in the right corner (no sound).',
+      });
+    } else if (perm === 'denied') {
+      toast.error('Notifications blocked in Chrome settings. Please enable them in your address bar.');
+    }
+  };
+
+  const handleTestNotification = () => {
+    showMessageNotification({
+      title: 'Team Communication • Test',
+      senderName: 'Notification Test',
+      message: 'Chrome notification in right corner (no sound).',
+      conversationTitle: activeConversation ? getConversationTitle(activeConversation) : undefined,
+      conversationId: activeConversation?.id,
+    });
+  };
 
   const loadInitialData = async () => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
@@ -467,19 +239,19 @@ export default function CommunicationPage() {
         const currentMem = meData.data.memberships?.find((m: any) => m.workspaceId === wsId);
         if (currentMem) {
           setCurrentMembershipId(currentMem.id);
-          currentMembershipIdRef.current = currentMem.id;
         }
       }
 
       if (convData.success) {
-        setConversations(convData.data || []);
-        (convData.data || []).forEach((c: Conversation) => {
+        const convList: Conversation[] = convData.data || [];
+        setConversations(convList);
+        convList.forEach((c) => {
           if (c.lastMessageAt) {
-            knownConversationsLastMessageRef.current.set(c.id, c.lastMessageAt);
+            lastKnownMessageAtRef.current[c.id] = c.lastMessageAt;
           }
         });
-        if (convData.data?.length > 0 && !activeConversation) {
-          setActiveConversation(convData.data[0]);
+        if (convList.length > 0 && !activeConversation) {
+          setActiveConversation(convList[0]);
         }
       }
 
@@ -491,12 +263,11 @@ export default function CommunicationPage() {
       toast.error('Failed to load chats and conversations');
     } finally {
       setLoading(false);
-      initialLoadDoneRef.current = true;
     }
   };
 
-  const loadMessages = async (convId: string) => {
-    setMessagesLoading(true);
+  const loadMessages = async (convId: string, isSilent = false) => {
+    if (!isSilent) setMessagesLoading(true);
     setAccessDenied(false);
     try {
       const headers = getHeaders();
@@ -514,15 +285,37 @@ export default function CommunicationPage() {
         throw new Error(data.message || 'Error loading messages');
       }
 
-      if (data.success) {
-        setMessages(data.data || []);
-        (data.data || []).forEach((m: Message) => {
-          knownMessageIdsRef.current.add(m.id);
-        });
+      if (data.success && Array.isArray(data.data)) {
+        const msgs: Message[] = data.data;
+        const isFirstLoadForThisConv = !initialLoadedConvIdsRef.current.has(convId);
+
+        if (isFirstLoadForThisConv) {
+          msgs.forEach((m) => seenMessageIdsRef.current.add(m.id));
+          initialLoadedConvIdsRef.current.add(convId);
+        } else {
+          // Identify newly arrived incoming messages
+          const newArrivals = msgs.filter((m) => !seenMessageIdsRef.current.has(m.id));
+          for (const newMsg of newArrivals) {
+            seenMessageIdsRef.current.add(newMsg.id);
+            if (newMsg.senderMembershipId !== currentMembershipId) {
+              showMessageNotification({
+                senderName: newMsg.senderName || 'Team Member',
+                message: newMsg.content || 'Sent an attachment',
+                conversationTitle: activeConversation ? getConversationTitle(activeConversation) : undefined,
+                conversationId: convId,
+                onOpen: () => {
+                  window.focus();
+                },
+              });
+            }
+          }
+        }
+
+        setMessages(msgs);
 
         // Automatically mark the last unread message as read
-        if (data.data?.length > 0) {
-          const lastMsg = data.data[data.data.length - 1];
+        if (msgs.length > 0) {
+          const lastMsg = msgs[msgs.length - 1];
           const hasRead = lastMsg.readBy?.some((r: any) => r.membershipId === currentMembershipId);
           if (!hasRead && lastMsg.senderMembershipId !== currentMembershipId) {
             markMessageRead(convId, lastMsg.id);
@@ -530,9 +323,9 @@ export default function CommunicationPage() {
         }
       }
     } catch (err: any) {
-      toast.error(err.message || 'Error loading messages');
+      if (!isSilent) toast.error(err.message || 'Error loading messages');
     } finally {
-      setMessagesLoading(false);
+      if (!isSilent) setMessagesLoading(false);
     }
   };
 
@@ -580,10 +373,16 @@ export default function CommunicationPage() {
       setAttachmentUrl('');
       setShowAttachmentInputs(false);
 
-      // Append new message and record ID to avoid notifying self
+      // Record our own message ID so we never trigger a notification for our own message
+      if (data.data?.id) {
+        seenMessageIdsRef.current.add(data.data.id);
+      }
+      if (data.data?.createdAt) {
+        lastKnownMessageAtRef.current[activeConversation.id] = data.data.createdAt;
+      }
+
+      // Append new message
       setMessages((prev) => [...prev, data.data]);
-      knownMessageIdsRef.current.add(data.data.id);
-      knownConversationsLastMessageRef.current.set(activeConversation.id, data.data.createdAt);
 
       // Update conversations preview
       setConversations((prev) =>
@@ -754,43 +553,42 @@ export default function CommunicationPage() {
             Direct 1:1 messaging, private collaboration groups, participant management, and real-time activity.
           </p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              if (notificationPermission === 'default') {
-                requestNotificationPermission();
-              } else {
-                setShowNotificationModal(true);
-              }
-            }}
-            className={`text-xs gap-1.5 ${
-              notificationPermission === 'granted' && notificationsEnabled
-                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
-                : notificationPermission === 'denied'
-                ? 'border-amber-500/30 bg-amber-500/10 text-amber-600 hover:bg-amber-500/20 dark:text-amber-400'
-                : 'border-primary/40 bg-primary/10 text-primary hover:bg-primary/20'
-            }`}
-            title="Configure Chrome desktop notifications for incoming messages"
-          >
-            {notificationPermission === 'granted' && notificationsEnabled ? (
-              <>
-                <BellRing className="h-3.5 w-3.5 text-emerald-500" />
-                <span className="hidden sm:inline">Chrome Notifications:</span> Active
-              </>
-            ) : notificationPermission === 'denied' ? (
-              <>
-                <BellOff className="h-3.5 w-3.5 text-amber-500" />
-                <span className="hidden sm:inline">Chrome Notifications:</span> Blocked
-              </>
-            ) : (
-              <>
-                <Bell className="h-3.5 w-3.5 text-primary" />
-                Enable Chrome Notifications
-              </>
-            )}
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Chrome Notification Status / Action */}
+          {notificationPermission === 'granted' ? (
+            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-600 dark:text-emerald-400">
+              <Bell className="h-3.5 w-3.5" />
+              <span className="font-medium">Chrome Notifications (Silent)</span>
+              <span title="No Sound (Silent)">
+                <VolumeX className="h-3 w-3 text-muted-foreground ml-0.5" />
+              </span>
+              <button
+                onClick={handleTestNotification}
+                className="ml-1 font-semibold underline hover:opacity-80 text-[11px]"
+                title="Send test silent notification to right corner"
+              >
+                Test
+              </button>
+            </div>
+          ) : notificationPermission === 'denied' ? (
+            <div
+              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-600 dark:text-amber-400"
+              title="Notifications are blocked in Chrome settings. Please click the site settings / lock icon in the address bar to allow."
+            >
+              <BellOff className="h-3.5 w-3.5" />
+              <span>Notifications Blocked in Chrome</span>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleEnableNotifications}
+              className="border-primary/40 text-primary hover:bg-primary/10 text-xs gap-1.5"
+            >
+              <Bell className="h-3.5 w-3.5" />
+              Enable Chrome Notifications (Silent)
+            </Button>
+          )}
 
           <Button variant="outline" size="sm" onClick={() => setShowDirectModal(true)}>
             <Plus className="mr-1 h-4 w-4" />
@@ -802,6 +600,35 @@ export default function CommunicationPage() {
           </Button>
         </div>
       </div>
+
+      {/* Permission Callout Banner if Default */}
+      {showPermissionBanner && notificationPermission === 'default' && (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs">
+          <div className="flex items-center gap-2.5">
+            <div className="rounded-full bg-primary/10 p-1.5 text-primary">
+              <Bell className="h-4 w-4" />
+            </div>
+            <div>
+              <span className="font-semibold text-foreground">Turn on Chrome Notifications: </span>
+              <span className="text-muted-foreground">
+                Get silent desktop notifications in the right corner (no sound) when team members send messages.
+              </span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button size="sm" onClick={handleEnableNotifications} className="text-xs h-7">
+              Allow Notifications
+            </Button>
+            <button
+              onClick={() => setShowPermissionBanner(false)}
+              className="p-1 text-muted-foreground hover:text-foreground"
+              title="Dismiss"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Main Container */}
       <div className="grid flex-1 grid-cols-12 gap-4 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
@@ -955,24 +782,6 @@ export default function CommunicationPage() {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setShowNotificationModal(true)}
-                    title={
-                      notificationPermission === 'granted'
-                        ? 'Chrome notifications active (click to configure)'
-                        : 'Configure Chrome notifications'
-                    }
-                  >
-                    {notificationPermission === 'granted' && notificationsEnabled ? (
-                      <BellRing className="h-4 w-4 text-emerald-500" />
-                    ) : notificationPermission === 'denied' ? (
-                      <BellOff className="h-4 w-4 text-amber-500" />
-                    ) : (
-                      <Bell className="h-4 w-4 text-muted-foreground hover:text-foreground" />
-                    )}
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
                     onClick={() => loadMessages(activeConversation.id)}
                     title="Refresh messages"
                   >
@@ -991,34 +800,6 @@ export default function CommunicationPage() {
                   )}
                 </div>
               </div>
-
-              {/* Notification Permission Prompt Banner */}
-              {notificationPermission === 'default' && !dismissedBanner && (
-                <div className="flex items-center justify-between gap-3 px-4 py-2 bg-primary/10 border-b border-primary/20 text-xs text-foreground">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Bell className="h-4 w-4 shrink-0 text-primary" />
-                    <span className="truncate">
-                      Enable Chrome desktop notifications to get instant alerts whenever team members send you messages.
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Button
-                      size="sm"
-                      className="h-6 text-[11px] px-2.5 bg-primary text-primary-foreground font-medium"
-                      onClick={requestNotificationPermission}
-                    >
-                      Enable Notifications
-                    </Button>
-                    <button
-                      onClick={() => setDismissedBanner(true)}
-                      className="text-muted-foreground hover:text-foreground p-0.5 rounded"
-                      title="Dismiss banner"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-              )}
 
               {/* Messages Content */}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
@@ -1419,173 +1200,6 @@ export default function CommunicationPage() {
                 Removing a participant immediately revokes their access to this conversation, message history,
                 and notifications.
               </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Chrome Notification Settings */}
-      {showNotificationModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <div className="flex items-center justify-between pb-3 border-b border-border">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-primary/10 text-primary">
-                  <BellRing className="h-5 w-5" />
-                </div>
-                <div>
-                  <h2 className="text-base font-semibold text-foreground">Chrome Message Notifications</h2>
-                  <p className="text-xs text-muted-foreground">Desktop popups and audio alerts for team chat</p>
-                </div>
-              </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-7 w-7 text-muted-foreground"
-                onClick={() => setShowNotificationModal(false)}
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            <div className="mt-4 space-y-4">
-              {/* Permission Status Box */}
-              <div
-                className={`p-3 rounded-lg border text-xs space-y-1.5 ${
-                  notificationPermission === 'granted'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-800 dark:text-emerald-300'
-                    : notificationPermission === 'denied'
-                    ? 'bg-amber-500/10 border-amber-500/30 text-amber-800 dark:text-amber-300'
-                    : 'bg-primary/10 border-primary/30 text-primary'
-                }`}
-              >
-                <div className="flex items-center justify-between font-semibold">
-                  <span className="flex items-center gap-1.5">
-                    {notificationPermission === 'granted' ? (
-                      <Check className="h-4 w-4 text-emerald-500" />
-                    ) : notificationPermission === 'denied' ? (
-                      <ShieldAlert className="h-4 w-4 text-amber-500" />
-                    ) : (
-                      <Bell className="h-4 w-4 text-primary" />
-                    )}
-                    Chrome Status: {notificationPermission === 'granted' ? 'Allowed in Chrome' : notificationPermission === 'denied' ? 'Blocked in Chrome' : 'Permission Required'}
-                  </span>
-                  <Badge variant="outline" className="text-[10px] font-mono uppercase">
-                    {notificationPermission}
-                  </Badge>
-                </div>
-                <p className="text-[11px] leading-relaxed">
-                  {notificationPermission === 'granted'
-                    ? 'Chrome has permitted desktop notifications. You will receive native Windows/desktop alerts whenever teammates send messages.'
-                    : notificationPermission === 'denied'
-                    ? 'Notifications are currently blocked in Chrome. To unblock: click the lock or site settings icon next to the URL in your Chrome address bar, change Notifications to "Allow", and reload.'
-                    : 'Chrome requires your permission to show desktop notifications outside the browser tab.'}
-                </p>
-                {notificationPermission !== 'granted' && (
-                  <div className="pt-1">
-                    <Button
-                      size="sm"
-                      variant="default"
-                      className="text-xs h-7 px-3 bg-primary text-primary-foreground"
-                      onClick={requestNotificationPermission}
-                    >
-                      Request Chrome Permission
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              {/* Toggles */}
-              <div className="space-y-2.5 pt-1">
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-background">
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                      <Bell className="h-3.5 w-3.5 text-primary" /> Desktop Notifications
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Show Chrome popup banners when new messages arrive
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={notificationsEnabled ? 'default' : 'outline'}
-                    className={`h-7 px-3 text-xs ${
-                      notificationsEnabled ? 'bg-emerald-600 hover:bg-emerald-700 text-white' : ''
-                    }`}
-                    onClick={() => {
-                      const next = !notificationsEnabled;
-                      setNotificationsEnabled(next);
-                      localStorage.setItem('orvexa_chrome_notifications_enabled', String(next));
-                      if (next && notificationPermission !== 'granted') {
-                        requestNotificationPermission();
-                      } else {
-                        toast.success(next ? 'Chrome notifications enabled' : 'Chrome notifications paused');
-                      }
-                    }}
-                  >
-                    {notificationsEnabled ? 'Enabled' : 'Paused'}
-                  </Button>
-                </div>
-
-                <div className="flex items-center justify-between p-3 rounded-lg border border-border bg-background">
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                      {soundEnabled ? (
-                        <Volume2 className="h-3.5 w-3.5 text-primary" />
-                      ) : (
-                        <VolumeX className="h-3.5 w-3.5 text-muted-foreground" />
-                      )}
-                      Audio Chime
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Play a gentle sound chime with incoming message notifications
-                    </div>
-                  </div>
-                  <Button
-                    size="sm"
-                    variant={soundEnabled ? 'default' : 'outline'}
-                    className="h-7 px-3 text-xs"
-                    onClick={() => {
-                      const next = !soundEnabled;
-                      setSoundEnabled(next);
-                      localStorage.setItem('orvexa_chrome_notification_sound', String(next));
-                      if (next) playNotificationChime();
-                      toast.success(next ? 'Sound chime enabled' : 'Sound chime muted');
-                    }}
-                  >
-                    {soundEnabled ? 'Sound ON' : 'Muted'}
-                  </Button>
-                </div>
-              </div>
-
-              {/* Test Button & Explanation */}
-              <div className="p-3 rounded-lg border border-border bg-muted/40 space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold text-foreground">Verify Notification Setup</span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-7 px-3 text-xs border-primary/30 text-primary hover:bg-primary/10"
-                    onClick={handleTestNotification}
-                  >
-                    Send Test Notification
-                  </Button>
-                </div>
-                <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  💡 Chrome desktop notifications appear on your screen even when Chrome is minimized or when you are working in another application.
-                </p>
-              </div>
-            </div>
-
-            <div className="mt-5 flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowNotificationModal(false)}
-                className="text-xs"
-              >
-                Done
-              </Button>
             </div>
           </div>
         </div>

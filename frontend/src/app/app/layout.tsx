@@ -33,6 +33,7 @@ import {
   X,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { TeamNotificationListener } from '@/components/team-notification-listener';
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -493,6 +494,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
+        <TeamNotificationListener />
         {/* Page View Body */}
         <main className="flex-1 p-4 md:p-8">{children}</main>
       </div>
