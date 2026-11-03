@@ -26,6 +26,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         await this.$connect();
         this.logger.log('Prisma connected to PostgreSQL successfully');
         await this.autoSyncOwnerCredentials();
+        await this.autoRestoreWorkspaceSettings();
         return;
       } catch (error: any) {
         if (attempt === maxRetries) {
@@ -81,6 +82,50 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       }
     } catch (err: any) {
       this.logger.warn(`Owner sync check note: ${err?.message || err}`);
+    }
+  }
+
+  private async autoRestoreWorkspaceSettings() {
+    try {
+      const allWorkspaces = await this.workspace.findMany();
+      for (const ws of allWorkspaces) {
+        const s = (ws.settings as any) || {};
+        let mods: string[] = Array.isArray(s.enabledModules) ? [...s.enabledModules] : [];
+        let updated = false;
+
+        // Ensure 'projects' and 'tasks' are preserved in all workspaces
+        if (!mods.includes('projects')) {
+          mods.push('projects');
+          updated = true;
+        }
+        if (!mods.includes('tasks')) {
+          mods.push('tasks');
+          updated = true;
+        }
+
+        // If workspace was set to CORE_OPS where projects & tasks were previously replaced, restore to GENERAL
+        let newBusinessType = ws.businessType;
+        if (ws.businessType === 'CORE_OPS') {
+          newBusinessType = 'GENERAL';
+          updated = true;
+        }
+
+        if (updated) {
+          await this.workspace.update({
+            where: { id: ws.id },
+            data: {
+              businessType: newBusinessType,
+              settings: {
+                ...s,
+                enabledModules: mods,
+              },
+            },
+          });
+          this.logger.log(`✔ Restored old settings (projects & tasks active) for workspace ${ws.name} (${ws.id})`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Workspace settings restore check note: ${err?.message || err}`);
     }
   }
 

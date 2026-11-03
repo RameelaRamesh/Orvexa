@@ -261,9 +261,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     );
   };
 
-  const enabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
-    'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'quality', 'sla', 'settings'
+  const rawEnabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
+    'people', 'projects', 'tasks', 'time', 'attendance', 'quality', 'sla', 'settings'
   ];
+  // Guarantee 'projects' and 'tasks' are always active in enabledModules (never replaced by work_queue)
+  const enabledModules: string[] = Array.from(new Set([...rawEnabledModules, 'projects', 'tasks']));
 
   const allNavItems = [
     { name: 'Home / My Work', href: '/app/home', icon: Home, visible: true },
@@ -283,13 +285,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Projects & Tasks',
       href: '/app/projects',
       icon: CheckSquare,
-      visible: (hasPerm('projects:view') || hasPerm('tasks:view')) && (enabledModules.includes('projects') || enabledModules.includes('tasks')),
+      visible: true,
     },
     {
       name: 'Operations Queue',
       href: '/app/work-queue',
       icon: Layers,
-      visible: hasPerm('work_items:view') && enabledModules.includes('work_queue'),
+      visible: hasPerm('work_items:view') && rawEnabledModules.includes('work_queue'),
     },
     {
       name: 'People Directory',

@@ -65,7 +65,30 @@ export default function TimeAttendancePage() {
 
   // Interactive Inputs
   const [sessionNotes, setSessionNotes] = useState('');
-  const [selectedBreakType, setSelectedBreakType] = useState('SHORT_BREAK');
+  const [selectedBreakType, setSelectedBreakType] = useState('TEA_COFFEE');
+  const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+  // Live ticking timer for real-time shift and break tracking
+  useEffect(() => {
+    setCurrentTime(new Date());
+    const tickInterval = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 1000);
+    return () => clearInterval(tickInterval);
+  }, []);
+
+  const formatElapsed = (startDateStr: string | null | undefined) => {
+    if (!startDateStr || !currentTime) return '00:00:00';
+    const start = new Date(startDateStr).getTime();
+    if (isNaN(start)) return '00:00:00';
+    const elapsedSeconds = Math.max(0, Math.floor((currentTime.getTime() - start) / 1000));
+    const hours = Math.floor(elapsedSeconds / 3600);
+    const minutes = Math.floor((elapsedSeconds % 3600) / 60);
+    const seconds = elapsedSeconds % 60;
+
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  };
 
   // Correction Modal State
   const [showCorrectionModal, setShowCorrectionModal] = useState(false);
@@ -236,6 +259,12 @@ export default function TimeAttendancePage() {
       }
     }
     loadAllData();
+
+    // Periodic live sync every 30s
+    const syncInterval = setInterval(() => {
+      loadAllData();
+    }, 30000);
+    return () => clearInterval(syncInterval);
   }, [filterDate]);
 
   // Clock Actions
@@ -839,13 +868,31 @@ export default function TimeAttendancePage() {
                       {isAttendanceDisabled ? (
                         'Attendance Disabled'
                       ) : isOnBreak ? (
-                        <span className="text-amber-600 dark:text-amber-400">
-                          On Break ({activeBreak?.breakType || 'Break'})
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span className="text-amber-600 dark:text-amber-400">
+                            On Break ({activeBreak?.breakType === 'TEA_COFFEE' ? 'Tea Break' : (activeBreak?.breakType || 'Break').replace('_', ' ')})
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                            </span>
+                            <span>LIVE BREAK: {formatElapsed(activeBreak?.breakStart)}</span>
+                          </span>
+                        </div>
                       ) : isClockedIn ? (
-                        <span className="text-emerald-600 dark:text-emerald-400">
-                          Active On Shift (Session #{sessionsCount})
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2.5">
+                          <span className="text-emerald-600 dark:text-emerald-400">
+                            Active On Shift (Session #{sessionsCount})
+                          </span>
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                            <span className="relative flex h-2 w-2">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                            </span>
+                            <span>LIVE: {formatElapsed(todayData?.clockIn)}</span>
+                          </span>
+                        </div>
                       ) : sessionsCount > 0 ? (
                         <span>
                           Shift Completed ({sessionsCount} session{sessionsCount > 1 ? 's' : ''} logged)
@@ -855,9 +902,13 @@ export default function TimeAttendancePage() {
                       )}
                     </div>
                     <div className="text-xs text-muted-foreground mt-1">
-                      {isClockedIn ? (
+                      {isOnBreak ? (
                         <span>
-                          Clocked In at {new Date(todayData.clockIn).toLocaleTimeString()} • Today&apos;s Total Work: {todayData.todaySummary?.totalWorkHours || '0'} hrs
+                          Break Started at {new Date(activeBreak?.breakStart).toLocaleTimeString()} • Break Elapsed: <strong className="font-mono text-foreground">{formatElapsed(activeBreak?.breakStart)}</strong>
+                        </span>
+                      ) : isClockedIn ? (
+                        <span>
+                          Clocked In at {new Date(todayData.clockIn).toLocaleTimeString()} • Live Elapsed: <strong className="font-mono text-foreground">{formatElapsed(todayData.clockIn)}</strong> • Today&apos;s Total Work: {todayData.todaySummary?.totalWorkHours || '0'} hrs
                         </span>
                       ) : sessionsCount > 0 ? (
                         <span>
@@ -905,9 +956,9 @@ export default function TimeAttendancePage() {
                             onChange={(e) => setSelectedBreakType(e.target.value)}
                             className="h-10 text-xs px-2.5 rounded-lg border border-border bg-background text-foreground"
                           >
+                            <option value="TEA_COFFEE">Tea/Coffee Break</option>
                             <option value="SHORT_BREAK">Short Break</option>
                             <option value="LUNCH">Lunch Break</option>
-                            <option value="TEA_COFFEE">Tea/Coffee Break</option>
                             <option value="PERSONAL">Personal Break</option>
                           </select>
                           <Button

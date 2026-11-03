@@ -209,9 +209,12 @@ export default function SettingsPage() {
           if (wsData.settings) {
             setCountry(wsData.settings.country || 'United States');
             setTimezone(wsData.settings.timezone || 'UTC-05:00 (Eastern Time)');
-            setEnabledModules(wsData.settings.enabledModules || [
-              'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
-            ]);
+            const loadedMods = wsData.settings.enabledModules || [
+              'people', 'projects', 'tasks', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
+            ];
+            // Ensure 'projects' and 'tasks' are always enabled and preserved
+            const healedMods = Array.from(new Set([...loadedMods, 'projects', 'tasks']));
+            setEnabledModules(healedMods);
           }
         }
       }
@@ -310,10 +313,10 @@ export default function SettingsPage() {
   // Handler 2: Apply Profile Layout
   const handleApplyPreset = async (profileId: string) => {
     let presetModules = [
-      'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
+      'people', 'projects', 'tasks', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
     ];
     if (profileId === 'CORE_OPS') {
-      presetModules = ['people', 'work_queue', 'quality', 'sla', 'time', 'attendance', 'leave', 'approvals'];
+      presetModules = ['people', 'projects', 'tasks', 'quality', 'sla', 'time', 'attendance', 'leave', 'approvals'];
     } else if (profileId === 'PROJECTS_DELIVERY') {
       presetModules = ['people', 'projects', 'tasks', 'time', 'clients', 'approvals'];
     } else if (profileId === 'LEAN_SERVICES') {
@@ -1067,8 +1070,8 @@ export default function SettingsPage() {
 
   // Operational Profile Presets
   const templatePresets = [
-    { id: 'GENERAL', name: 'Comprehensive Suite', icon: Sparkles, desc: 'Universal operations workspace with all modules and engines enabled.' },
-    { id: 'CORE_OPS', name: 'Core Operations', icon: LayoutGrid, desc: 'Optimized for high-throughput processing queues, QA audits, SLAs, and attendance.' },
+    { id: 'GENERAL', name: 'Comprehensive Suite', icon: Sparkles, desc: 'Universal operations workspace with all standard modules (Projects, Tasks, People, Time, Attendance, QA, SLAs) enabled.' },
+    { id: 'CORE_OPS', name: 'Core Operations', icon: LayoutGrid, desc: 'Optimized for operations execution, work projects, tasks, QA audits, SLAs, and attendance.' },
     { id: 'PROJECTS_DELIVERY', name: 'Projects & Delivery', icon: Briefcase, desc: 'Optimized for projects, tasks, milestones, approvals, and client delivery.' },
     { id: 'LEAN_SERVICES', name: 'Lean Professional Services', icon: DollarSign, desc: 'Optimized for client deliverables, approval chains, time logging, and billing.' },
   ];
