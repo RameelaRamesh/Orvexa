@@ -42,8 +42,196 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
+  Package,
 } from 'lucide-react';
 import { toast } from 'sonner';
+
+const DEFAULT_PERMISSIONS_CATALOG = [
+  // Assets (5)
+  { id: 'perm_assets_view', code: 'assets:view', name: 'View company assets', module: 'Assets' },
+  { id: 'perm_assets_create', code: 'assets:create', name: 'Register new assets', module: 'Assets' },
+  { id: 'perm_assets_edit', code: 'assets:edit', name: 'Edit asset details', module: 'Assets' },
+  { id: 'perm_assets_assign', code: 'assets:assign', name: 'Assign assets to people', module: 'Assets' },
+  { id: 'perm_assets_delete', code: 'assets:delete', name: 'Delete assets', module: 'Assets' },
+
+  // Inventory (3)
+  { id: 'perm_inv_view', code: 'inventory:view', name: 'View stock and locations', module: 'Inventory' },
+  { id: 'perm_inv_move', code: 'inventory:move', name: 'Move stock between locations', module: 'Inventory' },
+  { id: 'perm_inv_manage', code: 'inventory:manage', name: 'Manage locations and low-stock rules', module: 'Inventory' },
+
+  // Ledger (2)
+  { id: 'perm_led_view', code: 'ledger:view', name: 'View movement ledger', module: 'Ledger' },
+  { id: 'perm_led_export', code: 'ledger:export', name: 'Export ledger', module: 'Ledger' },
+
+  // Documents (4)
+  { id: 'perm_doc_view', code: 'documents:view', name: 'View document vault', module: 'Documents' },
+  { id: 'perm_doc_upload', code: 'documents:upload', name: 'Upload documents', module: 'Documents' },
+  { id: 'perm_doc_download', code: 'documents:download', name: 'Download documents', module: 'Documents' },
+  { id: 'perm_doc_delete', code: 'documents:delete', name: 'Delete documents', module: 'Documents' },
+
+  // People
+  { id: 'perm_people_view', code: 'people:view', name: 'View Employee Directory & Profiles', module: 'People' },
+  { id: 'perm_people_create', code: 'people:create', name: 'Add & Onboard Employees', module: 'People' },
+  { id: 'perm_people_edit', code: 'people:edit', name: 'Edit Employee Records & Assignments', module: 'People' },
+  { id: 'perm_people_delete', code: 'people:delete', name: 'Deactivate & Offboard Employees', module: 'People' },
+  { id: 'perm_people_export', code: 'people:export', name: 'Export Employee Records', module: 'People' },
+  { id: 'perm_people_manage', code: 'people:manage', name: 'Full People Administration', module: 'People' },
+
+  // Projects
+  { id: 'perm_proj_view', code: 'projects:view', name: 'View Work Projects', module: 'Projects' },
+  { id: 'perm_proj_create', code: 'projects:create', name: 'Create Projects & Milestones', module: 'Projects' },
+  { id: 'perm_proj_edit', code: 'projects:edit', name: 'Edit Project Settings', module: 'Projects' },
+  { id: 'perm_proj_delete', code: 'projects:delete', name: 'Archive & Delete Projects', module: 'Projects' },
+  { id: 'perm_proj_manage', code: 'projects:manage', name: 'Full Project Administration', module: 'Projects' },
+
+  // Tasks
+  { id: 'perm_tasks_view', code: 'tasks:view', name: 'View Tasks & Taskboards', module: 'Tasks' },
+  { id: 'perm_tasks_create', code: 'tasks:create', name: 'Create Tasks', module: 'Tasks' },
+  { id: 'perm_tasks_edit', code: 'tasks:edit', name: 'Update Task Progress & Details', module: 'Tasks' },
+  { id: 'perm_tasks_delete', code: 'tasks:delete', name: 'Delete Tasks', module: 'Tasks' },
+  { id: 'perm_tasks_assign', code: 'tasks:assign', name: 'Assign Tasks to Team Members', module: 'Tasks' },
+  { id: 'perm_tasks_export', code: 'tasks:export', name: 'Export Tasks & Backlogs', module: 'Tasks' },
+  { id: 'perm_tasks_manage', code: 'tasks:manage', name: 'Full Task Administration', module: 'Tasks' },
+
+  // WorkQueue
+  { id: 'perm_wq_view', code: 'work_items:view', name: 'View Operations Queues', module: 'WorkQueue' },
+  { id: 'perm_wq_process', code: 'work_items:process', name: 'Process Operational Queue Items', module: 'WorkQueue' },
+  { id: 'perm_wq_assign', code: 'work_items:assign', name: 'Assign & Reorder Work Items', module: 'WorkQueue' },
+  { id: 'perm_wq_export', code: 'work_items:export', name: 'Export Queue Data', module: 'WorkQueue' },
+  { id: 'perm_wq_manage', code: 'work_items:manage', name: 'Full Operations Queue Administration', module: 'WorkQueue' },
+
+  // Time
+  { id: 'perm_time_view', code: 'time:view', name: 'View Timesheets & Time Logs', module: 'Time' },
+  { id: 'perm_time_log', code: 'time:log', name: 'Log Work Hours & Timer', module: 'Time' },
+  { id: 'perm_time_edit', code: 'time:edit', name: 'Edit Logged Timesheets', module: 'Time' },
+  { id: 'perm_time_approve', code: 'time:approve', name: 'Approve Team Timesheets', module: 'Time' },
+  { id: 'perm_time_export', code: 'time:export', name: 'Export Timesheet Logs', module: 'Time' },
+  { id: 'perm_time_manage', code: 'time:manage', name: 'Full Time & Shift Administration', module: 'Time' },
+
+  // Attendance
+  { id: 'perm_att_view', code: 'attendance:view', name: 'View Attendance Records & History', module: 'Attendance' },
+  { id: 'perm_att_clock', code: 'attendance:clock', name: 'Clock In, Clock Out & Shift Tracker', module: 'Attendance' },
+  { id: 'perm_att_edit', code: 'attendance:edit', name: 'Adjust Attendance Records', module: 'Attendance' },
+  { id: 'perm_att_export', code: 'attendance:export', name: 'Export Attendance Reports', module: 'Attendance' },
+  { id: 'perm_att_manage', code: 'attendance:manage', name: 'Full Attendance & Shift Administration', module: 'Attendance' },
+
+  // Leave
+  { id: 'perm_leave_view', code: 'leave:view', name: 'View Leave Balances & Team Calendar', module: 'Leave' },
+  { id: 'perm_leave_apply', code: 'leave:apply', name: 'Apply for Leave & PTO', module: 'Leave' },
+  { id: 'perm_leave_approve', code: 'leave:approve', name: 'Approve or Reject Leave Requests', module: 'Leave' },
+  { id: 'perm_leave_manage', code: 'leave:manage', name: 'Full Leave Policy Administration', module: 'Leave' },
+
+  // Approvals
+  { id: 'perm_app_view', code: 'approvals:view', name: 'View Pending Approvals', module: 'Approvals' },
+  { id: 'perm_app_approve', code: 'approvals:approve', name: 'Approve or Reject Operational Items', module: 'Approvals' },
+  { id: 'perm_app_manage', code: 'approvals:manage', name: 'Configure Approval Chains', module: 'Approvals' },
+
+  // Quality
+  { id: 'perm_qa_view', code: 'quality:view', name: 'View Quality Audit Scorecards', module: 'Quality' },
+  { id: 'perm_qa_audit', code: 'quality:audit', name: 'Perform Quality Audits', module: 'Quality' },
+  { id: 'perm_qa_review', code: 'quality:review', name: 'Conduct QA Reviews', module: 'Quality' },
+  { id: 'perm_qa_manage', code: 'quality:manage', name: 'Configure Quality Scorecards & Thresholds', module: 'Quality' },
+
+  // SLA
+  { id: 'perm_sla_view', code: 'sla:view', name: 'View SLA Metrics & Breaches', module: 'SLA' },
+  { id: 'perm_sla_manage', code: 'sla:manage', name: 'Configure SLA Deadlines & Escalation Rules', module: 'SLA' },
+
+  // Clients
+  { id: 'perm_cli_view', code: 'clients:view', name: 'View Client Accounts', module: 'Clients' },
+  { id: 'perm_cli_create', code: 'clients:create', name: 'Create Client Accounts', module: 'Clients' },
+  { id: 'perm_cli_edit', code: 'clients:edit', name: 'Edit Client Profiles', module: 'Clients' },
+  { id: 'perm_cli_delete', code: 'clients:delete', name: 'Archive Client Accounts', module: 'Clients' },
+  { id: 'perm_cli_manage', code: 'clients:manage', name: 'Full Client Administration', module: 'Clients' },
+
+  // Reports
+  { id: 'perm_rep_view', code: 'reports:view', name: 'View Operational Reports & Dashboards', module: 'Reports' },
+  { id: 'perm_rep_export', code: 'reports:export', name: 'Export Analytic Reports', module: 'Reports' },
+
+  // Payroll
+  { id: 'perm_pay_view', code: 'payroll:view', name: 'View Restricted Payroll & Salaries', module: 'Payroll' },
+  { id: 'perm_pay_edit', code: 'payroll:edit', name: 'Edit Compensation & Deductions', module: 'Payroll' },
+  { id: 'perm_pay_approve', code: 'payroll:approve', name: 'Approve Payroll Disbursals', module: 'Payroll' },
+  { id: 'perm_pay_export', code: 'payroll:export', name: 'Export Sensitive Payroll Reports', module: 'Payroll' },
+  { id: 'perm_pay_manage', code: 'payroll:manage', name: 'Full Payroll Administration', module: 'Payroll' },
+
+  // Admin & Org
+  { id: 'perm_org_manage', code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
+  { id: 'perm_inv_mgmt', code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
+  { id: 'perm_role_manage', code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },
+  { id: 'perm_dept_manage', code: 'departments:manage', name: 'Manage Departments & Teams', module: 'Departments' },
+  { id: 'perm_sett_manage', code: 'settings:manage', name: 'Manage Workspace Settings', module: 'Settings' },
+  { id: 'perm_bill_manage', code: 'billing:manage', name: 'Manage Subscriptions & Billing', module: 'Billing' },
+];
+
+const DEFAULT_SYSTEM_ROLES = [
+  {
+    id: 'role_admin',
+    name: 'ADMIN',
+    description: 'Organization administration: invites, departments, module policies, and operations',
+    isSystemRole: true,
+    isActive: true,
+    _count: { memberships: 2 },
+    permissions: DEFAULT_PERMISSIONS_CATALOG
+      .filter((p) => p.code !== 'billing:manage')
+      .map((p) => ({ permissionId: p.id, code: p.code, permission: p })),
+  },
+  {
+    id: 'role_manager',
+    name: 'MANAGER',
+    description: 'Team and operations management: workloads, attendance, timesheets, leaves, and quality reviews',
+    isSystemRole: true,
+    isActive: true,
+    _count: { memberships: 2 },
+    permissions: [
+      'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+      'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
+      'projects:view', 'projects:create', 'projects:edit',
+      'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+      'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+      'leave:view', 'leave:apply', 'leave:approve',
+      'approvals:view', 'approvals:approve',
+      'quality:view', 'quality:audit', 'quality:review',
+      'sla:view', 'reports:view', 'people:view',
+      'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+      'inventory:view', 'inventory:move',
+      'ledger:view', 'ledger:export',
+      'documents:view', 'documents:upload', 'documents:download',
+    ].map((code) => {
+      const p = DEFAULT_PERMISSIONS_CATALOG.find((x) => x.code === code);
+      return { permissionId: p?.id || code, code, permission: p };
+    }),
+  },
+  {
+    id: 'role_member',
+    name: 'MEMBER',
+    description: 'Individual contributor: assigned tasks, projects, operational work, attendance, and personal profile',
+    isSystemRole: true,
+    isActive: true,
+    _count: { memberships: 6 },
+    permissions: [
+      'tasks:view', 'tasks:create', 'tasks:edit',
+      'projects:view',
+      'work_items:view', 'work_items:process',
+      'time:view', 'time:log',
+      'attendance:view', 'attendance:clock',
+      'leave:view', 'leave:apply',
+      'approvals:view',
+      'people:view',
+    ].map((code) => {
+      const p = DEFAULT_PERMISSIONS_CATALOG.find((x) => x.code === code);
+      return { permissionId: p?.id || code, code, permission: p };
+    }),
+  },
+  {
+    id: 'role_owner',
+    name: 'OWNER',
+    description: 'Organization ownership: controls settings, billing, plan management, and delegated authority',
+    isSystemRole: true,
+    isActive: true,
+    _count: { memberships: 1 },
+    permissions: DEFAULT_PERMISSIONS_CATALOG.map((p) => ({ permissionId: p.id, code: p.code, permission: p })),
+  },
+];
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'details' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
@@ -83,9 +271,9 @@ export default function SettingsPage() {
   const [enabledModules, setEnabledModules] = useState<string[]>([]);
 
   // Roles & Permissions state
-  const [roles, setRoles] = useState<any[]>([]);
-  const [allPermissions, setAllPermissions] = useState<any[]>([]);
-  const [selectedRoleId, setSelectedRoleId] = useState<string | null>(null);
+  const [roles, setRoles] = useState<any[]>(DEFAULT_SYSTEM_ROLES);
+  const [allPermissions, setAllPermissions] = useState<any[]>(DEFAULT_PERMISSIONS_CATALOG);
+  const [selectedRoleId, setSelectedRoleId] = useState<string | null>('role_admin');
   const [newRoleName, setNewRoleName] = useState('');
   const [newRoleDesc, setNewRoleDesc] = useState('');
   const [creatingRole, setCreatingRole] = useState(false);
@@ -407,9 +595,17 @@ export default function SettingsPage() {
     const role = roles.find((r) => r.id === roleId);
     if (!role) return;
 
-    const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.id || p);
-    const targetPerm = allPermissions.find((p) => p.id === permId || p.code === permId);
-    const isCurrentlyChecked = currentPermIds.includes(permId);
+    const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.permission?.id || p.id || p.code || (typeof p === 'string' ? p : '')).filter(Boolean);
+    const targetPerm = (allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG).find((p) => p.id === permId || p.code === permId);
+    const isCurrentlyChecked = (role.permissions || []).some((p: any) =>
+      p === permId ||
+      p.permissionId === permId ||
+      p.id === permId ||
+      p.permission?.id === permId ||
+      p.permission?.code === permId ||
+      p.code === permId ||
+      (targetPerm && (p.permission?.code === targetPerm.code || p.code === targetPerm.code || p.permissionId === targetPerm.id))
+    );
 
     let updatedPermIds: string[];
 
@@ -1089,6 +1285,7 @@ export default function SettingsPage() {
     { key: 'sla', name: 'SLA & Escalations', icon: Sliders, desc: 'Turnaround deadlines, breach warnings, and automatic supervisor alerts.' },
     { key: 'clients', name: 'Client Portal', icon: Building2, desc: 'Client account management, external portal access, and contracts.' },
     { key: 'billing', name: 'Invoicing & Billing', icon: DollarSign, desc: 'Service billing, payment tracking, and financial summary reports.' },
+    { key: 'assets', name: 'Assets, Inventory & Docs', icon: Package, desc: 'Company hardware and asset tracking, stock inventory, movements ledger, and document vault.' },
   ];
 
   // Operational Profile Presets
@@ -1610,10 +1807,11 @@ export default function SettingsPage() {
 
                 {/* Permissions by Module */}
                 <div className="space-y-6 max-h-[620px] overflow-y-auto pr-2 mt-6">
-                  {Array.from(new Set(allPermissions.map((p) => p.module || 'General')))
+                  {Array.from(new Set((allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG).map((p) => p.module || 'General')))
                     .sort((a, b) => a.localeCompare(b))
                     .map((modName) => {
-                      const modPerms = allPermissions
+                      const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
+                      const modPerms = effectiveCatalog
                         .filter((p) => (p.module || 'General') === modName)
                         .sort((a, b) => a.code.localeCompare(b.code));
 

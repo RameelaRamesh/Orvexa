@@ -69,6 +69,25 @@ async function main() {
     { code: 'reports:view', name: 'View Operational Reports & Dashboards', module: 'Reports' },
     { code: 'reports:export', name: 'Export Analytic Reports', module: 'Reports' },
 
+    // Assets, Inventory, Ledger & Documents
+    { code: 'assets:view', name: 'View company assets', module: 'Assets' },
+    { code: 'assets:create', name: 'Register new assets', module: 'Assets' },
+    { code: 'assets:edit', name: 'Edit asset details', module: 'Assets' },
+    { code: 'assets:assign', name: 'Assign assets to people', module: 'Assets' },
+    { code: 'assets:delete', name: 'Delete assets', module: 'Assets' },
+
+    { code: 'inventory:view', name: 'View stock and locations', module: 'Inventory' },
+    { code: 'inventory:move', name: 'Move stock between locations', module: 'Inventory' },
+    { code: 'inventory:manage', name: 'Manage locations and low-stock rules', module: 'Inventory' },
+
+    { code: 'ledger:view', name: 'View movement ledger', module: 'Ledger' },
+    { code: 'ledger:export', name: 'Export ledger', module: 'Ledger' },
+
+    { code: 'documents:view', name: 'View document vault', module: 'Documents' },
+    { code: 'documents:upload', name: 'Upload documents', module: 'Documents' },
+    { code: 'documents:download', name: 'Download documents', module: 'Documents' },
+    { code: 'documents:delete', name: 'Delete documents', module: 'Documents' },
+
     { code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
     { code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
     { code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },
@@ -118,6 +137,10 @@ async function main() {
     'projects:view', 'projects:create', 'projects:edit',
     'leave:view', 'leave:apply', 'leave:approve',
     'people:view', 'reports:view', 'approvals:view', 'approvals:approve',
+    'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+    'inventory:view', 'inventory:move',
+    'ledger:view', 'ledger:export',
+    'documents:view', 'documents:upload', 'documents:download',
   ];
   const memberPermCodes = [
     'tasks:view', 'tasks:create', 'tasks:edit',

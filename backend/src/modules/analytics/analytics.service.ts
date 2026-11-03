@@ -531,7 +531,7 @@ export class AnalyticsService {
       });
 
       for (const t of tasks) {
-        const taskDate = t.dueDate || t.startDate || t.createdAt || new Date();
+        const taskDate = t.dueDate || (t as any).startDate || t.createdAt || new Date();
         const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
         const dateIso = taskDate.toISOString();
         const prefix = t.dueDate ? 'Due' : 'Task';

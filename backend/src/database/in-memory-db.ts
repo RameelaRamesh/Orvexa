@@ -138,6 +138,183 @@ export class InMemoryDatabase {
       });
     });
 
+    // Seed Permissions
+    const permsSeed = [
+      // Assets, Inventory, Ledger & Documents (14)
+      { code: 'assets:view', name: 'View company assets', module: 'Assets' },
+      { code: 'assets:create', name: 'Register new assets', module: 'Assets' },
+      { code: 'assets:edit', name: 'Edit asset details', module: 'Assets' },
+      { code: 'assets:assign', name: 'Assign assets to people', module: 'Assets' },
+      { code: 'assets:delete', name: 'Delete assets', module: 'Assets' },
+
+      { code: 'inventory:view', name: 'View stock and locations', module: 'Inventory' },
+      { code: 'inventory:move', name: 'Move stock between locations', module: 'Inventory' },
+      { code: 'inventory:manage', name: 'Manage locations and low-stock rules', module: 'Inventory' },
+
+      { code: 'ledger:view', name: 'View movement ledger', module: 'Ledger' },
+      { code: 'ledger:export', name: 'Export ledger', module: 'Ledger' },
+
+      { code: 'documents:view', name: 'View document vault', module: 'Documents' },
+      { code: 'documents:upload', name: 'Upload documents', module: 'Documents' },
+      { code: 'documents:download', name: 'Download documents', module: 'Documents' },
+      { code: 'documents:delete', name: 'Delete documents', module: 'Documents' },
+
+      // People
+      { code: 'people:view', name: 'View Employee Directory & Profiles', module: 'People' },
+      { code: 'people:create', name: 'Add & Onboard Employees', module: 'People' },
+      { code: 'people:edit', name: 'Edit Employee Records & Assignments', module: 'People' },
+      { code: 'people:delete', name: 'Deactivate & Offboard Employees', module: 'People' },
+      { code: 'people:export', name: 'Export Employee Records', module: 'People' },
+      { code: 'people:manage', name: 'Full People Administration', module: 'People' },
+
+      // Projects
+      { code: 'projects:view', name: 'View Work Projects', module: 'Projects' },
+      { code: 'projects:create', name: 'Create Projects & Milestones', module: 'Projects' },
+      { code: 'projects:edit', name: 'Edit Project Settings', module: 'Projects' },
+      { code: 'projects:delete', name: 'Archive & Delete Projects', module: 'Projects' },
+      { code: 'projects:manage', name: 'Full Project Administration', module: 'Projects' },
+
+      // Tasks
+      { code: 'tasks:view', name: 'View Tasks & Taskboards', module: 'Tasks' },
+      { code: 'tasks:create', name: 'Create Tasks', module: 'Tasks' },
+      { code: 'tasks:edit', name: 'Update Task Progress & Details', module: 'Tasks' },
+      { code: 'tasks:delete', name: 'Delete Tasks', module: 'Tasks' },
+      { code: 'tasks:assign', name: 'Assign Tasks to Team Members', module: 'Tasks' },
+      { code: 'tasks:export', name: 'Export Tasks & Backlogs', module: 'Tasks' },
+      { code: 'tasks:manage', name: 'Full Task Administration', module: 'Tasks' },
+
+      // WorkQueue
+      { code: 'work_items:view', name: 'View Operations Queues', module: 'WorkQueue' },
+      { code: 'work_items:process', name: 'Process Operational Queue Items', module: 'WorkQueue' },
+      { code: 'work_items:assign', name: 'Assign & Reorder Work Items', module: 'WorkQueue' },
+      { code: 'work_items:export', name: 'Export Queue Data', module: 'WorkQueue' },
+      { code: 'work_items:manage', name: 'Full Operations Queue Administration', module: 'WorkQueue' },
+
+      // Time
+      { code: 'time:view', name: 'View Timesheets & Time Logs', module: 'Time' },
+      { code: 'time:log', name: 'Log Work Hours & Timer', module: 'Time' },
+      { code: 'time:edit', name: 'Edit Logged Timesheets', module: 'Time' },
+      { code: 'time:approve', name: 'Approve Team Timesheets', module: 'Time' },
+      { code: 'time:export', name: 'Export Timesheet Logs', module: 'Time' },
+      { code: 'time:manage', name: 'Full Time & Shift Administration', module: 'Time' },
+
+      // Attendance
+      { code: 'attendance:view', name: 'View Attendance Records & History', module: 'Attendance' },
+      { code: 'attendance:clock', name: 'Clock In, Clock Out & Shift Tracker', module: 'Attendance' },
+      { code: 'attendance:edit', name: 'Adjust Attendance Records', module: 'Attendance' },
+      { code: 'attendance:export', name: 'Export Attendance Reports', module: 'Attendance' },
+      { code: 'attendance:manage', name: 'Full Attendance & Shift Administration', module: 'Attendance' },
+
+      // Leave
+      { code: 'leave:view', name: 'View Leave Balances & Team Calendar', module: 'Leave' },
+      { code: 'leave:apply', name: 'Apply for Leave & PTO', module: 'Leave' },
+      { code: 'leave:approve', name: 'Approve or Reject Leave Requests', module: 'Leave' },
+      { code: 'leave:manage', name: 'Full Leave Policy Administration', module: 'Leave' },
+
+      // Approvals
+      { code: 'approvals:view', name: 'View Pending Approvals', module: 'Approvals' },
+      { code: 'approvals:approve', name: 'Approve or Reject Operational Items', module: 'Approvals' },
+      { code: 'approvals:manage', name: 'Configure Approval Chains', module: 'Approvals' },
+
+      // Quality
+      { code: 'quality:view', name: 'View Quality Audit Scorecards', module: 'Quality' },
+      { code: 'quality:audit', name: 'Perform Quality Audits', module: 'Quality' },
+      { code: 'quality:review', name: 'Conduct QA Reviews', module: 'Quality' },
+      { code: 'quality:manage', name: 'Configure Quality Scorecards & Thresholds', module: 'Quality' },
+
+      // SLA
+      { code: 'sla:view', name: 'View SLA Metrics & Breaches', module: 'SLA' },
+      { code: 'sla:manage', name: 'Configure SLA Deadlines & Escalation Rules', module: 'SLA' },
+
+      // Clients
+      { code: 'clients:view', name: 'View Client Accounts', module: 'Clients' },
+      { code: 'clients:create', name: 'Create Client Accounts', module: 'Clients' },
+      { code: 'clients:edit', name: 'Edit Client Profiles', module: 'Clients' },
+      { code: 'clients:delete', name: 'Archive Client Accounts', module: 'Clients' },
+      { code: 'clients:manage', name: 'Full Client Administration', module: 'Clients' },
+
+      // Reports
+      { code: 'reports:view', name: 'View Operational Reports & Dashboards', module: 'Reports' },
+      { code: 'reports:export', name: 'Export Analytic Reports', module: 'Reports' },
+
+      // Payroll
+      { code: 'payroll:view', name: 'View Restricted Payroll & Salaries', module: 'Payroll' },
+      { code: 'payroll:edit', name: 'Edit Compensation & Deductions', module: 'Payroll' },
+      { code: 'payroll:approve', name: 'Approve Payroll Disbursals', module: 'Payroll' },
+      { code: 'payroll:export', name: 'Export Sensitive Payroll Reports', module: 'Payroll' },
+      { code: 'payroll:manage', name: 'Full Payroll Administration', module: 'Payroll' },
+
+      // Admin & Org
+      { code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
+      { code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
+      { code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },
+      { code: 'departments:manage', name: 'Manage Departments & Teams', module: 'Departments' },
+      { code: 'settings:manage', name: 'Manage Workspace Settings', module: 'Settings' },
+      { code: 'billing:manage', name: 'Manage Subscriptions & Billing', module: 'Billing' },
+    ];
+
+    for (const p of permsSeed) {
+      const permObj = {
+        id: `perm_${p.code.replace(/[:_]/g, '_')}`,
+        code: p.code,
+        name: p.name,
+        module: p.module,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      this.permissions.push(permObj);
+    }
+
+    const allPermCodes = this.permissions.map((p) => p.code);
+    const adminPermCodes = allPermCodes.filter((c) => c !== 'billing:manage');
+    const managerPermCodes = [
+      'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+      'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
+      'projects:view', 'projects:create', 'projects:edit',
+      'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+      'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+      'leave:view', 'leave:apply', 'leave:approve',
+      'approvals:view', 'approvals:approve',
+      'quality:view', 'quality:audit', 'quality:review',
+      'sla:view', 'reports:view', 'people:view',
+      'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+      'inventory:view', 'inventory:move',
+      'ledger:view', 'ledger:export',
+      'documents:view', 'documents:upload', 'documents:download',
+    ];
+    const memberPermCodes = [
+      'tasks:view', 'tasks:create', 'tasks:edit',
+      'projects:view',
+      'work_items:view', 'work_items:process',
+      'time:view', 'time:log',
+      'attendance:view', 'attendance:clock',
+      'leave:view', 'leave:apply',
+      'approvals:view',
+      'people:view',
+    ];
+
+    const rolePermAssignments: Record<string, string[]> = {
+      role_owner: allPermCodes,
+      role_admin: adminPermCodes,
+      role_manager: managerPermCodes,
+      role_member: memberPermCodes,
+    };
+
+    for (const [rId, codes] of Object.entries(rolePermAssignments)) {
+      for (const code of codes) {
+        const perm = this.permissions.find((p) => p.code === code);
+        if (perm) {
+          this.rolePermissions.push({
+            id: `rp_${rId}_${perm.id}`,
+            roleId: rId,
+            permissionId: perm.id,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+        }
+      }
+    }
+
     // Departments
     this.departments.push(
       { id: 'dept_exec', name: 'Executive', workspaceId: wsId },

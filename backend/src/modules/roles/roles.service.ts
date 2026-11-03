@@ -428,6 +428,7 @@ export class RolesService {
    * Decoupled from job designations, departments, and custom permission matrices.
    */
   public async ensureSystemRoles() {
+    await this.ensureSystemPermissions();
     const platformRoles = [
       {
         name: 'OWNER',
