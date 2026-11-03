@@ -20,6 +20,11 @@ import {
   RefreshCw,
   Eye,
   Filter,
+  User,
+  Users,
+  CheckSquare,
+  Folder,
+  Tag,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -42,7 +47,53 @@ export default function UniversalCalendarPage() {
   const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'week' | 'agenda'>('month');
+  const [viewMode, setViewMode] = useState<'month' | 'agenda'>('month');
+
+  // Scope: 'mine' shows strictly the logged in user's tasks/deadlines; 'all' shows team
+  const [scopeMode, setScopeMode] = useState<'mine' | 'all'>('mine');
+
+  // Logged-in user information
+  const [currentUserId, setCurrentUserId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p?.id || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [currentMembershipId, setCurrentMembershipId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const w = JSON.parse(localStorage.getItem('orvexa_cached_workspace') || '{}');
+      return w?.id || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p?.email || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [currentUserName, setCurrentUserName] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      const first = p?.firstName || '';
+      const last = p?.lastName || '';
+      return `${first} ${last}`.trim();
+    } catch {
+      return '';
+    }
+  });
 
   // Active Layers
   const [activeLayers, setActiveLayers] = useState<string[]>([
@@ -74,6 +125,57 @@ export default function UniversalCalendarPage() {
     return `${y}-${m}-${day}`;
   };
 
+  // Helper to check if a task belongs to current logged-in user
+  const checkIsMyTask = (
+    task: any,
+    memId: string,
+    usrId: string,
+    email: string,
+    fullName: string,
+  ) => {
+    const emailLower = (email || '').toLowerCase().trim();
+    const nameLower = (fullName || '').toLowerCase().trim();
+
+    // 1. Direct assignee membership ID
+    if (memId && (task.assigneeMembershipId === memId || task.assignee?.id === memId)) {
+      return true;
+    }
+
+    // 2. User ID
+    if (usrId && (task.assignee?.userId === usrId || task.assignee?.user?.id === usrId)) {
+      return true;
+    }
+
+    // 3. User Email
+    if (emailLower && task.assignee?.user?.email?.toLowerCase().trim() === emailLower) {
+      return true;
+    }
+
+    // 4. Name match
+    if (nameLower && task.assignee?.user) {
+      const aName = `${task.assignee.user.firstName || ''} ${task.assignee.user.lastName || ''}`
+        .toLowerCase()
+        .trim();
+      if (aName && (aName === nameLower || aName.includes(nameLower) || nameLower.includes(aName))) {
+        return true;
+      }
+    }
+
+    // 5. Multi-assignee list
+    const assigneeIds = Array.isArray(task.assigneeMembershipIds)
+      ? task.assigneeMembershipIds
+      : Array.isArray(task.sla?.assigneeMembershipIds)
+      ? task.sla.assigneeMembershipIds
+      : [];
+    if (memId && assigneeIds.includes(memId)) return true;
+
+    // 6. Collaborators
+    const collabIds = Array.isArray(task.collaboratorIds) ? task.collaboratorIds : [];
+    if (memId && collabIds.includes(memId)) return true;
+
+    return false;
+  };
+
   // Calculate Start & End of Month / Range
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -100,11 +202,44 @@ export default function UniversalCalendarPage() {
       };
 
       // Query both the analytics calendar and raw modules concurrently for guaranteed coverage
-      const [calRes, tasksRes, leavesRes] = await Promise.all([
+      const [calRes, tasksRes, leavesRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null),
         fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null),
         fetch(`${BRANDING.apiUrl}/leave`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }).catch(() => null),
       ]);
+
+      // Resolve live user identity
+      let myUserId = currentUserId;
+      let myMemId = currentMembershipId;
+      let myEmail = currentUserEmail;
+      let myName = currentUserName;
+
+      if (meRes && meRes.ok) {
+        const meJson = await meRes.json().catch(() => ({}));
+        const userObj = meJson?.data?.user || meJson?.data || meJson?.user || {};
+        const memberships = meJson?.data?.memberships || userObj?.memberships || meJson?.memberships || [];
+        const activeMem = memberships.find((m: any) => m.workspaceId === wsId) || memberships[0];
+
+        if (userObj.id) {
+          myUserId = userObj.id;
+          setCurrentUserId(userObj.id);
+        }
+        if (userObj.email) {
+          myEmail = userObj.email;
+          setCurrentUserEmail(userObj.email);
+        }
+        const fName = userObj.firstName || '';
+        const lName = userObj.lastName || '';
+        if (fName || lName) {
+          myName = `${fName} ${lName}`.trim();
+          setCurrentUserName(myName);
+        }
+        if (activeMem?.id) {
+          myMemId = activeMem.id;
+          setCurrentMembershipId(activeMem.id);
+        }
+      }
 
       const mergedEventsMap = new Map<string, CalendarEvent>();
 
@@ -113,7 +248,19 @@ export default function UniversalCalendarPage() {
         const calJson = await calRes.json().catch(() => ({}));
         if (Array.isArray(calJson.events)) {
           for (const ev of calJson.events) {
-            mergedEventsMap.set(ev.id || `${ev.entityType}-${ev.entityId}`, ev);
+            const assignee = ev.details?.assigneeName || '';
+            const member = ev.details?.memberName || '';
+            const isForMe =
+              (myName && (assignee.toLowerCase().includes(myName.toLowerCase()) || member.toLowerCase().includes(myName.toLowerCase()))) ||
+              (myEmail && (assignee.toLowerCase().includes(myEmail.toLowerCase()) || member.toLowerCase().includes(myEmail.toLowerCase())));
+
+            mergedEventsMap.set(ev.id || `${ev.entityType}-${ev.entityId}`, {
+              ...ev,
+              details: {
+                ...ev.details,
+                isAssignedToMe: isForMe,
+              },
+            });
           }
         }
       }
@@ -125,34 +272,36 @@ export default function UniversalCalendarPage() {
 
         for (const t of rawTasks) {
           const key = `task-${t.id}`;
-          if (!mergedEventsMap.has(key)) {
-            const taskDate = t.dueDate || t.startDate || t.createdAt || new Date().toISOString();
-            const dateIso = new Date(taskDate).toISOString();
-            const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
-            const assigneeName = t.assignee?.user
-              ? `${t.assignee.user.firstName || ''} ${t.assignee.user.lastName || ''}`.trim()
-              : (t.assigneeMembershipId ? 'Assigned Member' : 'Unassigned');
+          const isForMe = checkIsMyTask(t, myMemId, myUserId, myEmail, myName);
+          const taskDate = t.dueDate || t.startDate || t.createdAt || new Date().toISOString();
+          const dateIso = new Date(taskDate).toISOString();
+          const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+          const assigneeName = t.assignee?.user
+            ? `${t.assignee.user.firstName || ''} ${t.assignee.user.lastName || ''}`.trim()
+            : (t.assigneeMembershipId ? 'Assigned Member' : 'Unassigned');
 
-            mergedEventsMap.set(key, {
-              id: key,
-              title: `${t.dueDate ? 'Due' : 'Task'}: ${t.title} [${t.priority || 'MEDIUM'}]`,
-              type: 'TASK_DEADLINE',
-              layer: 'TASKS',
-              startDate: dateIso,
-              endDate: t.dueDate ? new Date(t.dueDate).toISOString() : dateIso,
-              allDay: true,
-              status: t.status || 'TODO',
-              color: isUrgent ? '#ef4444' : '#8b5cf6',
-              entityType: 'TASK',
-              entityId: t.id,
-              details: {
-                projectName: t.project?.name || 'General',
-                assigneeName,
-                priority: t.priority || 'MEDIUM',
-                dueDate: t.dueDate || null,
-              },
-            });
-          }
+          mergedEventsMap.set(key, {
+            id: key,
+            title: `${t.dueDate ? 'Due' : 'Task'}: ${t.title} [${t.priority || 'MEDIUM'}]`,
+            type: 'TASK_DEADLINE',
+            layer: 'TASKS',
+            startDate: dateIso,
+            endDate: t.dueDate ? new Date(t.dueDate).toISOString() : dateIso,
+            allDay: true,
+            status: t.status || 'TODO',
+            color: isUrgent ? '#ef4444' : '#8b5cf6',
+            entityType: 'TASK',
+            entityId: t.id,
+            details: {
+              title: t.title,
+              description: t.description || null,
+              projectName: t.project?.name || 'General',
+              assigneeName,
+              priority: t.priority || 'MEDIUM',
+              dueDate: t.dueDate || null,
+              isAssignedToMe: isForMe,
+            },
+          });
         }
       }
 
@@ -163,10 +312,13 @@ export default function UniversalCalendarPage() {
 
         for (const l of rawLeaves) {
           const key = `leave-${l.id}`;
-          if (!mergedEventsMap.has(key) && l.startDate) {
+          if (l.startDate) {
             const memberName = l.membership?.user
               ? `${l.membership.user.firstName || ''} ${l.membership.user.lastName || ''}`.trim()
               : 'Team Member';
+            const isForMe =
+              (myMemId && l.membershipId === myMemId) ||
+              (myName && memberName.toLowerCase().includes(myName.toLowerCase()));
 
             mergedEventsMap.set(key, {
               id: key,
@@ -184,6 +336,7 @@ export default function UniversalCalendarPage() {
                 memberName,
                 reason: l.reason || 'Leave request',
                 days: l.totalDays || 1,
+                isAssignedToMe: isForMe,
               },
             });
           }
@@ -252,8 +405,23 @@ export default function UniversalCalendarPage() {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Active events scoped to selected layers
-  const activeEvents = events.filter((ev) => activeLayers.includes(ev.layer));
+  // Filter events based on active layers AND logged-in user scope
+  const activeEvents = events.filter((ev) => {
+    // 1. Layer filter
+    if (!activeLayers.includes(ev.layer)) return false;
+
+    // 2. Personal scope filter: when 'mine', show strictly current user's tasks & records
+    if (scopeMode === 'mine') {
+      if (ev.layer === 'TASKS') {
+        return ev.details?.isAssignedToMe === true;
+      }
+      if (ev.layer === 'ATTENDANCE' || ev.layer === 'LEAVE') {
+        return ev.details?.isAssignedToMe === true;
+      }
+    }
+
+    return true;
+  });
 
   // Map events by Day of Month (Timezone-resilient)
   const getEventsForDay = (day: number) => {
@@ -285,8 +453,6 @@ export default function UniversalCalendarPage() {
         router.push('/app/projects');
         break;
       case 'ATTENDANCE':
-        router.push('/app/time');
-        break;
       case 'LEAVE':
         router.push('/app/time');
         break;
@@ -299,25 +465,71 @@ export default function UniversalCalendarPage() {
     setSelectedEvent(null);
   };
 
+  const formatScheduleDate = (isoStr: string) => {
+    try {
+      const d = new Date(isoStr);
+      return d.toLocaleDateString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    } catch {
+      return isoStr;
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Header & Controls */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
         <div>
           <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold text-foreground">Universal Operations Calendar</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">Universal Operations Calendar</h1>
             <Badge variant="outline" className="text-xs font-mono">Multi-Layer Scheduling</Badge>
           </div>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Attendance sessions, work shifts, leave requests, task deadlines, and quality reviews on a single schedule.
+            {scopeMode === 'mine'
+              ? `Personal schedule for ${currentUserName || currentUserEmail || 'you'} — only your assigned tasks & deadlines are displayed.`
+              : 'Workspace operations schedule — viewing all team attendance, shifts, leave requests, and task deadlines.'}
           </p>
         </div>
 
-        {/* View Switcher & Date Nav */}
+        {/* View Switcher, Scope Mode & Date Nav */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* User Scope Toggle (My Tasks vs All Team) */}
+          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
+            <button
+              type="button"
+              onClick={() => setScopeMode('mine')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                scopeMode === 'mine'
+                  ? 'bg-primary text-primary-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title="Show only tasks assigned to you"
+            >
+              <User className="h-3.5 w-3.5" />
+              My Tasks
+            </button>
+            <button
+              type="button"
+              onClick={() => setScopeMode('all')}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded transition-colors ${
+                scopeMode === 'all'
+                  ? 'bg-primary text-primary-foreground shadow-xs'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+              title="Show all workspace tasks"
+            >
+              <Users className="h-3.5 w-3.5" />
+              All Team
+            </button>
+          </div>
+
           {/* Date Navigator with Calendar Icon Date Picker */}
-          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-sm">
-            <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" title="Previous Month">
+          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
+            <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Previous Month">
               <ChevronLeft className="h-4 w-4" />
             </Button>
 
@@ -341,12 +553,13 @@ export default function UniversalCalendarPage() {
             >
               Today
             </button>
-            <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7" title="Next Month">
+            <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Next Month">
               <ChevronRight className="h-4 w-4" />
             </Button>
           </div>
 
-          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-sm">
+          {/* Month / Agenda View Mode */}
+          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
             <button
               type="button"
               onClick={() => setViewMode('month')}
@@ -367,7 +580,7 @@ export default function UniversalCalendarPage() {
             </button>
           </div>
 
-          <Button variant="outline" size="sm" onClick={loadCalendarEvents} disabled={loading} className="h-8 gap-1.5">
+          <Button variant="outline" size="sm" onClick={loadCalendarEvents} disabled={loading} className="h-8 gap-1.5 shadow-xs">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
@@ -383,9 +596,9 @@ export default function UniversalCalendarPage() {
         <button
           type="button"
           onClick={() => toggleLayer('ATTENDANCE')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
             activeLayers.includes('ATTENDANCE')
-              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 font-semibold'
+              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 font-semibold shadow-2xs'
               : 'border-border text-muted-foreground/50 opacity-60'
           }`}
         >
@@ -396,9 +609,9 @@ export default function UniversalCalendarPage() {
         <button
           type="button"
           onClick={() => toggleLayer('SHIFTS')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
             activeLayers.includes('SHIFTS')
-              ? 'bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400 font-semibold'
+              ? 'bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400 font-semibold shadow-2xs'
               : 'border-border text-muted-foreground/50 opacity-60'
           }`}
         >
@@ -409,9 +622,9 @@ export default function UniversalCalendarPage() {
         <button
           type="button"
           onClick={() => toggleLayer('LEAVE')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
             activeLayers.includes('LEAVE')
-              ? 'bg-amber-500/10 border-amber-500/40 text-amber-600 dark:text-amber-400 font-semibold'
+              ? 'bg-amber-500/10 border-amber-500/40 text-amber-600 dark:text-amber-400 font-semibold shadow-2xs'
               : 'border-border text-muted-foreground/50 opacity-60'
           }`}
         >
@@ -422,9 +635,9 @@ export default function UniversalCalendarPage() {
         <button
           type="button"
           onClick={() => toggleLayer('TASKS')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
             activeLayers.includes('TASKS')
-              ? 'bg-purple-500/10 border-purple-500/40 text-purple-600 dark:text-purple-400 font-semibold'
+              ? 'bg-purple-500/10 border-purple-500/40 text-purple-600 dark:text-purple-400 font-semibold shadow-2xs'
               : 'border-border text-muted-foreground/50 opacity-60'
           }`}
         >
@@ -435,9 +648,9 @@ export default function UniversalCalendarPage() {
         <button
           type="button"
           onClick={() => toggleLayer('QUALITY')}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition-all ${
+          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
             activeLayers.includes('QUALITY')
-              ? 'bg-rose-500/10 border-rose-500/40 text-rose-600 dark:text-rose-400 font-semibold'
+              ? 'bg-rose-500/10 border-rose-500/40 text-rose-600 dark:text-rose-400 font-semibold shadow-2xs'
               : 'border-border text-muted-foreground/50 opacity-60'
           }`}
         >
@@ -446,27 +659,39 @@ export default function UniversalCalendarPage() {
         </button>
       </div>
 
-      {/* Month Label & Today Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-card border border-border px-4 py-3 rounded-lg shadow-xs gap-3">
+      {/* Month Label & Scope Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-card border border-border px-4 py-3 rounded-xl shadow-xs gap-3">
         <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-base font-bold text-foreground">{monthName}</span>
+          <span className="text-lg font-bold text-foreground">{monthName}</span>
           <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20 flex items-center gap-1.5 font-medium py-1">
             <CalendarIcon className="h-3.5 w-3.5" />
             Today: {today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
           </Badge>
+          <Badge variant="secondary" className="text-xs flex items-center gap-1.5 font-medium py-1">
+            <User className="h-3.5 w-3.5 text-primary" />
+            {scopeMode === 'mine' ? (
+              <span>My Tasks: <strong className="text-foreground">{currentUserName || currentUserEmail || 'Logged In User'}</strong></span>
+            ) : (
+              <span>Scope: <strong className="text-foreground">All Team Members</strong></span>
+            )}
+          </Badge>
           {selectedDate.toDateString() !== today.toDateString() && (
-            <Badge variant="secondary" className="text-xs flex items-center gap-1 font-medium py-1">
-              Selected: {selectedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+            <Badge variant="outline" className="text-xs flex items-center gap-1 font-medium py-1">
+              Focus: {selectedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
             </Badge>
           )}
         </div>
-        <span className="text-xs text-muted-foreground font-mono">{activeEvents.length} active events in scope</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground font-mono bg-muted/50 px-2.5 py-1 rounded-md border border-border">
+            {activeEvents.length} {activeEvents.length === 1 ? 'event' : 'events'} in scope
+          </span>
+        </div>
       </div>
 
       {/* MONTH VIEW GRID */}
       {viewMode === 'month' && (
-        <Card className="overflow-hidden">
-          <div className="grid grid-cols-7 border-b border-border bg-surface-secondary/40 text-center text-xs font-semibold uppercase text-muted-foreground py-2">
+        <Card className="overflow-hidden border border-border shadow-xs">
+          <div className="grid grid-cols-7 border-b border-border bg-surface-secondary/50 text-center text-xs font-semibold uppercase text-muted-foreground py-2.5">
             <div>Sun</div>
             <div>Mon</div>
             <div>Tue</div>
@@ -479,7 +704,7 @@ export default function UniversalCalendarPage() {
           <div className="grid grid-cols-7 divide-x divide-y divide-border bg-card">
             {/* Blank leading slots */}
             {Array.from({ length: firstDayOfMonth }).map((_, idx) => (
-              <div key={`blank-${idx}`} className="min-h-24 bg-surface-secondary/15 p-2 text-muted-foreground/30 text-xs" />
+              <div key={`blank-${idx}`} className="min-h-28 bg-surface-secondary/20 p-2 text-muted-foreground/20 text-xs" />
             ))}
 
             {/* Days in Month */}
@@ -509,7 +734,7 @@ export default function UniversalCalendarPage() {
                 >
                   <div className="flex items-center justify-between">
                     <span
-                      className={`text-xs rounded-full h-5 w-5 flex items-center justify-center transition-all ${
+                      className={`text-xs rounded-full h-6 w-6 flex items-center justify-center transition-all ${
                         isToday
                           ? 'bg-primary text-primary-foreground font-bold shadow-xs'
                           : isSelected
@@ -523,7 +748,7 @@ export default function UniversalCalendarPage() {
                       <span className="text-[10px] font-semibold text-primary uppercase tracking-tight">Today</span>
                     )}
                     {dayEvents.length > 2 && (
-                      <span className="text-[10px] text-muted-foreground font-mono">
+                      <span className="text-[10px] text-muted-foreground font-mono bg-muted/60 px-1 rounded">
                         +{dayEvents.length - 2}
                       </span>
                     )}
@@ -535,15 +760,22 @@ export default function UniversalCalendarPage() {
                       <button
                         key={ev.id}
                         type="button"
-                        onClick={() => setSelectedEvent(ev)}
-                        className="w-full text-left truncate text-[11px] px-1.5 py-0.5 rounded shadow-2xs font-medium transition-transform hover:scale-[1.02]"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedEvent(ev);
+                        }}
+                        className="w-full text-left truncate text-[11px] px-2 py-1 rounded-md shadow-2xs font-medium transition-all hover:scale-[1.02] hover:shadow-xs flex items-center justify-between gap-1 border border-border/40"
                         style={{
                           backgroundColor: `${ev.color}15`,
                           borderLeft: `3px solid ${ev.color}`,
                           color: ev.color,
                         }}
+                        title={`${ev.title} — ${ev.details?.assigneeName || ''}`}
                       >
-                        {ev.title}
+                        <span className="truncate flex-1 font-semibold">{ev.title}</span>
+                        {ev.details?.isAssignedToMe && (
+                          <span className="text-[9px] px-1 rounded bg-primary/20 text-primary font-bold shrink-0">You</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -556,18 +788,29 @@ export default function UniversalCalendarPage() {
 
       {/* AGENDA VIEW LIST */}
       {viewMode === 'agenda' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base font-semibold">Chronological Activity Agenda</CardTitle>
-            <CardDescription>Upcoming deadlines and operations ordered by date</CardDescription>
+        <Card className="border border-border shadow-xs">
+          <CardHeader className="pb-3 border-b border-border/60">
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base font-semibold text-foreground">Chronological Activity Agenda</CardTitle>
+                <CardDescription>
+                  {scopeMode === 'mine' ? 'Your upcoming task deadlines and personal events' : 'All upcoming workspace operations ordered by date'}
+                </CardDescription>
+              </div>
+              <Badge variant="outline" className="text-xs font-mono">
+                {activeEvents.length} {activeEvents.length === 1 ? 'Event' : 'Events'}
+              </Badge>
+            </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4">
             {activeEvents.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <CheckCircle2 className="h-10 w-10 text-muted-foreground/40 mb-3" />
-                <h4 className="text-sm font-semibold text-foreground">No events recorded for this month</h4>
+                <h4 className="text-sm font-semibold text-foreground">No events found for this filter</h4>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Adjust layer filters or navigate to a different month to view scheduled events.
+                  {scopeMode === 'mine'
+                    ? 'You have no assigned tasks scheduled for this period. Switch to "All Team" to view workspace activities.'
+                    : 'Adjust layer filters or navigate to a different month to view scheduled events.'}
                 </p>
               </div>
             ) : (
@@ -575,126 +818,188 @@ export default function UniversalCalendarPage() {
                 {[...activeEvents]
                   .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
                   .map((ev) => (
-                  <div
-                    key={ev.id}
-                    className="flex flex-col sm:flex-row sm:items-center justify-between py-3 gap-2 hover:bg-surface-secondary/40 px-2 rounded-lg transition-colors"
-                  >
-                    <div className="flex items-start gap-3">
-                      <div
-                        className="h-3 w-3 rounded-full mt-1 shrink-0"
-                        style={{ backgroundColor: ev.color }}
-                      />
-                      <div>
-                        <div className="text-sm font-semibold text-foreground">{ev.title}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {new Date(ev.startDate).toLocaleDateString()} • Layer: <span className="font-semibold">{ev.layer}</span> • Status: {ev.status}
+                    <div
+                      key={ev.id}
+                      className="flex flex-col sm:flex-row sm:items-center justify-between py-3.5 gap-3 hover:bg-surface-secondary/40 px-3 rounded-xl transition-colors"
+                    >
+                      <div className="flex items-start gap-3">
+                        <div
+                          className="h-3 w-3 rounded-full mt-1 shrink-0"
+                          style={{ backgroundColor: ev.color }}
+                        />
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-foreground">{ev.title}</span>
+                            {ev.details?.isAssignedToMe && (
+                              <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 bg-primary/10 text-primary border-primary/20">
+                                Assigned to You
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
+                            <span>{formatScheduleDate(ev.startDate)}</span>
+                            <span>•</span>
+                            <span>Layer: <strong className="text-foreground">{ev.layer}</strong></span>
+                            <span>•</span>
+                            <span>Status: <strong className="text-foreground">{ev.status}</strong></span>
+                            {ev.details?.assigneeName && (
+                              <>
+                                <span>•</span>
+                                <span>Assignee: <strong className="text-foreground">{ev.details.assigneeName}</strong></span>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-center">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => setSelectedEvent(ev)}
-                        className="h-7 text-xs gap-1 text-muted-foreground hover:text-foreground"
-                      >
-                        <Eye className="h-3.5 w-3.5" /> Details
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => navigateToEntity(ev)}
-                        className="h-7 text-xs gap-1"
-                      >
-                        Open <ArrowRight className="h-3.5 w-3.5" />
-                      </Button>
+                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setSelectedEvent(ev)}
+                          className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
+                        >
+                          <Eye className="h-3.5 w-3.5" /> Details
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => navigateToEntity(ev)}
+                          className="h-8 text-xs gap-1.5 font-medium"
+                        >
+                          Open <ArrowRight className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
               </div>
             )}
           </CardContent>
         </Card>
       )}
 
-      {/* Event Details Inspector Modal */}
+      {/* Modern Event Details Inspector Modal */}
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xs p-4">
-          <div className="bg-card border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-border pb-3">
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-3 w-3 rounded-full shrink-0"
-                  style={{ backgroundColor: selectedEvent.color }}
-                />
-                <h3 className="text-base font-bold text-foreground truncate">
-                  {selectedEvent.title}
-                </h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xs p-4 animate-in fade-in duration-150">
+          <div className="bg-card border border-border rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in zoom-in-95 duration-150">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between border-b border-border pb-4 gap-3">
+              <div className="flex items-start gap-3">
+                <div
+                  className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
+                  style={{
+                    backgroundColor: `${selectedEvent.color}20`,
+                    color: selectedEvent.color,
+                  }}
+                >
+                  {selectedEvent.layer === 'TASKS' ? (
+                    <CheckSquare className="h-5 w-5" />
+                  ) : selectedEvent.layer === 'LEAVE' ? (
+                    <CalendarIcon className="h-5 w-5" />
+                  ) : (
+                    <Clock className="h-5 w-5" />
+                  )}
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground leading-snug">
+                    {selectedEvent.title}
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                    <Badge variant="outline" className="font-mono text-[11px]">
+                      {selectedEvent.type}
+                    </Badge>
+                    <Badge
+                      variant={
+                        selectedEvent.status === 'COMPLETED' || selectedEvent.status === 'APPROVED' || selectedEvent.status === 'PASSED'
+                          ? 'success'
+                          : 'secondary'
+                      }
+                      className="text-[11px]"
+                    >
+                      {selectedEvent.status}
+                    </Badge>
+                    {selectedEvent.details?.isAssignedToMe && (
+                      <Badge variant="default" className="text-[10px] bg-primary text-primary-foreground">
+                        Assigned to You
+                      </Badge>
+                    )}
+                  </div>
+                </div>
               </div>
+
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={() => setSelectedEvent(null)}
-                className="h-8 w-8 text-muted-foreground"
+                className="h-8 w-8 rounded-full text-muted-foreground hover:bg-muted shrink-0"
               >
                 <X className="h-4 w-4" />
               </Button>
             </div>
 
-            <div className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Event Type</span>
-                <Badge variant="outline" className="font-mono text-xs">
-                  {selectedEvent.type}
-                </Badge>
+            {/* Modal Body - Clean Structured Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+              <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
+                <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
+                  <CalendarIcon className="h-3.5 w-3.5 text-primary" />
+                  <span>Schedule Date</span>
+                </div>
+                <div className="text-foreground font-medium text-sm">
+                  {formatScheduleDate(selectedEvent.startDate)}
+                </div>
               </div>
 
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Status</span>
-                <Badge
-                  variant={
-                    selectedEvent.status === 'COMPLETED' || selectedEvent.status === 'APPROVED' || selectedEvent.status === 'PASSED'
-                      ? 'success'
-                      : 'secondary'
-                  }
-                  className="text-xs"
-                >
-                  {selectedEvent.status}
-                </Badge>
+              <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
+                <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
+                  <User className="h-3.5 w-3.5 text-primary" />
+                  <span>Assigned Member</span>
+                </div>
+                <div className="text-foreground font-medium text-sm truncate">
+                  {selectedEvent.details?.assigneeName || selectedEvent.details?.memberName || 'Unassigned'}
+                </div>
               </div>
 
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-muted-foreground">Schedule</span>
-                <span className="text-xs font-mono text-foreground">
-                  {new Date(selectedEvent.startDate).toLocaleString()}
-                </span>
-              </div>
+              {selectedEvent.details?.projectName && (
+                <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
+                  <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
+                    <Folder className="h-3.5 w-3.5 text-primary" />
+                    <span>Project</span>
+                  </div>
+                  <div className="text-foreground font-medium text-sm truncate">
+                    {selectedEvent.details.projectName}
+                  </div>
+                </div>
+              )}
 
-              {selectedEvent.details && (
-                <div className="border-t border-border pt-3 space-y-2">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    Operational Metadata
-                  </span>
-                  <div className="p-3 bg-muted rounded-lg text-xs font-mono space-y-1">
-                    {Object.entries(selectedEvent.details).map(([k, v]) => (
-                      <div key={k} className="flex justify-between">
-                        <span className="text-muted-foreground capitalize">{k}:</span>
-                        <span className="text-foreground font-semibold">{String(v)}</span>
-                      </div>
-                    ))}
+              {selectedEvent.details?.priority && (
+                <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
+                  <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
+                    <AlertTriangle className="h-3.5 w-3.5 text-primary" />
+                    <span>Priority</span>
+                  </div>
+                  <div className="text-foreground font-medium text-sm">
+                    {selectedEvent.details.priority}
                   </div>
                 </div>
               )}
             </div>
 
-            <div className="flex justify-between border-t border-border pt-4">
+            {/* Task Description if available */}
+            {selectedEvent.details?.description && (
+              <div className="p-3 bg-muted/30 border border-border/60 rounded-xl text-xs space-y-1">
+                <span className="font-semibold text-muted-foreground">Description</span>
+                <p className="text-foreground leading-relaxed">{selectedEvent.details.description}</p>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between border-t border-border pt-4">
               <Button variant="ghost" size="sm" onClick={() => setSelectedEvent(null)}>
                 Close
               </Button>
-              <Button size="sm" onClick={() => navigateToEntity(selectedEvent)} className="gap-1.5">
-                Navigate to Source Record
-                <ArrowRight className="h-3.5 w-3.5" />
+              <Button size="sm" onClick={() => navigateToEntity(selectedEvent)} className="gap-2 font-medium shadow-xs">
+                Open in Projects & Tasks
+                <ArrowRight className="h-4 w-4" />
               </Button>
             </div>
           </div>
