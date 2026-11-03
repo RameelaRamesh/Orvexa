@@ -29,6 +29,8 @@ import {
   X,
   UserPlus,
   Users,
+  User,
+  Mail,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -96,7 +98,9 @@ export default function ProjectsPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [priorityFilter, setPriorityFilter] = useState<string>('ALL');
+  const [assigneeFilter, setAssigneeFilter] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [workViewMode, setWorkViewMode] = useState<'TASKS' | 'PEOPLE'>('TASKS');
 
   // Modals
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
@@ -586,6 +590,27 @@ export default function ProjectsPage() {
     return assignedToMe || assignedByMe;
   };
 
+  const safeMembers = Array.isArray(teamMembers) ? teamMembers.filter(Boolean) : [];
+
+  const isTaskAssignedToMember = (task: any, memberId: string) => {
+    if (!task || !memberId) return false;
+    if (task.assigneeMembershipId === memberId) return true;
+    if (task.assignee?.id === memberId) return true;
+    if (Array.isArray(task.assigneeMembershipIds) && task.assigneeMembershipIds.includes(memberId)) return true;
+    if (Array.isArray(task.collaboratorIds) && task.collaboratorIds.includes(memberId)) return true;
+    return false;
+  };
+
+  const matchingPeople = safeMembers.filter((m) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    const name = getMemberDisplayName(m).toLowerCase();
+    const email = (m.user?.email || m.email || '').toLowerCase();
+    const role = getMemberRoleName(m).toLowerCase();
+    const dept = getMemberDeptName(m).toLowerCase();
+    return name.includes(q) || email.includes(q) || role.includes(q) || dept.includes(q);
+  });
+
   // 1. Scoped Tasks based on assignment filter (defaults to assigned to me OR by me)
   const scopedTasks = tasks.filter((t) => isTaskInAssignmentScope(t, assignmentScope));
 
@@ -618,12 +643,42 @@ export default function ProjectsPage() {
     // Priority filter
     if (priorityFilter !== 'ALL' && t.priority !== priorityFilter) return false;
 
-    // Search query
-    if (searchQuery) {
+    // Assignee / Person filter
+    if (assigneeFilter !== 'ALL' && !isTaskAssignedToMember(t, assigneeFilter)) return false;
+
+    // Search query (search title, description, assignees, creators, roles, departments, project)
+    if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       const matchTitle = t.title.toLowerCase().includes(q);
       const matchDesc = (t.description || '').toLowerCase().includes(q);
-      if (!matchTitle && !matchDesc) return false;
+      if (matchTitle || matchDesc) return true;
+
+      // Check assignees
+      const assignees = getTaskAssignees(t);
+      const matchAssignee = assignees.some((m) => {
+        const name = getMemberDisplayName(m).toLowerCase();
+        const email = (m.user?.email || m.email || '').toLowerCase();
+        const role = getMemberRoleName(m).toLowerCase();
+        const dept = getMemberDeptName(m).toLowerCase();
+        return name.includes(q) || email.includes(q) || role.includes(q) || dept.includes(q);
+      });
+      if (matchAssignee) return true;
+
+      // Check assigner / creator
+      const assigner = getTaskAssigner(t);
+      if (assigner) {
+        const name = getMemberDisplayName(assigner).toLowerCase();
+        const email = (assigner.user?.email || assigner.email || '').toLowerCase();
+        if (name.includes(q) || email.includes(q)) return true;
+      }
+
+      // Check project name/key
+      if (t.projectId) {
+        const proj = projects.find((p) => p.id === t.projectId);
+        if (proj && (proj.name.toLowerCase().includes(q) || proj.key.toLowerCase().includes(q))) return true;
+      }
+
+      return false;
     }
     return true;
   });
@@ -863,19 +918,45 @@ export default function ProjectsPage() {
                 </div>
               </div>
 
-              {/* Row 2: Search & Detailed Dropdowns */}
-              <div className="flex flex-col md:flex-row items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+              {/* Row 2: Search & Detailed Dropdowns & View Mode */}
+              <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2.5 w-full lg:w-auto">
                   <div className="relative">
                     <Search className="h-4 w-4 absolute left-3 top-2.5 text-muted-foreground" />
                     <input
                       type="text"
-                      placeholder="Search tasks..."
+                      placeholder="Search tasks, people, assignees..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="pl-9 pr-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground w-60 focus:ring-1 focus:ring-primary focus:outline-none"
+                      className="pl-9 pr-8 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground w-64 focus:ring-1 focus:ring-primary focus:outline-none"
                     />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        className="absolute right-2.5 top-2 text-muted-foreground hover:text-foreground"
+                        title="Clear search"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
+
+                  {/* Assignee / Person Filter Dropdown */}
+                  <select
+                    value={assigneeFilter}
+                    onChange={(e) => setAssigneeFilter(e.target.value)}
+                    className="px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground focus:ring-1 focus:ring-primary focus:outline-none max-w-[170px] truncate"
+                    title="Filter by person / assignee"
+                  >
+                    <option value="ALL">All People / Assignees</option>
+                    {safeMembers.map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {getMemberDisplayName(m)}
+                      </option>
+                    ))}
+                  </select>
+
                   <select
                     value={statusFilter}
                     onChange={(e) => {
@@ -893,6 +974,7 @@ export default function ProjectsPage() {
                     <option value="COMPLETED">Completed</option>
                     <option value="CANCELLED">Cancelled</option>
                   </select>
+
                   <select
                     value={priorityFilter}
                     onChange={(e) => setPriorityFilter(e.target.value)}
@@ -904,16 +986,157 @@ export default function ProjectsPage() {
                     <option value="HIGH">High</option>
                     <option value="URGENT">Urgent</option>
                   </select>
+
+                  {/* Active person filter chip */}
+                  {assigneeFilter !== 'ALL' && (
+                    <div className="flex items-center gap-1.5 bg-primary/10 text-primary border border-primary/20 px-2.5 py-1 rounded-md text-xs font-medium">
+                      <span>Person: <strong>{getMemberDisplayName(safeMembers.find((m) => m.id === assigneeFilter))}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => setAssigneeFilter('ALL')}
+                        className="hover:opacity-75"
+                        title="Remove person filter"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  Showing <strong>{filteredTasks.length}</strong> task(s)
+
+                {/* View Switcher: Tasks vs People */}
+                <div className="flex items-center justify-between lg:justify-end gap-3 shrink-0">
+                  <div className="flex rounded-lg bg-muted/60 p-0.5 text-xs font-medium border border-border">
+                    <button
+                      type="button"
+                      onClick={() => setWorkViewMode('TASKS')}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                        workViewMode === 'TASKS'
+                          ? 'bg-background text-foreground shadow-sm font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      <CheckSquare className="h-3.5 w-3.5" />
+                      <span>Tasks ({filteredTasks.length})</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWorkViewMode('PEOPLE')}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                        workViewMode === 'PEOPLE'
+                          ? 'bg-background text-foreground shadow-sm font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                      title="View all team members and their work items"
+                    >
+                      <Users className="h-3.5 w-3.5" />
+                      <span>People ({searchQuery ? matchingPeople.length : safeMembers.length})</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Tasks Table */}
-          <Card>
+          {/* VIEW 1: TASKS VIEW */}
+          {workViewMode === 'TASKS' && (
+            <div className="space-y-4">
+              {/* If search query entered and matching people found, display People Match Card */}
+              {searchQuery.trim() && matchingPeople.length > 0 && (
+                <div className="rounded-xl border border-primary/25 bg-primary/5 p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-primary" />
+                      <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                        People Matching &quot;{searchQuery}&quot; ({matchingPeople.length})
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-muted-foreground">
+                      Click a person to filter their work items
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {matchingPeople.map((m) => {
+                      const name = getMemberDisplayName(m);
+                      const role = getMemberRoleName(m);
+                      const dept = getMemberDeptName(m);
+                      const email = m.user?.email || m.email || '';
+                      const memberTasks = tasksInProjectView.filter((t) => isTaskAssignedToMember(t, m.id));
+                      const pending = memberTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').length;
+                      const isCurrentlyFiltered = assigneeFilter === m.id;
+
+                      return (
+                        <div
+                          key={m.id}
+                          onClick={() => {
+                            if (isCurrentlyFiltered) {
+                              setAssigneeFilter('ALL');
+                            } else {
+                              setAssigneeFilter(m.id);
+                            }
+                          }}
+                          className={`p-3 rounded-lg border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                            isCurrentlyFiltered
+                              ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                              : 'bg-card border-border hover:border-primary/50 hover:bg-surface-secondary/40 text-foreground'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className={`h-9 w-9 rounded-full flex items-center justify-center text-xs font-bold shrink-0 border ${
+                                isCurrentlyFiltered
+                                  ? 'bg-primary-foreground/20 text-primary-foreground border-primary-foreground/30'
+                                  : 'bg-primary/10 text-primary border-primary/20'
+                              }`}
+                            >
+                              {name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold truncate">{name}</div>
+                              <div
+                                className={`text-[11px] truncate ${
+                                  isCurrentlyFiltered ? 'text-primary-foreground/80' : 'text-muted-foreground'
+                                }`}
+                              >
+                                {role}{dept !== 'General' ? ` • ${dept}` : ''}
+                              </div>
+                              {email && (
+                                <div
+                                  className={`text-[10px] truncate ${
+                                    isCurrentlyFiltered ? 'text-primary-foreground/70' : 'text-muted-foreground/75'
+                                  }`}
+                                >
+                                  {email}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <span
+                              className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full ${
+                                isCurrentlyFiltered
+                                  ? 'bg-primary-foreground/20 text-primary-foreground'
+                                  : 'bg-muted text-foreground'
+                              }`}
+                            >
+                              {memberTasks.length} task{memberTasks.length === 1 ? '' : 's'}
+                            </span>
+                            <div
+                              className={`text-[10px] mt-0.5 ${
+                                isCurrentlyFiltered ? 'text-primary-foreground/80' : 'text-amber-500'
+                              }`}
+                            >
+                              {pending} pending
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tasks Table */}
+              <Card>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-sm border-collapse">
@@ -1061,6 +1284,157 @@ export default function ProjectsPage() {
           </Card>
         </div>
       )}
+
+      {/* VIEW 2: PEOPLE & WORKLOAD VIEW */}
+      {workViewMode === 'PEOPLE' && (
+        <div className="space-y-4">
+          {matchingPeople.length === 0 ? (
+            <Card>
+              <CardContent className="p-12 text-center text-xs text-muted-foreground">
+                No team members found{searchQuery ? ` matching "${searchQuery}"` : ''}.
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {matchingPeople.map((m) => {
+                const name = getMemberDisplayName(m);
+                const role = getMemberRoleName(m);
+                const dept = getMemberDeptName(m);
+                const email = m.user?.email || m.email || '';
+                const memberTasks = tasksInProjectView.filter((t) => isTaskAssignedToMember(t, m.id));
+                const completed = memberTasks.filter((t) => t.status === 'COMPLETED').length;
+                const pending = memberTasks.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').length;
+                const pct = memberTasks.length > 0 ? Math.round((completed / memberTasks.length) * 100) : 0;
+                const isFilterActive = assigneeFilter === m.id;
+
+                return (
+                  <Card
+                    key={m.id}
+                    className={`transition-all hover:shadow-md ${
+                      isFilterActive ? 'ring-2 ring-primary border-primary' : ''
+                    }`}
+                  >
+                    <CardContent className="p-4 space-y-3.5">
+                      {/* Header: Avatar, Name, Role */}
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className="h-10 w-10 rounded-full bg-primary/10 text-primary flex items-center justify-center font-bold text-sm shrink-0 border border-primary/20">
+                            {name.charAt(0).toUpperCase()}
+                          </div>
+                          <div className="min-w-0">
+                            <h3 className="font-semibold text-sm text-foreground truncate">{name}</h3>
+                            <p className="text-xs text-muted-foreground truncate">{role} • {dept}</p>
+                            {email && (
+                              <p className="text-[11px] text-muted-foreground/80 truncate">{email}</p>
+                            )}
+                          </div>
+                        </div>
+                        {m.accessRole && (
+                          <Badge variant="outline" className="text-[10px] shrink-0 font-normal">
+                            {m.accessRole}
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* Workload Stats & Progress */}
+                      <div className="space-y-1.5 pt-1 border-t border-border/60">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="text-muted-foreground">Workload & Completion:</span>
+                          <span className="font-semibold text-foreground">
+                            {completed}/{memberTasks.length} Done ({pct}%)
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-primary rounded-full transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-0.5">
+                          <span className="text-amber-500 font-medium">{pending} Pending</span>
+                          <span className="text-emerald-500 font-medium">{completed} Completed</span>
+                        </div>
+                      </div>
+
+                      {/* Assigned Work Items preview */}
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider flex items-center justify-between">
+                          <span>Assigned Tasks ({memberTasks.length})</span>
+                          {memberTasks.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setAssigneeFilter(m.id);
+                                setWorkViewMode('TASKS');
+                              }}
+                              className="text-[11px] text-primary hover:underline font-medium lowercase"
+                            >
+                              view in table &rarr;
+                            </button>
+                          )}
+                        </div>
+                        {memberTasks.length === 0 ? (
+                          <div className="text-xs text-muted-foreground italic py-2">
+                            No work items assigned in current scope.
+                          </div>
+                        ) : (
+                          <div className="space-y-1">
+                            {memberTasks.slice(0, 3).map((item) => (
+                              <div
+                                key={item.id}
+                                onClick={() => openTaskDetail(item.id)}
+                                className="p-2 rounded-md bg-muted/40 hover:bg-muted/80 cursor-pointer flex items-center justify-between gap-2 text-xs transition-colors border border-border/40"
+                              >
+                                <span className="truncate text-foreground font-medium">{item.title}</span>
+                                <Badge
+                                  variant="secondary"
+                                  className={`text-[9px] px-1.5 py-0 shrink-0 ${
+                                    item.status === 'COMPLETED'
+                                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+                                      : 'bg-primary/10 text-primary'
+                                  }`}
+                                >
+                                  {item.status}
+                                </Badge>
+                              </div>
+                            ))}
+                            {memberTasks.length > 3 && (
+                              <div className="text-[10px] text-muted-foreground text-center pt-0.5">
+                                + {memberTasks.length - 3} more work item(s)
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Footer Action */}
+                      <div className="pt-2 border-t border-border/60 flex items-center justify-between gap-2">
+                        <Button
+                          size="sm"
+                          variant={isFilterActive ? 'default' : 'outline'}
+                          onClick={() => {
+                            if (isFilterActive) {
+                              setAssigneeFilter('ALL');
+                            } else {
+                              setAssigneeFilter(m.id);
+                              setWorkViewMode('TASKS');
+                            }
+                          }}
+                          className="w-full text-xs h-7"
+                        >
+                          {isFilterActive ? 'Showing in Table' : 'Filter Work Items Table'}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )}
 
       {/* =========================================================================
           TAB 2: WORKFLOW AUTOMATION RULES

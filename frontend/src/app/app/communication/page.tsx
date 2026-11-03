@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   MessageSquare,
   Users,
+  User,
   UserPlus,
   UserMinus,
   Send,
@@ -24,17 +25,10 @@ import {
   X,
   FileText,
   Clock,
-  Bell,
-  BellRing,
-  BellOff,
-  VolumeX,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  getNotificationPermission,
-  requestNotificationPermission,
   showMessageNotification,
-  NotificationStatus,
 } from '@/lib/notifications';
 
 interface Message {
@@ -73,7 +67,7 @@ export default function CommunicationPage() {
   const [accessDenied, setAccessDenied] = useState<boolean>(false);
 
   // Filters & search
-  const [tabFilter, setTabFilter] = useState<'ALL' | 'DIRECT' | 'GROUP'>('ALL');
+  const [tabFilter, setTabFilter] = useState<'ALL' | 'DIRECT' | 'GROUP' | 'PEOPLE'>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Composer
@@ -93,10 +87,6 @@ export default function CommunicationPage() {
   const [groupName, setGroupName] = useState('');
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<string[]>([]);
   const [addMemberIds, setAddMemberIds] = useState<string[]>([]);
-
-  // Notifications
-  const [notificationPermission, setNotificationPermission] = useState<NotificationStatus>('default');
-  const [showPermissionBanner, setShowPermissionBanner] = useState(false);
 
   const seenMessageIdsRef = useRef<Set<string>>(new Set());
   const initialLoadedConvIdsRef = useRef<Set<string>>(new Set());
@@ -120,11 +110,6 @@ export default function CommunicationPage() {
 
   useEffect(() => {
     loadInitialData();
-    const perm = getNotificationPermission();
-    setNotificationPermission(perm);
-    if (perm === 'default') {
-      setShowPermissionBanner(true);
-    }
   }, []);
 
   useEffect(() => {
@@ -191,32 +176,6 @@ export default function CommunicationPage() {
 
     return () => clearInterval(interval);
   }, [activeConversation?.id]);
-
-  const handleEnableNotifications = async () => {
-    const perm = await requestNotificationPermission();
-    setNotificationPermission(perm);
-    if (perm === 'granted') {
-      setShowPermissionBanner(false);
-      toast.success('Chrome notifications enabled (silent, right corner)');
-      showMessageNotification({
-        title: 'Team Communication',
-        senderName: 'ORVEXA',
-        message: 'Chrome notifications are active in the right corner (no sound).',
-      });
-    } else if (perm === 'denied') {
-      toast.error('Notifications blocked in Chrome settings. Please enable them in your address bar.');
-    }
-  };
-
-  const handleTestNotification = () => {
-    showMessageNotification({
-      title: 'Team Communication • Test',
-      senderName: 'Notification Test',
-      message: 'Chrome notification in right corner (no sound).',
-      conversationTitle: activeConversation ? getConversationTitle(activeConversation) : undefined,
-      conversationId: activeConversation?.id,
-    });
-  };
 
   const loadInitialData = async () => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
@@ -514,6 +473,53 @@ export default function CommunicationPage() {
     }
   };
 
+  const startOrOpenDirectChat = async (recipientMembershipId: string) => {
+    // 1. Check if direct chat already exists in conversations
+    const existing = conversations.find(
+      (c) =>
+        c.type === 'DIRECT' &&
+        c.participantMembershipIds.includes(recipientMembershipId) &&
+        (c.participantMembershipIds.includes(currentMembershipId) || c.participantMembershipIds.length === 2),
+    );
+    if (existing) {
+      setActiveConversation(existing);
+      return;
+    }
+
+    // 2. Otherwise create it via backend
+    try {
+      const headers = getHeaders();
+      const res = await fetch(`${BRANDING.apiUrl}/communication/conversations/direct`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ recipientMembershipId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to start chat');
+      const conv = data.data;
+      setConversations((prev) => {
+        const found = prev.find((c) => c.id === conv.id);
+        if (found) return prev;
+        return [conv, ...prev];
+      });
+      setActiveConversation(conv);
+      toast.success('Direct conversation ready');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to start direct conversation');
+    }
+  };
+
+  const getMemberRoleAndDept = (mem: any) => {
+    if (!mem) return '';
+    const designation =
+      typeof mem.designation === 'string'
+        ? mem.designation
+        : mem.designation?.title || mem.role?.name || mem.accessRole || '';
+    const dept = typeof mem.department === 'string' ? mem.department : mem.department?.name || '';
+    if (designation && dept) return `${designation} • ${dept}`;
+    return designation || dept || '';
+  };
+
   const getMemberName = (membershipId: string) => {
     const mem = people.find((p) => p.id === membershipId);
     if (!mem) return 'Member';
@@ -533,9 +539,34 @@ export default function CommunicationPage() {
   const filteredConversations = conversations.filter((c) => {
     if (tabFilter === 'DIRECT' && c.type !== 'DIRECT') return false;
     if (tabFilter === 'GROUP' && c.type !== 'GROUP') return false;
+    if (tabFilter === 'PEOPLE') return false;
     if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
       const title = getConversationTitle(c).toLowerCase();
-      return title.includes(searchQuery.toLowerCase());
+      if (title.includes(q)) return true;
+      if (c.lastMessageSnippet && c.lastMessageSnippet.toLowerCase().includes(q)) return true;
+      const hasMatchingParticipant = c.participantMembershipIds.some((pid) => {
+        const mem = people.find((p) => p.id === pid);
+        const name = getMemberName(pid).toLowerCase();
+        const email = (mem?.user?.email || mem?.email || '').toLowerCase();
+        return name.includes(q) || email.includes(q);
+      });
+      return hasMatchingParticipant;
+    }
+    return true;
+  });
+
+  const filteredPeople = people.filter((p) => {
+    if (!p) return false;
+    if (p.id === currentMembershipId) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const first = p.user?.firstName || p.firstName || '';
+      const last = p.user?.lastName || p.lastName || '';
+      const name = `${first} ${last}`.trim().toLowerCase();
+      const email = (p.user?.email || p.email || '').toLowerCase();
+      const roleAndDept = getMemberRoleAndDept(p).toLowerCase();
+      return name.includes(q) || email.includes(q) || roleAndDept.includes(q);
     }
     return true;
   });
@@ -554,42 +585,6 @@ export default function CommunicationPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Chrome Notification Status / Action */}
-          {notificationPermission === 'granted' ? (
-            <div className="flex items-center gap-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-600 dark:text-emerald-400">
-              <Bell className="h-3.5 w-3.5" />
-              <span className="font-medium">Chrome Notifications (Silent)</span>
-              <span title="No Sound (Silent)">
-                <VolumeX className="h-3 w-3 text-muted-foreground ml-0.5" />
-              </span>
-              <button
-                onClick={handleTestNotification}
-                className="ml-1 font-semibold underline hover:opacity-80 text-[11px]"
-                title="Send test silent notification to right corner"
-              >
-                Test
-              </button>
-            </div>
-          ) : notificationPermission === 'denied' ? (
-            <div
-              className="flex items-center gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-600 dark:text-amber-400"
-              title="Notifications are blocked in Chrome settings. Please click the site settings / lock icon in the address bar to allow."
-            >
-              <BellOff className="h-3.5 w-3.5" />
-              <span>Notifications Blocked in Chrome</span>
-            </div>
-          ) : (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleEnableNotifications}
-              className="border-primary/40 text-primary hover:bg-primary/10 text-xs gap-1.5"
-            >
-              <Bell className="h-3.5 w-3.5" />
-              Enable Chrome Notifications (Silent)
-            </Button>
-          )}
-
           <Button variant="outline" size="sm" onClick={() => setShowDirectModal(true)}>
             <Plus className="mr-1 h-4 w-4" />
             New Direct Chat
@@ -601,35 +596,6 @@ export default function CommunicationPage() {
         </div>
       </div>
 
-      {/* Permission Callout Banner if Default */}
-      {showPermissionBanner && notificationPermission === 'default' && (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs">
-          <div className="flex items-center gap-2.5">
-            <div className="rounded-full bg-primary/10 p-1.5 text-primary">
-              <Bell className="h-4 w-4" />
-            </div>
-            <div>
-              <span className="font-semibold text-foreground">Turn on Chrome Notifications: </span>
-              <span className="text-muted-foreground">
-                Get silent desktop notifications in the right corner (no sound) when team members send messages.
-              </span>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <Button size="sm" onClick={handleEnableNotifications} className="text-xs h-7">
-              Allow Notifications
-            </Button>
-            <button
-              onClick={() => setShowPermissionBanner(false)}
-              className="p-1 text-muted-foreground hover:text-foreground"
-              title="Dismiss"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Main Container */}
       <div className="grid flex-1 grid-cols-12 gap-4 overflow-hidden rounded-xl border border-border bg-card shadow-sm">
         {/* Sidebar: Conversation List */}
@@ -640,18 +606,28 @@ export default function CommunicationPage() {
               <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search conversations..."
+                placeholder="Search conversations or people..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full rounded-md border border-input bg-background pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full rounded-md border border-input bg-background pl-8 pr-8 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="absolute right-2.5 top-2.5 text-muted-foreground hover:text-foreground"
+                  title="Clear search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
             </div>
             <div className="flex rounded-lg bg-muted p-0.5 text-xs font-medium">
               <button
                 onClick={() => setTabFilter('ALL')}
                 className={`flex-1 rounded-md py-1 text-center transition-colors ${
                   tabFilter === 'ALL'
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground shadow-sm font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -661,7 +637,7 @@ export default function CommunicationPage() {
                 onClick={() => setTabFilter('DIRECT')}
                 className={`flex-1 rounded-md py-1 text-center transition-colors ${
                   tabFilter === 'DIRECT'
-                    ? 'bg-background text-foreground shadow-sm'
+                    ? 'bg-background text-foreground shadow-sm font-semibold'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -677,6 +653,18 @@ export default function CommunicationPage() {
               >
                 Groups
               </button>
+              <button
+                onClick={() => setTabFilter('PEOPLE')}
+                className={`flex-1 rounded-md py-1 text-center transition-colors flex items-center justify-center gap-1 ${
+                  tabFilter === 'PEOPLE'
+                    ? 'bg-background text-foreground shadow-sm font-semibold'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+                title="Search and chat with team members"
+              >
+                <Users className="h-3 w-3" />
+                <span>People</span>
+              </button>
             </div>
           </div>
 
@@ -684,11 +672,196 @@ export default function CommunicationPage() {
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {loading ? (
               <div className="p-8 text-center text-xs text-muted-foreground">Loading conversations...</div>
+            ) : tabFilter === 'PEOPLE' ? (
+              /* People View */
+              filteredPeople.length === 0 ? (
+                <div className="p-8 text-center text-xs text-muted-foreground">
+                  No team members found{searchQuery ? ` matching "${searchQuery}"` : ''}.
+                </div>
+              ) : (
+                filteredPeople.map((person) => {
+                  const first = person.user?.firstName || person.firstName || '';
+                  const last = person.user?.lastName || person.lastName || '';
+                  const name = `${first} ${last}`.trim() || person.user?.email || person.email || 'Team Member';
+                  const roleAndDept = getMemberRoleAndDept(person);
+                  const email = person.user?.email || person.email || '';
+                  const existingConv = conversations.find(
+                    (c) =>
+                      c.type === 'DIRECT' &&
+                      c.participantMembershipIds.includes(person.id) &&
+                      (c.participantMembershipIds.includes(currentMembershipId) || c.participantMembershipIds.length === 2),
+                  );
+                  const isSelected = activeConversation?.id === existingConv?.id;
+
+                  return (
+                    <button
+                      key={person.id}
+                      onClick={() => startOrOpenDirectChat(person.id)}
+                      className={`w-full text-left rounded-lg p-2.5 transition-all flex items-center gap-3 ${
+                        isSelected
+                          ? 'bg-primary/10 border border-primary/20 shadow-xs'
+                          : 'hover:bg-muted/60 border border-transparent'
+                      }`}
+                    >
+                      <div className="h-9 w-9 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0 border border-primary/25">
+                        {name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-semibold text-foreground truncate">{name}</span>
+                          {existingConv ? (
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] px-1.5 py-0 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 shrink-0 font-normal"
+                            >
+                              Active Chat
+                            </Badge>
+                          ) : (
+                            <span className="text-[10px] text-primary hover:underline font-semibold shrink-0">
+                              + Message
+                            </span>
+                          )}
+                        </div>
+                        {roleAndDept && (
+                          <p className="text-[11px] text-muted-foreground truncate">{roleAndDept}</p>
+                        )}
+                        {email && (
+                          <p className="text-[10px] text-muted-foreground/80 truncate">{email}</p>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })
+              )
+            ) : searchQuery.trim() && tabFilter !== 'GROUP' ? (
+              /* Search across conversations AND people */
+              filteredConversations.length === 0 && filteredPeople.length === 0 ? (
+                <div className="p-8 text-center text-xs text-muted-foreground">
+                  No conversations or team members found matching &quot;{searchQuery}&quot;.
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {/* Matching Conversations */}
+                  {filteredConversations.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                        <span>Conversations</span>
+                        <span className="text-[10px] bg-muted px-1.5 py-0.2 rounded font-mono text-muted-foreground">
+                          {filteredConversations.length}
+                        </span>
+                      </div>
+                      {filteredConversations.map((conv) => {
+                        const isSelected = activeConversation?.id === conv.id;
+                        const title = getConversationTitle(conv);
+                        return (
+                          <button
+                            key={conv.id}
+                            onClick={() => setActiveConversation(conv)}
+                            className={`w-full text-left rounded-lg p-2 transition-all flex items-start gap-2.5 ${
+                              isSelected
+                                ? 'bg-primary/10 border border-primary/20 shadow-xs'
+                                : 'hover:bg-muted/60 border border-transparent'
+                            }`}
+                          >
+                            <div
+                              className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold shrink-0 ${
+                                conv.type === 'GROUP'
+                                  ? 'bg-primary text-primary-foreground'
+                                  : 'bg-secondary text-secondary-foreground'
+                              }`}
+                            >
+                              {conv.type === 'GROUP' ? <Hash className="h-4 w-4" /> : title.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-foreground truncate">{title}</span>
+                                {conv.lastMessageAt && (
+                                  <span className="text-[10px] text-muted-foreground">
+                                    {new Date(conv.lastMessageAt).toLocaleTimeString([], {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-muted-foreground truncate mt-0.5">
+                                {conv.lastMessageSnippet || 'No messages yet'}
+                              </p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Matching People */}
+                  {filteredPeople.length > 0 && (
+                    <div className="space-y-1 pt-1 border-t border-border/60">
+                      <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Users className="h-3 w-3 text-primary inline" /> People ({filteredPeople.length})
+                        </span>
+                        <span className="text-[9px] text-muted-foreground font-normal">Click to message</span>
+                      </div>
+                      {filteredPeople.map((person) => {
+                        const first = person.user?.firstName || person.firstName || '';
+                        const last = person.user?.lastName || person.lastName || '';
+                        const name = `${first} ${last}`.trim() || person.user?.email || person.email || 'Team Member';
+                        const roleAndDept = getMemberRoleAndDept(person);
+                        const existingConv = conversations.find(
+                          (c) =>
+                            c.type === 'DIRECT' &&
+                            c.participantMembershipIds.includes(person.id) &&
+                            (c.participantMembershipIds.includes(currentMembershipId) || c.participantMembershipIds.length === 2),
+                        );
+                        const isSelected = activeConversation?.id === existingConv?.id;
+
+                        return (
+                          <button
+                            key={person.id}
+                            onClick={() => startOrOpenDirectChat(person.id)}
+                            className={`w-full text-left rounded-lg p-2 transition-all flex items-center gap-2.5 ${
+                              isSelected
+                                ? 'bg-primary/10 border border-primary/20 shadow-xs'
+                                : 'hover:bg-muted/60 border border-transparent'
+                            }`}
+                          >
+                            <div className="h-8 w-8 rounded-full bg-primary/15 text-primary flex items-center justify-center text-xs font-bold shrink-0 border border-primary/25">
+                              {name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-1">
+                                <span className="text-xs font-semibold text-foreground truncate">{name}</span>
+                                {existingConv ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[9px] px-1 py-0 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 shrink-0 font-normal"
+                                  >
+                                    Active Chat
+                                  </Badge>
+                                ) : (
+                                  <span className="text-[10px] text-primary hover:underline font-semibold shrink-0">
+                                    + Message
+                                  </span>
+                                )}
+                              </div>
+                              {roleAndDept && (
+                                <p className="text-[10px] text-muted-foreground truncate">{roleAndDept}</p>
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
             ) : filteredConversations.length === 0 ? (
               <div className="p-8 text-center text-xs text-muted-foreground">
                 No conversations found. Start a new direct chat or group!
               </div>
             ) : (
+              /* Regular conversation list */
               filteredConversations.map((conv) => {
                 const isSelected = activeConversation?.id === conv.id;
                 const title = getConversationTitle(conv);
