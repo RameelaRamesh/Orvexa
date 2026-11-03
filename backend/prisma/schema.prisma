@@ -30,6 +30,8 @@ model User {
   auditLogs            AuditLog[]
   sentInvitations      Invitation[] @relation("InvitedByUser")
   memberships          Membership[]
+  targetedTickets      Ticket[]     @relation("TicketTargetUser")
+  assignedTickets      Ticket[]     @relation("TicketAssignedUser")
 
   @@index([email])
 }
@@ -48,6 +50,7 @@ model Workspace {
   assets              Asset[]
   attendances         Attendance[]
   auditLogs           AuditLog[]
+  tickets             Ticket[]
   clients             Client[]
   departments         Department[]
   designations        Designation[]
@@ -130,6 +133,7 @@ model Membership {
   ledTeams            Team[]               @relation("TeamLead")
   timesheets          Timesheet[]
   assignedWorkItems   WorkItem[]           @relation("WorkItemAssignee")
+  requestedTickets    Ticket[]             @relation("TicketRequester")
 
   @@unique([userId, workspaceId])
   @@index([workspaceId, userId])
@@ -877,3 +881,48 @@ enum PaymentStatus {
   FAILED
   REFUNDED
 }
+
+enum TicketTargetRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+model Ticket {
+  id                    String            @id @default(uuid())
+  workspaceId           String            @map("workspace_id")
+  ticketNumber          String            @map("ticket_number")
+  categoryId            String            @map("category_id")
+  categoryName          String?           @map("category_name")
+  title                 String
+  description           String
+  priority              String            @default("MEDIUM")
+  status                String            @default("SUBMITTED")
+  targetRole            TicketTargetRole  @map("target_role")
+  targetUserId          String?           @map("target_user_id")
+  assignedTo            String?           @map("assigned_to")
+  acceptedAt            DateTime?         @map("accepted_at")
+  requesterMembershipId String            @map("requester_membership_id")
+  responsibleTeamId     String?           @map("responsible_team_id")
+  inventoryItem         String?           @map("inventory_item")
+  requestedQuantity     Int?              @map("requested_quantity")
+  replenishmentItems    Json?             @map("replenishment_items")
+  activityTimeline      Json?             @map("activity_timeline")
+  comments              Json?
+  attachments           Json?
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  workspace             Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  requester             Membership        @relation("TicketRequester", fields: [requesterMembershipId], references: [id])
+  targetUser            User?             @relation("TicketTargetUser", fields: [targetUserId], references: [id])
+  assignedUser          User?             @relation("TicketAssignedUser", fields: [assignedTo], references: [id])
+
+  @@index([workspaceId])
+  @@index([workspaceId, targetRole])
+  @@index([workspaceId, targetUserId])
+  @@index([workspaceId, assignedTo])
+  @@map("tickets")
+}
+

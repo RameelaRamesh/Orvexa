@@ -23,12 +23,13 @@ export class AssetsController {
   constructor(private readonly assetsService: AssetsService) {}
 
   @Get('categories')
+  @RequirePermissions('assets:view')
   async listCategories(@CurrentWorkspace() workspaceId: string) {
     return this.assetsService.listCategories(workspaceId);
   }
 
   @Post('categories')
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('assets:create')
   async createCategory(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: any,
@@ -37,6 +38,7 @@ export class AssetsController {
   }
 
   @Get()
+  @RequirePermissions('assets:view')
   async listAssets(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -53,7 +55,7 @@ export class AssetsController {
   }
 
   @Post()
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('assets:create')
   async createAsset(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -63,6 +65,7 @@ export class AssetsController {
   }
 
   @Get(':id')
+  @RequirePermissions('assets:view')
   async getAssetById(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') id: string,
@@ -71,6 +74,7 @@ export class AssetsController {
   }
 
   @Post(':id/assign')
+  @RequirePermissions('assets:assign')
   async assignAsset(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -81,6 +85,7 @@ export class AssetsController {
   }
 
   @Post(':id/transfer')
+  @RequirePermissions('assets:assign')
   async transferAsset(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -91,6 +96,7 @@ export class AssetsController {
   }
 
   @Post(':id/return')
+  @RequirePermissions('assets:assign')
   async returnAsset(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -101,6 +107,7 @@ export class AssetsController {
   }
 
   @Post(':id/maintenance')
+  @RequirePermissions('assets:edit')
   async recordMaintenance(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -111,6 +118,7 @@ export class AssetsController {
   }
 
   @Post(':id/retire')
+  @RequirePermissions('assets:delete')
   async retireAsset(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,

@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
+import { checkPermission } from '@/lib/permissions';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -37,7 +39,48 @@ import {
 import { toast } from 'sonner';
 
 export default function AssetsPage() {
-  const [activeTab, setActiveTab] = useState<'assets' | 'inventory' | 'movements' | 'documents'>('assets');
+  const router = useRouter();
+
+  // Active workspace & fine-grained permission resolution
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const canViewAssets = checkPermission(activeWorkspace, 'assets:view');
+  const canCreateAssets = checkPermission(activeWorkspace, 'assets:create');
+  const canEditAssets = checkPermission(activeWorkspace, 'assets:edit');
+  const canAssignAssets = checkPermission(activeWorkspace, 'assets:assign');
+  const canDeleteAssets = checkPermission(activeWorkspace, 'assets:delete');
+
+  const canViewInventory = checkPermission(activeWorkspace, 'inventory:view');
+  const canMoveInventory = checkPermission(activeWorkspace, 'inventory:move');
+  const canManageInventory = checkPermission(activeWorkspace, 'inventory:manage');
+
+  const canViewLedger = checkPermission(activeWorkspace, 'ledger:view');
+  const canExportLedger = checkPermission(activeWorkspace, 'ledger:export');
+
+  const canViewDocuments = checkPermission(activeWorkspace, 'documents:view');
+  const canUploadDocuments = checkPermission(activeWorkspace, 'documents:upload');
+  const canDownloadDocuments = checkPermission(activeWorkspace, 'documents:download');
+  const canDeleteDocuments = checkPermission(activeWorkspace, 'documents:delete');
+
+  const hasAnyAccess = canViewAssets || canViewInventory || canViewLedger || canViewDocuments;
+
+  const getDefaultTab = (): 'assets' | 'inventory' | 'movements' | 'documents' => {
+    if (canViewAssets) return 'assets';
+    if (canViewInventory) return 'inventory';
+    if (canViewLedger) return 'movements';
+    if (canViewDocuments) return 'documents';
+    return 'assets';
+  };
+
+  const [activeTab, setActiveTab] = useState<'assets' | 'inventory' | 'movements' | 'documents'>(() => getDefaultTab());
   const [assets, setAssets] = useState<any[]>([]);
   const [assetCategories, setAssetCategories] = useState<any[]>([]);
   const [inventoryItems, setInventoryItems] = useState<any[]>([]);
@@ -113,41 +156,106 @@ export default function AssetsPage() {
     };
   };
 
+  // Revalidate profile and workspace membership
+  useEffect(() => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    if (!token) return;
+    fetch(`${BRANDING.apiUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.json())
+      .then((res) => {
+        const profile = res.data || res;
+        const savedWsId = localStorage.getItem('activeWorkspaceId');
+        const mem =
+          (profile.memberships || []).find((m: any) => m.workspaceId === savedWsId) ||
+          profile.memberships?.[0];
+        if (mem) {
+          setActiveWorkspace(mem);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Ensure active tab corresponds to the first permitted tab
+  useEffect(() => {
+    const defaultTab = getDefaultTab();
+    if (activeTab === 'assets' && !canViewAssets) {
+      setActiveTab(defaultTab);
+    } else if (activeTab === 'inventory' && !canViewInventory) {
+      setActiveTab(defaultTab);
+    } else if (activeTab === 'movements' && !canViewLedger) {
+      setActiveTab(defaultTab);
+    } else if (activeTab === 'documents' && !canViewDocuments) {
+      setActiveTab(defaultTab);
+    }
+  }, [activeWorkspace, canViewAssets, canViewInventory, canViewLedger, canViewDocuments]);
+
   const loadData = async () => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
-    if (!wsId) return;
+    if (!wsId || !hasAnyAccess) {
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     try {
       const headers = getHeaders();
-      const [assetRes, catRes, invRes, locRes, movRes, fileRes, pplRes] = await Promise.all([
-        fetch(`${BRANDING.apiUrl}/assets`, { headers }),
-        fetch(`${BRANDING.apiUrl}/assets/categories`, { headers }),
-        fetch(`${BRANDING.apiUrl}/inventory/items`, { headers }),
-        fetch(`${BRANDING.apiUrl}/inventory/locations`, { headers }),
-        fetch(`${BRANDING.apiUrl}/inventory/movements`, { headers }),
-        fetch(`${BRANDING.apiUrl}/files`, { headers }),
-        fetch(`${BRANDING.apiUrl}/people`, { headers }),
-      ]);
+      const promises: Promise<any>[] = [];
 
-      const assetData = await assetRes.json();
-      const catData = await catRes.json();
-      const invData = await invRes.json();
-      const locData = await locRes.json();
-      const movData = await movRes.json();
-      const fileData = await fileRes.json();
-      const pplData = await pplRes.json();
+      if (canViewAssets) {
+        promises.push(
+          fetch(`${BRANDING.apiUrl}/assets`, { headers })
+            .then((r) => r.json())
+            .then((d) => setAssets(d.data || d || []))
+            .catch(() => {}),
+          fetch(`${BRANDING.apiUrl}/assets/categories`, { headers })
+            .then((r) => r.json())
+            .then((d) => setAssetCategories(d.data || d || []))
+            .catch(() => {})
+        );
+      }
+      if (canViewInventory) {
+        promises.push(
+          fetch(`${BRANDING.apiUrl}/inventory/items`, { headers })
+            .then((r) => r.json())
+            .then((d) => setInventoryItems(d.data || d || []))
+            .catch(() => {}),
+          fetch(`${BRANDING.apiUrl}/inventory/locations`, { headers })
+            .then((r) => r.json())
+            .then((d) => setLocations(d.data || d || []))
+            .catch(() => {})
+        );
+      }
+      if (canViewLedger) {
+        promises.push(
+          fetch(`${BRANDING.apiUrl}/inventory/movements`, { headers })
+            .then((r) => r.json())
+            .then((d) => setMovements(d.data || d || []))
+            .catch(() => {})
+        );
+      }
+      if (canViewDocuments) {
+        promises.push(
+          fetch(`${BRANDING.apiUrl}/files`, { headers })
+            .then((r) => r.json())
+            .then((d) => setFiles(d.data || d || []))
+            .catch(() => {})
+        );
+      }
+      if (canViewAssets || canCreateAssets || canAssignAssets) {
+        promises.push(
+          fetch(`${BRANDING.apiUrl}/people`, { headers })
+            .then((r) => r.json())
+            .then((d) => setPeople(d.data || d || []))
+            .catch(() => {})
+        );
+      }
 
-      if (assetData.success || Array.isArray(assetData)) setAssets(assetData.data || assetData || []);
-      if (catData.success || Array.isArray(catData)) setAssetCategories(catData.data || catData || []);
-      if (invData.success || Array.isArray(invData)) setInventoryItems(invData.data || invData || []);
-      if (locData.success || Array.isArray(locData)) setLocations(locData.data || locData || []);
-      if (movData.success || Array.isArray(movData)) setMovements(movData.data || movData || []);
-      if (fileData.success || Array.isArray(fileData)) setFiles(fileData.data || fileData || []);
-      if (pplData.success || Array.isArray(pplData)) setPeople(pplData.data || pplData || []);
+      await Promise.all(promises);
 
       if (selectedAsset) {
-        const fresh = (assetData.data || assetData || []).find((a: any) => a.id === selectedAsset.id);
+        const fresh = assets.find((a: any) => a.id === selectedAsset.id);
         if (fresh) setSelectedAsset(fresh);
       }
     } catch (err: any) {
@@ -160,7 +268,36 @@ export default function AssetsPage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [activeWorkspace]);
+
+  // Export movement ledger as CSV
+  const handleExportLedger = () => {
+    if (!movements.length) {
+      toast.info('No movement records available to export');
+      return;
+    }
+    const headers = ['Timestamp', 'Type', 'Item Name', 'Quantity', 'From Location', 'To Location', 'Actor', 'Reason'];
+    const rows = movements.map((m) => [
+      new Date(m.timestamp).toISOString(),
+      m.movementType,
+      `"${(m.itemName || '').replace(/"/g, '""')}"`,
+      m.quantity,
+      `"${(m.fromLocationName || '').replace(/"/g, '""')}"`,
+      `"${(m.toLocationName || '').replace(/"/g, '""')}"`,
+      `"${(m.actorName || '').replace(/"/g, '""')}"`,
+      `"${(m.reason || '').replace(/"/g, '""')}"`,
+    ]);
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `movement-ledger-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    toast.success('Movement ledger exported');
+  };
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -466,6 +603,30 @@ export default function AssetsPage() {
 
   const lowStockCount = inventoryItems.filter((i) => i.isLowStock).length;
 
+  // Route Guard: Access Restricted fallback if user has no view permission for any sub-module
+  if (!loading && !hasAnyAccess) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <Card className="max-w-md w-full text-center p-8 border-border shadow-md">
+          <div className="mx-auto w-12 h-12 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-600 mb-4">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-lg font-bold text-foreground">
+            Access Restricted
+          </CardTitle>
+          <CardDescription className="text-sm text-muted-foreground mt-2">
+            You don't have access to this section. Ask the workspace owner.
+          </CardDescription>
+          <div className="mt-6">
+            <Button variant="outline" onClick={() => router.push('/app/home')}>
+              Return to Home
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh-5rem)] flex-col space-y-4">
       {/* Header */}
@@ -480,72 +641,86 @@ export default function AssetsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowMoveStockModal(true)}>
-            <ArrowRightLeft className="mr-1.5 h-4 w-4" />
-            Move Stock
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowUploadModal(true)}>
-            <UploadCloud className="mr-1.5 h-4 w-4" />
-            Upload Document
-          </Button>
-          <Button size="sm" onClick={() => setShowCreateAssetModal(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            Register Asset
-          </Button>
+          {canMoveInventory && (
+            <Button variant="outline" size="sm" onClick={() => setShowMoveStockModal(true)}>
+              <ArrowRightLeft className="mr-1.5 h-4 w-4" />
+              Move Stock
+            </Button>
+          )}
+          {canUploadDocuments && (
+            <Button variant="outline" size="sm" onClick={() => setShowUploadModal(true)}>
+              <UploadCloud className="mr-1.5 h-4 w-4" />
+              Upload Document
+            </Button>
+          )}
+          {canCreateAssets && (
+            <Button size="sm" onClick={() => setShowCreateAssetModal(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Register Asset
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Top Nav Tabs */}
+      {/* Top Nav Tabs - Only display permitted tabs */}
       <div className="flex items-center gap-4 border-b border-border pb-2 text-sm">
-        <button
-          onClick={() => setActiveTab('assets')}
-          className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
-            activeTab === 'assets'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <HardDrive className="h-4 w-4" />
-          Company Assets ({assets.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('inventory')}
-          className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
-            activeTab === 'inventory'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Package className="h-4 w-4" />
-          Stock & Locations ({inventoryItems.length})
-          {lowStockCount > 0 && (
-            <Badge variant="destructive" className="ml-1 text-[10px] px-1.5 py-0">
-              {lowStockCount} Low
-            </Badge>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('movements')}
-          className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
-            activeTab === 'movements'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Layers className="h-4 w-4" />
-          Movement Ledger ({movements.length})
-        </button>
-        <button
-          onClick={() => setActiveTab('documents')}
-          className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
-            activeTab === 'documents'
-              ? 'border-b-2 border-primary text-primary'
-              : 'text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <FileText className="h-4 w-4" />
-          Document Vault ({files.length})
-        </button>
+        {canViewAssets && (
+          <button
+            onClick={() => setActiveTab('assets')}
+            className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
+              activeTab === 'assets'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <HardDrive className="h-4 w-4" />
+            Company Assets ({assets.length})
+          </button>
+        )}
+        {canViewInventory && (
+          <button
+            onClick={() => setActiveTab('inventory')}
+            className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
+              activeTab === 'inventory'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Package className="h-4 w-4" />
+            Stock & Locations ({inventoryItems.length})
+            {lowStockCount > 0 && (
+              <Badge variant="destructive" className="ml-1 text-[10px] px-1.5 py-0">
+                {lowStockCount} Low
+              </Badge>
+            )}
+          </button>
+        )}
+        {canViewLedger && (
+          <button
+            onClick={() => setActiveTab('movements')}
+            className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
+              activeTab === 'movements'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            Movement Ledger ({movements.length})
+          </button>
+        )}
+        {canViewDocuments && (
+          <button
+            onClick={() => setActiveTab('documents')}
+            className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
+              activeTab === 'documents'
+                ? 'border-b-2 border-primary text-primary'
+                : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <FileText className="h-4 w-4" />
+            Document Vault ({files.length})
+          </button>
+        )}
       </div>
 
       {/* TAB 1: COMPANY ASSETS */}
@@ -652,53 +827,61 @@ export default function AssetsPage() {
                   <div className="flex flex-wrap gap-2">
                     {selectedAsset.status !== 'DISPOSED' && (
                       <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowLifecycleModal({ type: 'ASSIGN', asset: selectedAsset })}
-                          className="text-xs h-7"
-                        >
-                          <User className="mr-1 h-3 w-3" />
-                          Assign
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowLifecycleModal({ type: 'TRANSFER', asset: selectedAsset })}
-                          className="text-xs h-7"
-                        >
-                          <ArrowRightLeft className="mr-1 h-3 w-3" />
-                          Transfer
-                        </Button>
-                        {selectedAsset.status === 'ASSIGNED' && (
+                        {canAssignAssets && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowLifecycleModal({ type: 'ASSIGN', asset: selectedAsset })}
+                              className="text-xs h-7"
+                            >
+                              <User className="mr-1 h-3 w-3" />
+                              Assign
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowLifecycleModal({ type: 'TRANSFER', asset: selectedAsset })}
+                              className="text-xs h-7"
+                            >
+                              <ArrowRightLeft className="mr-1 h-3 w-3" />
+                              Transfer
+                            </Button>
+                            {selectedAsset.status === 'ASSIGNED' && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowLifecycleModal({ type: 'RETURN', asset: selectedAsset })}
+                                className="text-xs h-7"
+                              >
+                                <CheckCircle2 className="mr-1 h-3 w-3" />
+                                Return
+                              </Button>
+                            )}
+                          </>
+                        )}
+                        {canEditAssets && (
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => setShowLifecycleModal({ type: 'RETURN', asset: selectedAsset })}
+                            onClick={() => setShowLifecycleModal({ type: 'MAINTENANCE', asset: selectedAsset })}
                             className="text-xs h-7"
                           >
-                            <CheckCircle2 className="mr-1 h-3 w-3" />
-                            Return
+                            <Wrench className="mr-1 h-3 w-3" />
+                            Maintenance
                           </Button>
                         )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowLifecycleModal({ type: 'MAINTENANCE', asset: selectedAsset })}
-                          className="text-xs h-7"
-                        >
-                          <Wrench className="mr-1 h-3 w-3" />
-                          Maintenance
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowLifecycleModal({ type: 'RETIRE', asset: selectedAsset })}
-                          className="text-xs h-7 text-destructive border-destructive/30 hover:bg-destructive/10"
-                        >
-                          <Trash2 className="mr-1 h-3 w-3" />
-                          Retire
-                        </Button>
+                        {canDeleteAssets && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setShowLifecycleModal({ type: 'RETIRE', asset: selectedAsset })}
+                            className="text-xs h-7 text-destructive border-destructive/30 hover:bg-destructive/10"
+                          >
+                            <Trash2 className="mr-1 h-3 w-3" />
+                            Retire
+                          </Button>
+                        )}
                       </>
                     )}
                   </div>
@@ -785,10 +968,12 @@ export default function AssetsPage() {
                   Real-time quantities, location breakdown, and replenishment triggers.
                 </CardDescription>
               </div>
-              <Button size="sm" onClick={() => setShowMoveStockModal(true)}>
-                <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
-                Move Stock
-              </Button>
+              {canMoveInventory && (
+                <Button size="sm" onClick={() => setShowMoveStockModal(true)}>
+                  <ArrowRightLeft className="mr-1.5 h-3.5 w-3.5" />
+                  Move Stock
+                </Button>
+              )}
             </CardHeader>
             <CardContent className="p-0 overflow-x-auto">
               <table className="w-full text-left text-xs border-collapse">
@@ -835,15 +1020,17 @@ export default function AssetsPage() {
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleTriggerReplenishment(item.id)}
-                          className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
-                        >
-                          <Sparkles className="mr-1 h-3 w-3" />
-                          Replenish
-                        </Button>
+                        {canManageInventory && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleTriggerReplenishment(item.id)}
+                            className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                          >
+                            <Sparkles className="mr-1 h-3 w-3" />
+                            Replenish
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -864,10 +1051,18 @@ export default function AssetsPage() {
                 Auditable transaction history of inward receipts, issues, location transfers, and physical adjustments.
               </CardDescription>
             </div>
-            <Button variant="outline" size="sm" onClick={loadData}>
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-              Refresh Ledger
-            </Button>
+            <div className="flex items-center gap-2">
+              {canExportLedger && (
+                <Button variant="outline" size="sm" onClick={handleExportLedger}>
+                  <Download className="mr-1.5 h-3.5 w-3.5" />
+                  Export Ledger
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={loadData}>
+                <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                Refresh Ledger
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="p-0 overflow-y-auto flex-1">
             <table className="w-full text-left text-xs border-collapse">
@@ -945,10 +1140,12 @@ export default function AssetsPage() {
                 Secure file storage, pre-signed temporary downloads, MIME type validation, and security auditing.
               </CardDescription>
             </div>
-            <Button size="sm" onClick={() => setShowUploadModal(true)}>
-              <UploadCloud className="mr-1.5 h-3.5 w-3.5" />
-              Upload Document
-            </Button>
+            {canUploadDocuments && (
+              <Button size="sm" onClick={() => setShowUploadModal(true)}>
+                <UploadCloud className="mr-1.5 h-3.5 w-3.5" />
+                Upload Document
+              </Button>
+            )}
           </CardHeader>
           <CardContent className="p-0 overflow-y-auto flex-1">
             <table className="w-full text-left text-xs border-collapse">
@@ -998,24 +1195,31 @@ export default function AssetsPage() {
                         {new Date(f.createdAt).toLocaleDateString()}
                       </td>
                       <td className="py-3 px-4 text-right space-x-1">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDownloadFile(f.id)}
-                          className="h-7 px-2 text-xs text-primary hover:bg-primary/10"
-                          title="Download file with secure pre-signed token"
-                        >
-                          <Download className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteFile(f.id)}
-                          className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
-                          title="Delete file"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        {canDownloadDocuments && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDownloadFile(f.id)}
+                            className="h-7 px-2 text-xs text-primary hover:bg-primary/10"
+                            title="Download file with secure pre-signed token"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {canDeleteDocuments && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteFile(f.id)}
+                            className="h-7 px-2 text-xs text-destructive hover:bg-destructive/10"
+                            title="Delete file"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {!canDownloadDocuments && !canDeleteDocuments && (
+                          <span className="text-muted-foreground text-[11px]">-</span>
+                        )}
                       </td>
                     </tr>
                   ))

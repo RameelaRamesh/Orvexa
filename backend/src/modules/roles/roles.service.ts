@@ -466,6 +466,11 @@ export class RolesService {
       'sla:view',
       'reports:view',
       'people:view',
+      // Assets, Inventory, Ledger & Documents (Manager: all except assets:delete, documents:delete, inventory:manage)
+      'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+      'inventory:view', 'inventory:move',
+      'ledger:view', 'ledger:export',
+      'documents:view', 'documents:upload', 'documents:download',
     ];
 
     const memberPermCodes = [
@@ -482,7 +487,7 @@ export class RolesService {
     for (const r of platformRoles) {
       let existing = await this.prisma.role.findFirst({
         where: { name: r.name, isSystemRole: true },
-        include: { permissions: true },
+        include: { permissions: { include: { permission: true } } },
       });
 
       if (!existing) {
@@ -492,30 +497,33 @@ export class RolesService {
             description: r.description,
             isSystemRole: true,
           },
-          include: { permissions: true },
+          include: { permissions: { include: { permission: true } } },
         });
       }
 
-      if (existing.permissions.length === 0 && allPermissions.length > 0) {
-        let codesToSeed: string[] = [];
-        if (r.name === 'OWNER') codesToSeed = allPermissions.map((p) => p.code);
-        else if (r.name === 'ADMIN') codesToSeed = adminPermCodes;
-        else if (r.name === 'MANAGER') codesToSeed = managerPermCodes;
-        else if (r.name === 'MEMBER') codesToSeed = memberPermCodes;
+      let codesToSeed: string[] = [];
+      if (r.name === 'OWNER') codesToSeed = allPermissions.map((p) => p.code);
+      else if (r.name === 'ADMIN') codesToSeed = adminPermCodes;
+      else if (r.name === 'MANAGER') codesToSeed = managerPermCodes;
+      else if (r.name === 'MEMBER') codesToSeed = memberPermCodes;
 
-        const permIds = codesToSeed
-          .map((code) => permMap.get(code))
-          .filter((id): id is string => Boolean(id));
+      const existingCodes = (existing.permissions || [])
+        .map((rp: any) => rp.permission?.code || rp.code)
+        .filter(Boolean);
 
-        if (permIds.length > 0) {
-          await this.prisma.rolePermission.createMany({
-            data: permIds.map((permissionId) => ({
-              roleId: existing.id,
-              permissionId,
-            })),
-            skipDuplicates: true,
-          });
-        }
+      const missingCodes = codesToSeed.filter((code) => !existingCodes.includes(code));
+      const permIds = missingCodes
+        .map((code) => permMap.get(code))
+        .filter((id): id is string => Boolean(id));
+
+      if (permIds.length > 0) {
+        await this.prisma.rolePermission.createMany({
+          data: permIds.map((permissionId) => ({
+            roleId: existing.id,
+            permissionId,
+          })),
+          skipDuplicates: true,
+        });
       }
     }
   }
@@ -610,6 +618,29 @@ export class RolesService {
       // Reports
       { code: 'reports:view', name: 'View Operational Reports & Dashboards', module: 'Reports' },
       { code: 'reports:export', name: 'Export Analytic Reports', module: 'Reports' },
+
+      // Assets, Inventory, Ledger & Documents
+      // ASSETS (5)
+      { code: 'assets:view', name: 'View company assets', module: 'Assets' },
+      { code: 'assets:create', name: 'Register new assets', module: 'Assets' },
+      { code: 'assets:edit', name: 'Edit asset details', module: 'Assets' },
+      { code: 'assets:assign', name: 'Assign assets to people', module: 'Assets' },
+      { code: 'assets:delete', name: 'Delete assets', module: 'Assets' },
+
+      // INVENTORY (3)
+      { code: 'inventory:view', name: 'View stock and locations', module: 'Inventory' },
+      { code: 'inventory:move', name: 'Move stock between locations', module: 'Inventory' },
+      { code: 'inventory:manage', name: 'Manage locations and low-stock rules', module: 'Inventory' },
+
+      // LEDGER (2)
+      { code: 'ledger:view', name: 'View movement ledger', module: 'Ledger' },
+      { code: 'ledger:export', name: 'Export ledger', module: 'Ledger' },
+
+      // DOCUMENTS (4)
+      { code: 'documents:view', name: 'View document vault', module: 'Documents' },
+      { code: 'documents:upload', name: 'Upload documents', module: 'Documents' },
+      { code: 'documents:download', name: 'Download documents', module: 'Documents' },
+      { code: 'documents:delete', name: 'Delete documents', module: 'Documents' },
 
       // Organization Structure & Administration
       { code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },

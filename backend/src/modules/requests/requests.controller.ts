@@ -20,6 +20,11 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 export class RequestsController {
   constructor(private readonly requestsService: RequestsService) {}
 
+  @Get('role-groups')
+  async getRoleGroups(@CurrentWorkspace() workspaceId: string) {
+    return this.requestsService.getRoleGroups(workspaceId);
+  }
+
   @Get()
   async listRequests(
     @CurrentWorkspace() workspaceId: string,
@@ -30,10 +35,11 @@ export class RequestsController {
     @Query('requesterMembershipId') requesterMembershipId?: string,
     @Query('ownerMembershipId') ownerMembershipId?: string,
     @Query('search') search?: string,
+    @Query('scope') scope?: string,
   ) {
     return this.requestsService.listRequests(
       workspaceId,
-      { status, categoryId, responsibleTeamId, requesterMembershipId, ownerMembershipId, search },
+      { status, categoryId, responsibleTeamId, requesterMembershipId, ownerMembershipId, search, scope },
       req.userContext,
     );
   }
@@ -82,6 +88,15 @@ export class RequestsController {
     @Param('id') id: string,
   ) {
     return this.requestsService.getRequestById(workspaceId, id, req.userContext);
+  }
+
+  @Post(':id/accept')
+  async acceptRequest(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+  ) {
+    return this.requestsService.acceptRequest(workspaceId, id, req.membershipId, req.user);
   }
 
   @Post(':id/acknowledge')

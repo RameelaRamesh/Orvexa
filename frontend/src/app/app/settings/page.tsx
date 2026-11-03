@@ -209,12 +209,9 @@ export default function SettingsPage() {
           if (wsData.settings) {
             setCountry(wsData.settings.country || 'United States');
             setTimezone(wsData.settings.timezone || 'UTC-05:00 (Eastern Time)');
-            const loadedMods = wsData.settings.enabledModules || [
-              'people', 'projects', 'tasks', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
-            ];
-            // Ensure 'projects' and 'tasks' are always enabled and preserved
-            const healedMods = Array.from(new Set([...loadedMods, 'projects', 'tasks']));
-            setEnabledModules(healedMods);
+            setEnabledModules(wsData.settings.enabledModules || [
+              'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
+            ]);
           }
         }
       }
@@ -313,10 +310,10 @@ export default function SettingsPage() {
   // Handler 2: Apply Profile Layout
   const handleApplyPreset = async (profileId: string) => {
     let presetModules = [
-      'people', 'projects', 'tasks', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
+      'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
     ];
     if (profileId === 'CORE_OPS') {
-      presetModules = ['people', 'projects', 'tasks', 'quality', 'sla', 'time', 'attendance', 'leave', 'approvals'];
+      presetModules = ['people', 'work_queue', 'quality', 'sla', 'time', 'attendance', 'leave', 'approvals'];
     } else if (profileId === 'PROJECTS_DELIVERY') {
       presetModules = ['people', 'projects', 'tasks', 'time', 'clients', 'approvals'];
     } else if (profileId === 'LEAN_SERVICES') {
@@ -405,18 +402,44 @@ export default function SettingsPage() {
     }
   };
 
-  // Handler 5: Toggle Role Permission
+  // Handler 5: Toggle Role Permission with Group Dependency Rules
   const handleTogglePermission = async (roleId: string, permId: string) => {
     const role = roles.find((r) => r.id === roleId);
     if (!role) return;
 
     const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.id || p);
+    const targetPerm = allPermissions.find((p) => p.id === permId || p.code === permId);
+    const isCurrentlyChecked = currentPermIds.includes(permId);
+
     let updatedPermIds: string[];
 
-    if (currentPermIds.includes(permId)) {
-      updatedPermIds = currentPermIds.filter((id) => id !== permId);
+    // Modules with view-dependency enforcement
+    const dependencyGroups = ['assets', 'inventory', 'ledger', 'documents'];
+    const targetCode = targetPerm?.code || '';
+    const [targetGroup] = targetCode.split(':');
+
+    if (isCurrentlyChecked) {
+      // Unchecking
+      if (dependencyGroups.includes(targetGroup) && targetCode === `${targetGroup}:view`) {
+        // Unchecking view unchecks all permissions in that group
+        const groupPermIds = allPermissions
+          .filter((p) => p.code.startsWith(`${targetGroup}:`))
+          .map((p) => p.id);
+        updatedPermIds = currentPermIds.filter((id) => !groupPermIds.includes(id));
+      } else {
+        updatedPermIds = currentPermIds.filter((id) => id !== permId);
+      }
     } else {
+      // Checking
       updatedPermIds = [...currentPermIds, permId];
+
+      if (dependencyGroups.includes(targetGroup) && targetCode !== `${targetGroup}:view`) {
+        // Checking any non-view permission automatically checks the view permission
+        const viewPerm = allPermissions.find((p) => p.code === `${targetGroup}:view`);
+        if (viewPerm && !updatedPermIds.includes(viewPerm.id)) {
+          updatedPermIds.push(viewPerm.id);
+        }
+      }
     }
 
     try {
@@ -1070,8 +1093,8 @@ export default function SettingsPage() {
 
   // Operational Profile Presets
   const templatePresets = [
-    { id: 'GENERAL', name: 'Comprehensive Suite', icon: Sparkles, desc: 'Universal operations workspace with all standard modules (Projects, Tasks, People, Time, Attendance, QA, SLAs) enabled.' },
-    { id: 'CORE_OPS', name: 'Core Operations', icon: LayoutGrid, desc: 'Optimized for operations execution, work projects, tasks, QA audits, SLAs, and attendance.' },
+    { id: 'GENERAL', name: 'Comprehensive Suite', icon: Sparkles, desc: 'Universal operations workspace with all modules and engines enabled.' },
+    { id: 'CORE_OPS', name: 'Core Operations', icon: LayoutGrid, desc: 'Optimized for high-throughput processing queues, QA audits, SLAs, and attendance.' },
     { id: 'PROJECTS_DELIVERY', name: 'Projects & Delivery', icon: Briefcase, desc: 'Optimized for projects, tasks, milestones, approvals, and client delivery.' },
     { id: 'LEAN_SERVICES', name: 'Lean Professional Services', icon: DollarSign, desc: 'Optimized for client deliverables, approval chains, time logging, and billing.' },
   ];
@@ -1601,7 +1624,7 @@ export default function SettingsPage() {
                               {modName}
                             </h4>
                             <span className="text-[10px] text-muted-foreground bg-muted font-medium px-2 py-0.5 rounded-md">
-                              {modPerms.length} actions
+                              {modPerms.length} {modPerms.length === 1 ? 'action' : 'actions'}
                             </span>
                           </div>
 

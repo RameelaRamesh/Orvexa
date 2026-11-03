@@ -254,4 +254,24 @@ This link expires in 1 hour. If you did not request this, you can ignore this em
       return { delivered: false };
     }
   }
+
+  async sendNotificationEmail(to: string, subject: string, message: string, link?: string): Promise<{ delivered: boolean; error?: string }> {
+    if (this.hasSmtp && this.transporter) {
+      try {
+        await this.transporter.sendMail({
+          from: this.fromAddress,
+          to,
+          subject,
+          text: `${message}\n\nView details: ${link || ''}`,
+          html: `<div style="font-family: sans-serif; padding: 20px;"><h3>${subject}</h3><p>${message}</p>${link ? `<p><a href="${link}" style="background: #2563eb; color: #fff; padding: 8px 16px; text-decoration: none; border-radius: 4px;">View Request</a></p>` : ''}</div>`,
+        });
+        this.logger.log(`Notification email sent to ${to}: ${subject}`);
+        return { delivered: true };
+      } catch (err: any) {
+        this.logger.warn(`Failed to dispatch email to ${to}: ${err.message}`);
+        return { delivered: false, error: err.message };
+      }
+    }
+    return { delivered: false, error: 'SMTP credentials not configured' };
+  }
 }

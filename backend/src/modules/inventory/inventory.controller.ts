@@ -21,12 +21,13 @@ export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) {}
 
   @Get('locations')
+  @RequirePermissions('inventory:view')
   async listLocations(@CurrentWorkspace() workspaceId: string) {
     return this.inventoryService.listLocations(workspaceId);
   }
 
   @Post('locations')
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('inventory:manage')
   async createLocation(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: any,
@@ -35,12 +36,13 @@ export class InventoryController {
   }
 
   @Get('items')
+  @RequirePermissions('inventory:view')
   async listItems(@CurrentWorkspace() workspaceId: string) {
     return this.inventoryService.listItems(workspaceId);
   }
 
   @Post('items')
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('inventory:manage')
   async createItem(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: any,
@@ -49,6 +51,7 @@ export class InventoryController {
   }
 
   @Get('movements')
+  @RequirePermissions('ledger:view')
   async getMovements(
     @CurrentWorkspace() workspaceId: string,
     @Query('itemId') itemId?: string,
@@ -57,6 +60,7 @@ export class InventoryController {
   }
 
   @Post('movements')
+  @RequirePermissions('inventory:move')
   async recordStockMovement(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -66,6 +70,7 @@ export class InventoryController {
   }
 
   @Post('items/:id/replenish')
+  @RequirePermissions('inventory:manage')
   async createReplenishmentTicket(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,

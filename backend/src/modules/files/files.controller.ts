@@ -18,6 +18,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
+import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 
 @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('files')
@@ -25,6 +26,7 @@ export class FilesController {
   constructor(private readonly filesService: FilesService) {}
 
   @Post('upload')
+  @RequirePermissions('documents:upload')
   @UseInterceptors(FileInterceptor('file'))
   async uploadFile(
     @CurrentWorkspace() workspaceId: string,
@@ -65,6 +67,7 @@ export class FilesController {
   }
 
   @Get()
+  @RequirePermissions('documents:view')
   async listFiles(
     @CurrentWorkspace() workspaceId: string,
     @Query('entityType') entityType?: string,
@@ -74,6 +77,7 @@ export class FilesController {
   }
 
   @Get(':id')
+  @RequirePermissions('documents:download')
   async getFile(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -83,6 +87,7 @@ export class FilesController {
   }
 
   @Delete(':id')
+  @RequirePermissions('documents:delete')
   async deleteFile(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,

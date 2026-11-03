@@ -403,7 +403,9 @@ export class InventoryService {
     data: { requestedQuantity: number; reason?: string },
   ) {
     const items = await this.listItems(workspaceId);
-    const item = items.find((i) => i.id === itemId);
+    const item = items.find(
+      (i) => i.id === itemId || i.code === itemId || i.name.toLowerCase() === itemId.toLowerCase(),
+    );
     if (!item) throw new NotFoundException('Inventory item not found');
 
     const ws = await this.prisma.workspace.findUnique({
@@ -413,6 +415,25 @@ export class InventoryService {
     const settings = (ws?.settings as any) || {};
     const requests = settings.serviceRequests || [];
     const categories = settings.requestCategories || [];
+
+    // Stop low-stock trigger from creating duplicate ticket if an open one already exists for this item
+    const openTicket = requests.find((r: any) =>
+      ['SUBMITTED', 'ACKNOWLEDGED', 'IN_PROGRESS'].includes(r.status) &&
+      (r.inventoryItem === item.name ||
+        r.linkedAssetId === item.id ||
+        r.replenishmentItems?.some(
+          (ri: any) => ri.inventoryItemId === item.id || ri.name === item.name,
+        )),
+    );
+
+    if (openTicket) {
+      return {
+        ticketNumber: openTicket.ticketNumber,
+        request: openTicket,
+        isExisting: true,
+        message: `An open replenishment ticket (${openTicket.ticketNumber}) already exists for ${item.name}.`,
+      };
+    }
 
     const facilitiesCat = categories.find(
       (c: any) => c.code === 'FACILITIES_SUPPLIES' || c.name.toLowerCase().includes('supplies'),
@@ -432,19 +453,25 @@ export class InventoryService {
       description: data.reason || `Automated/Manual low stock replenishment triggered for ${item.name}. Current stock: ${item.totalQuantityOnHand}.`,
       requesterMembershipId: actorMembershipId,
       requesterName: 'Inventory System',
+      targetRole: 'ADMIN',
+      targetUserId: null,
+      targetUserName: null,
+      assignedTo: null,
+      assignedToName: null,
+      acceptedAt: null,
       priority: 'HIGH',
       status: 'SUBMITTED',
       inventoryItem: item.name,
       requestedQuantity: Number(data.requestedQuantity),
       replenishmentItems: [{ inventoryItemId: item.id, name: item.name, requestedQuantity: Number(data.requestedQuantity) }],
       comments: [],
-      activityLog: [
+      activityTimeline: [
         {
-          action: 'SUBMITTED',
-          actorId: actorMembershipId,
+          action: 'CREATED',
+          actorMembershipId: actorMembershipId,
           actorName: 'Inventory Controller',
           timestamp: new Date(),
-          details: `Replenishment ticket created for ${data.requestedQuantity} ${item.unit} of ${item.name}.`,
+          notes: `Replenishment ticket created and routed to Admin group for ${data.requestedQuantity} ${item.unit} of ${item.name}.`,
         },
       ],
       createdAt: new Date(),

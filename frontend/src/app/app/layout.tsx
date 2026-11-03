@@ -6,6 +6,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
+import { checkPermission } from '@/lib/permissions';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -248,25 +249,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     return r;
   };
   const isPlatformAdmin = accessRole === 'OWNER';
-  const rolePermissions: string[] = activeWorkspace?.role?.permissions?.map(
-    (rp: any) => rp.permission?.code || rp.code || rp,
-  ) || [];
 
-  const hasPerm = (perm: string) => {
-    if (isPlatformAdmin) return true;
-    const [mod] = perm.split(':');
-    return (
-      rolePermissions.includes(perm) ||
-      rolePermissions.includes(`${mod}:manage`) ||
-      rolePermissions.includes(`${mod}:administer`)
-    );
-  };
+  const hasPerm = (perm: string) => checkPermission(activeWorkspace, perm);
 
-  const rawEnabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
-    'people', 'projects', 'tasks', 'time', 'attendance', 'quality', 'sla', 'settings'
+  const enabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
+    'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'quality', 'sla', 'settings'
   ];
-  // Guarantee 'projects' and 'tasks' are always active in enabledModules (never replaced by work_queue)
-  const enabledModules: string[] = Array.from(new Set([...rawEnabledModules, 'projects', 'tasks']));
 
   const allNavItems = [
     { name: 'Home / My Work', href: '/app/home', icon: Home, visible: true },
@@ -316,7 +304,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Assets, Inventory & Docs',
       href: '/app/assets',
       icon: Package,
-      visible: accessRole !== 'MEMBER',
+      visible:
+        hasPerm('assets:view') ||
+        hasPerm('inventory:view') ||
+        hasPerm('ledger:view') ||
+        hasPerm('documents:view'),
     },
     {
       name: 'Payroll & Compensation',

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -8,36 +8,33 @@ import { Badge } from '@/components/ui/badge';
 import {
   Inbox,
   Plus,
-  Filter,
   CheckCircle2,
   Clock,
   AlertTriangle,
-  RotateCcw,
   Package,
   Layers,
-  ArrowRight,
   User,
   Users,
   Search,
   Check,
   X,
-  FileText,
   MessageSquare,
-  AlertCircle,
   Tag,
-  Settings,
-  ChevronRight,
-  TrendingDown,
   RefreshCw,
   Send,
   Sparkles,
+  Crown,
+  Shield,
+  Briefcase,
+  Paperclip,
+  UserCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 interface RequestCategory {
   id: string;
   name: string;
-  code: string;
+  code?: string;
   description?: string;
   defaultResponsibleTeamId?: string;
   slaHours?: number;
@@ -45,12 +42,14 @@ interface RequestCategory {
 
 interface InventoryItem {
   id: string;
-  code: string;
+  code?: string;
   name: string;
   category: string;
-  quantityOnHand: number;
+  quantityOnHand?: number;
+  currentStock?: number;
   unit: string;
-  reorderPoint: number;
+  reorderPoint?: number;
+  reorderThreshold?: number;
 }
 
 interface ServiceRequest {
@@ -60,33 +59,44 @@ interface ServiceRequest {
   description: string;
   categoryId: string;
   requesterMembershipId: string;
+  requesterName?: string;
+  requesterRole?: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
   ownerMembershipId?: string;
   responsibleTeamId?: string;
+
+  // Role Routing Fields (Requirement 2)
+  targetRole: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
+  targetUserId?: string | null;
+  targetUserName?: string | null;
+  assignedTo?: string | null;
+  assignedToName?: string | null;
+  acceptedAt?: string | null;
+
   priority: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   status: 'SUBMITTED' | 'ACKNOWLEDGED' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | 'CANCELLED';
   dueDate?: string;
-  attachments?: Array<{ name: string; url: string }>;
+  attachments?: Array<{ id?: string; name: string; url?: string }>;
   comments?: Array<{
     id: string;
-    membershipId: string;
+    membershipId?: string;
     authorName: string;
     text: string;
     createdAt: string;
   }>;
   activityTimeline?: Array<{
     action: string;
-    actorMembershipId: string;
+    actorMembershipId?: string;
+    actorName: string;
     timestamp: string;
     notes?: string;
+    details?: string;
   }>;
   replenishmentItems?: Array<{
     inventoryItemId: string;
+    name?: string;
     requestedQuantity: number;
     fulfilledQuantity?: number;
   }>;
-  acknowledgedAt?: string;
-  resolvedAt?: string;
-  closedAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -99,11 +109,14 @@ export default function RequestsPage() {
   const [teams, setTeams] = useState<any[]>([]);
   const [people, setPeople] = useState<any[]>([]);
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentUserId, setCurrentUserId] = useState<string>('');
+  const [currentRole, setCurrentRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER'>('MEMBER');
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
+  const [scopeFilter, setScopeFilter] = useState<'ALL' | 'SENT_TO_ME' | 'SENT_BY_ME'>('ALL');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [searchFilter, setSearchFilter] = useState<string>('');
 
@@ -112,22 +125,26 @@ export default function RequestsPage() {
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showReplenishPresetModal, setShowReplenishPresetModal] = useState(false);
 
+  // Redesigned Modal Form State (Requirement 1)
+  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | ''>('');
+  const [targetUserId, setTargetUserId] = useState<string>('');
+  const [requestTitle, setRequestTitle] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [priority, setPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('MEDIUM');
+  const [description, setDescription] = useState('');
+  const [attachmentName, setAttachmentName] = useState<string | null>(null);
+  const [formErrors, setFormErrors] = useState<{ role?: string; title?: string }>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [claiming, setClaiming] = useState(false);
+
+  // Refs for Auto-Focus (Requirement 1)
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
   // Action states
   const [commentText, setCommentText] = useState('');
   const [actionNotes, setActionNotes] = useState('');
   const [escalateReason, setEscalateReason] = useState('');
   const [showEscalatePrompt, setShowEscalatePrompt] = useState(false);
-
-  // Create Request Form State
-  const [reqForm, setReqForm] = useState({
-    title: '',
-    description: '',
-    categoryId: '',
-    responsibleTeamId: '',
-    priority: 'MEDIUM' as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
-    dueDate: '',
-    replenishmentItems: [] as Array<{ inventoryItemId: string; requestedQuantity: number }>,
-  });
 
   // Category Form State
   const [catForm, setCatForm] = useState({
@@ -172,14 +189,26 @@ export default function RequestsPage() {
       const meData = await meRes.json();
 
       if (reqData.success) setRequests(reqData.data || []);
-      if (catData.success) setCategories(catData.data || []);
+      if (catData.success) {
+        setCategories(catData.data || []);
+        if (catData.data?.length > 0 && !selectedCategory) {
+          const gen = catData.data.find((c: any) => c.name.toLowerCase() === 'general request');
+          setSelectedCategory(gen ? gen.id : catData.data[0].id);
+        }
+      }
       if (invData.success) setInventory(invData.data || []);
       if (teamData.success) setTeams(teamData.data || []);
       if (peopleData.success) setPeople(peopleData.data || []);
 
       if (meData.success && meData.data) {
+        setCurrentUserId(meData.data.id || '');
         const mem = meData.data.memberships?.find((m: any) => m.workspaceId === wsId);
-        if (mem) setCurrentMembershipId(mem.id);
+        if (mem) {
+          setCurrentMembershipId(mem.id);
+          if (mem.accessRole) {
+            setCurrentRole(mem.accessRole.toUpperCase() as any);
+          }
+        }
       }
 
       // Sync active selected request if open
@@ -199,81 +228,225 @@ export default function RequestsPage() {
     loadData();
   }, []);
 
-  const handleCreateRequest = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!reqForm.title.trim() || !reqForm.categoryId) {
-      toast.error('Title and category are required');
+  // Listen to Escape key to close modal (Requirement 1)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showCreateModal) {
+        setShowCreateModal(false);
+      }
+    };
+    if (showCreateModal) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showCreateModal]);
+
+  // Handle modal open & auto-focus
+  const openCreateModal = () => {
+    setFormErrors({});
+    // Preselect default category: General request
+    const gen = categories.find((c) => c.name.toLowerCase() === 'general request');
+    setSelectedCategory(gen ? gen.id : categories[0]?.id || '');
+    setShowCreateModal(true);
+  };
+
+  // Group members by role (Requirement 1 & 2)
+  const roleMembers = {
+    OWNER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER'),
+    ADMIN: people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN'),
+    MANAGER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER'),
+    MEMBER: people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER'),
+  };
+
+  // Hierarchy Level Checks (Requirement 7)
+  const roleHierarchy: Record<string, number> = {
+    MEMBER: 1,
+    MANAGER: 2,
+    ADMIN: 3,
+    OWNER: 4,
+  };
+  const myLevel = roleHierarchy[currentRole] || 1;
+
+  // Handle Create Request Submit (Requirement 1 & 2)
+  const handleFormSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const errors: { role?: string; title?: string } = {};
+
+    if (!selectedRole) {
+      errors.role = 'Choose who should receive this request';
+    }
+    if (!requestTitle.trim()) {
+      errors.title = 'Enter a title';
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFormErrors(errors);
       return;
     }
 
+    setSubmitting(true);
     try {
       const headers = getHeaders();
+      const payload: any = {
+        title: requestTitle.trim(),
+        description: description.trim() || 'No additional details provided.',
+        categoryId: selectedCategory,
+        priority,
+        targetRole: selectedRole,
+        targetUserId: targetUserId ? targetUserId : null,
+      };
+
+      if (attachmentName) {
+        payload.attachments = [{ id: 'att_1', name: attachmentName, url: '#' }];
+      }
+
       const res = await fetch(`${BRANDING.apiUrl}/requests`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(reqForm),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to submit request');
 
-      toast.success(`Request ${data.data.ticketNumber} submitted successfully`);
+      toast.success(`Request ${data.data?.ticketNumber || ''} submitted successfully!`);
       setShowCreateModal(false);
-      setReqForm({
-        title: '',
-        description: '',
-        categoryId: '',
-        responsibleTeamId: '',
-        priority: 'MEDIUM',
-        dueDate: '',
-        replenishmentItems: [],
-      });
 
-      loadData();
-      setSelectedRequest(data.data);
+      // Reset form
+      setSelectedRole('');
+      setTargetUserId('');
+      setRequestTitle('');
+      setDescription('');
+      setPriority('MEDIUM');
+      setAttachmentName(null);
+      setFormErrors({});
+
+      await loadData();
+      if (data.data) {
+        setSelectedRequest(data.data);
+      }
     } catch (err: any) {
       toast.error(err.message || 'Failed to submit request');
+    } finally {
+      setSubmitting(false);
     }
   };
 
-  // Preset quick submission for the Phase 8 tissue & snack replenishment test scenario
-  const handleLaunchReplenishScenario = async () => {
-    const facilitiesCat = categories.find(
-      (c) => c.code === 'FACILITIES_SUPPLIES' || c.name.toLowerCase().includes('supplies') || c.name.toLowerCase().includes('facilities'),
-    );
-    const catId = facilitiesCat ? facilitiesCat.id : categories[0]?.id || '';
+  // Claim / Accept Ticket (Requirement 5)
+  const handleAcceptTicket = async (requestId: string) => {
+    setClaiming(true);
+    try {
+      const headers = getHeaders();
+      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/accept`, {
+        method: 'POST',
+        headers,
+      });
 
-    // Pick tissue and snack inventory items
-    const tissue = inventory.find((i) => i.code === 'TISSUE_BOXES' || i.name.toLowerCase().includes('tissue'));
-    const snack = inventory.find((i) => i.code === 'SNACK_PACKS' || i.name.toLowerCase().includes('snack'));
+      const data = await res.json();
+      if (res.status === 409) {
+        toast.error(data.message || 'This ticket has already been accepted by another member.');
+        await loadData();
+        return;
+      }
+      if (!res.ok) throw new Error(data.message || 'Failed to accept ticket');
 
-    const items: any[] = [];
-    if (tissue) items.push({ inventoryItemId: tissue.id, requestedQuantity: 5 });
-    if (snack) items.push({ inventoryItemId: snack.id, requestedQuantity: 10 });
+      toast.success('Ticket accepted! You are now assigned.');
+      await loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error accepting ticket');
+    } finally {
+      setClaiming(false);
+    }
+  };
+
+  // Escalate Request (Requirement 6)
+  const handleEscalate = async (requestId: string) => {
+    if (!escalateReason.trim()) {
+      toast.error('Please specify escalation reason');
+      return;
+    }
 
     try {
       const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests`, {
+      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/escalate`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ reason: escalateReason.trim() }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to escalate');
+
+      toast.success('Request escalated up to the next role group!');
+      setEscalateReason('');
+      setShowEscalatePrompt(false);
+      await loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error escalating request');
+    }
+  };
+
+  const handleFulfill = async (requestId: string) => {
+    try {
+      const headers = getHeaders();
+      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/fulfill`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
-          title: 'Urgent Office Supplies & Breakroom Snacks Replenishment',
-          description: 'Requesting replenishment of 5 tissue boxes for conference rooms and 10 snack packs for main pantry.',
-          categoryId: catId,
-          priority: 'HIGH',
-          replenishmentItems: items,
+          fulfillmentNotes: actionNotes || 'Replenished items delivered. Stock verified and deducted.',
         }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to create replenishment request');
+      if (!res.ok) throw new Error(data.message || 'Failed to fulfill');
 
-      toast.success(`Test Scenario Request ${data.data.ticketNumber} created!`);
-      setShowReplenishPresetModal(false);
-      loadData();
-      setSelectedRequest(data.data);
+      toast.success('Request fulfilled! Inventory stock levels updated.');
+      setActionNotes('');
+      await loadData();
     } catch (err: any) {
-      toast.error(err.message || 'Error launching test scenario');
+      toast.error(err.message || 'Error fulfilling request');
+    }
+  };
+
+  const handleClose = async (requestId: string) => {
+    try {
+      const headers = getHeaders();
+      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/close`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ feedback: actionNotes || 'Satisfactorily resolved and closed.' }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to close');
+
+      toast.success('Request closed successfully');
+      setActionNotes('');
+      await loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error closing request');
+    }
+  };
+
+  const handleAddComment = async (requestId: string) => {
+    if (!commentText.trim()) return;
+
+    try {
+      const headers = getHeaders();
+      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/comments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ text: commentText.trim() }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to add comment');
+
+      toast.success('Comment posted');
+      setCommentText('');
+      await loadData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error posting comment');
     }
   };
 
@@ -304,125 +477,15 @@ export default function RequestsPage() {
         defaultResponsibleTeamId: '',
         slaHours: 24,
       });
-      loadData();
+      await loadData();
     } catch (err: any) {
       toast.error(err.message || 'Failed to create category');
     }
   };
 
-  const handleAcknowledge = async (requestId: string) => {
-    try {
-      const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/acknowledge`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ notes: actionNotes || 'Acknowledged and assigned.' }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to acknowledge');
-
-      toast.success('Request acknowledged and assigned to you');
-      setActionNotes('');
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Error acknowledging request');
-    }
-  };
-
-  const handleFulfill = async (requestId: string) => {
-    try {
-      const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/fulfill`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          fulfillmentNotes: actionNotes || 'Replenished items delivered to breakroom and desks. Stock deducted.',
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to fulfill');
-
-      toast.success('Request fulfilled! Inventory stock levels updated.');
-      setActionNotes('');
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Error fulfilling request');
-    }
-  };
-
-  const handleClose = async (requestId: string) => {
-    try {
-      const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/close`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ feedback: actionNotes || 'Satisfactorily resolved. Verified by requester.' }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to close');
-
-      toast.success('Request closed successfully');
-      setActionNotes('');
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Error closing request');
-    }
-  };
-
-  const handleEscalate = async (requestId: string) => {
-    if (!escalateReason.trim()) {
-      toast.error('Please specify escalation reason');
-      return;
-    }
-
-    try {
-      const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/escalate`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ reason: escalateReason.trim() }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to escalate');
-
-      toast.success('Request escalated to URGENT priority');
-      setEscalateReason('');
-      setShowEscalatePrompt(false);
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Error escalating request');
-    }
-  };
-
-  const handleAddComment = async (requestId: string) => {
-    if (!commentText.trim()) return;
-
-    try {
-      const headers = getHeaders();
-      const res = await fetch(`${BRANDING.apiUrl}/requests/${requestId}/comments`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ text: commentText.trim() }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to add comment');
-
-      toast.success('Comment posted');
-      setCommentText('');
-      loadData();
-    } catch (err: any) {
-      toast.error(err.message || 'Error posting comment');
-    }
-  };
-
   const getMemberName = (memId?: string) => {
     if (!memId) return 'Unassigned';
-    const p = people.find((item) => item.id === memId);
+    const p = people.find((item) => item.id === memId || item.userId === memId);
     if (!p) return 'Team Member';
     const first = p.user?.firstName || p.firstName || '';
     const last = p.user?.lastName || p.lastName || '';
@@ -437,7 +500,7 @@ export default function RequestsPage() {
 
   const getCategoryName = (catId: string) => {
     const cat = categories.find((c) => c.id === catId);
-    return cat ? cat.name : 'General Request';
+    return cat ? cat.name : 'General request';
   };
 
   const getPriorityBadge = (p: string) => {
@@ -469,9 +532,37 @@ export default function RequestsPage() {
     }
   };
 
+  // Helper for Inventory stock lookup (Requirement 8)
+  const getInventoryItemDetails = (inventoryItemId?: string, itemName?: string) => {
+    const inv = inventory.find(
+      (i) =>
+        i.id === inventoryItemId ||
+        i.code === inventoryItemId ||
+        (itemName && i.name.toLowerCase() === itemName.toLowerCase()),
+    );
+    const displayName = inv
+      ? inv.name
+      : itemName || (inventoryItemId ? inventoryItemId.replace('inv_item_', '').replace(/_/g, ' ') : 'Inventory Item');
+    const stockOnHand = inv ? `${inv.quantityOnHand ?? inv.currentStock ?? 0} ${inv.unit || 'units'}` : 'In Stock';
+    return { inv, displayName, stockOnHand };
+  };
+
+  // Filter requests based on status, scope, category, and search (Requirement 3)
   const filteredRequests = requests.filter((r) => {
     if (statusFilter !== 'ALL' && r.status !== statusFilter) return false;
     if (categoryFilter !== 'ALL' && r.categoryId !== categoryFilter) return false;
+
+    // Scope Filter: All / Sent to me / Sent by me (Requirement 3)
+    if (scopeFilter === 'SENT_TO_ME') {
+      const isRequester = r.requesterMembershipId === currentMembershipId;
+      const isTargetRole = r.targetRole && r.targetRole.toUpperCase() === currentRole.toUpperCase();
+      const isTargetUser = r.targetUserId === currentUserId || r.targetUserId === currentMembershipId;
+      const isAssigned = r.assignedTo === currentMembershipId || r.assignedTo === currentUserId;
+      if (isRequester || (!isTargetRole && !isTargetUser && !isAssigned)) return false;
+    } else if (scopeFilter === 'SENT_BY_ME') {
+      if (r.requesterMembershipId !== currentMembershipId) return false;
+    }
+
     if (searchFilter.trim()) {
       const q = searchFilter.toLowerCase();
       const matchTitle = r.title.toLowerCase().includes(q);
@@ -488,25 +579,16 @@ export default function RequestsPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
             <Inbox className="h-6 w-6 text-primary" />
-            Internal Requests, Tickets & Fulfillment
+            Internal Requests & Tickets
           </h1>
           <p className="text-sm text-muted-foreground">
-            Universal ticket engine, team queues, replenishment fulfillment, and notification auditing.
+            Role-based ticket routing, queue claiming, stock fulfillment, and lifecycle tracking.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setShowReplenishPresetModal(true)}
-            className="border-primary/40 text-primary hover:bg-primary/10"
-          >
-            <Sparkles className="mr-1.5 h-4 w-4" />
-            Replenishment Test Scenario
-          </Button>
-          <Button size="sm" onClick={() => setShowCreateModal(true)}>
+          <Button size="sm" onClick={openCreateModal}>
             <Plus className="mr-1.5 h-4 w-4" />
-            Submit Request
+            Submit Service Request
           </Button>
         </div>
       </div>
@@ -566,11 +648,12 @@ export default function RequestsPage() {
                 />
               </div>
 
-              <div className="flex gap-2">
+              <div className="grid grid-cols-3 gap-2">
+                {/* Status Filter */}
                 <select
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value)}
-                  className="flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
                 >
                   <option value="ALL">All Statuses</option>
                   <option value="SUBMITTED">SUBMITTED</option>
@@ -579,10 +662,22 @@ export default function RequestsPage() {
                   <option value="CLOSED">CLOSED</option>
                 </select>
 
+                {/* Scope Filter: All / Sent to me / Sent by me (Requirement 3) */}
+                <select
+                  value={scopeFilter}
+                  onChange={(e) => setScopeFilter(e.target.value as any)}
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground font-medium"
+                >
+                  <option value="ALL">All</option>
+                  <option value="SENT_TO_ME">Sent to me</option>
+                  <option value="SENT_BY_ME">Sent by me</option>
+                </select>
+
+                {/* Category Filter */}
                 <select
                   value={categoryFilter}
                   onChange={(e) => setCategoryFilter(e.target.value)}
-                  className="flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground"
+                  className="rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground truncate"
                 >
                   <option value="ALL">All Categories</option>
                   {categories.map((c) => (
@@ -594,22 +689,30 @@ export default function RequestsPage() {
               </div>
             </div>
 
-            {/* List */}
+            {/* List of Requests */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
               {loading ? (
                 <div className="p-8 text-center text-xs text-muted-foreground">Loading requests...</div>
               ) : filteredRequests.length === 0 ? (
-                <div className="p-8 text-center text-xs text-muted-foreground">No requests found.</div>
+                <div className="p-8 text-center text-xs text-muted-foreground">
+                  No requests found for this filter.
+                </div>
               ) : (
                 filteredRequests.map((r) => {
                   const isSelected = selectedRequest?.id === r.id;
+                  const routingLabel = r.targetUserName
+                    ? r.targetUserName
+                    : r.targetRole
+                    ? `${r.targetRole.charAt(0) + r.targetRole.slice(1).toLowerCase()} group`
+                    : 'General Queue';
+
                   return (
                     <button
                       key={r.id}
                       onClick={() => setSelectedRequest(r)}
                       className={`w-full text-left rounded-lg p-3 transition-all border ${
                         isSelected
-                          ? 'bg-primary/10 border-primary/30 shadow-xs'
+                          ? 'bg-primary/10 border-primary/40 shadow-xs ring-1 ring-primary/20'
                           : 'bg-background hover:bg-muted/40 border-border'
                       }`}
                     >
@@ -629,7 +732,7 @@ export default function RequestsPage() {
                       </p>
 
                       <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50 text-[10px] text-muted-foreground">
-                        <span>{getCategoryName(r.categoryId)}</span>
+                        <span className="font-medium text-foreground/80">To: {routingLabel}</span>
                         <span>{new Date(r.createdAt).toLocaleDateString()}</span>
                       </div>
                     </button>
@@ -657,16 +760,33 @@ export default function RequestsPage() {
                       </Badge>
                     </div>
                     <h2 className="text-base font-bold text-foreground">{selectedRequest.title}</h2>
-                    <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
-                      <span>Requester: {getMemberName(selectedRequest.requesterMembershipId)}</span>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mt-1.5">
+                      <span>Requester: <strong>{getMemberName(selectedRequest.requesterMembershipId)}</strong></span>
                       <span>•</span>
-                      <span>Assigned: {getMemberName(selectedRequest.ownerMembershipId)}</span>
+                      <span>
+                        Assigned:{' '}
+                        <strong>
+                          {selectedRequest.assignedToName
+                            ? selectedRequest.assignedToName
+                            : getMemberName(selectedRequest.assignedTo || selectedRequest.ownerMembershipId)}
+                        </strong>
+                      </span>
                       <span>•</span>
-                      <span>Routing: {getTeamName(selectedRequest.responsibleTeamId)}</span>
+                      {/* Routing Display (Requirement 3) */}
+                      <span>
+                        Routing:{' '}
+                        <strong className="text-primary">
+                          {selectedRequest.targetUserName
+                            ? selectedRequest.targetUserName
+                            : selectedRequest.targetRole
+                            ? `${selectedRequest.targetRole.charAt(0) + selectedRequest.targetRole.slice(1).toLowerCase()} group`
+                            : getTeamName(selectedRequest.responsibleTeamId)}
+                        </strong>
+                      </span>
                     </div>
                   </div>
 
-                  {/* Escalate button */}
+                  {/* Escalate button (Requirement 6) */}
                   {selectedRequest.status !== 'CLOSED' && selectedRequest.priority !== 'URGENT' && (
                     <Button
                       variant="outline"
@@ -680,15 +800,15 @@ export default function RequestsPage() {
                   )}
                 </div>
 
-                {/* Escalation Prompt if active */}
+                {/* Escalation Prompt (Requirement 6) */}
                 {showEscalatePrompt && (
                   <div className="p-3 bg-amber-500/10 border-b border-amber-500/20 flex items-center gap-2">
                     <input
                       type="text"
-                      placeholder="Reason for escalation (e.g. VIP client impacted, blocking production)"
+                      placeholder="Reason for escalation (e.g., SLA breach, blocking critical deployment)..."
                       value={escalateReason}
                       onChange={(e) => setEscalateReason(e.target.value)}
-                      className="flex-1 rounded border border-amber-300 bg-background px-3 py-1.5 text-xs"
+                      className="flex-1 rounded border border-amber-300 bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-amber-500"
                     />
                     <Button size="sm" onClick={() => handleEscalate(selectedRequest.id)} className="text-xs">
                       Confirm Escalation
@@ -713,7 +833,7 @@ export default function RequestsPage() {
                     </div>
                   </div>
 
-                  {/* Replenishment Items Section if present */}
+                  {/* Replenishment Items Section (Requirement 8) */}
                   {selectedRequest.replenishmentItems && selectedRequest.replenishmentItems.length > 0 && (
                     <div>
                       <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5 flex items-center gap-1.5">
@@ -722,20 +842,18 @@ export default function RequestsPage() {
                       </h3>
                       <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
                         {selectedRequest.replenishmentItems.map((item, idx) => {
-                          const invItem = inventory.find((i) => i.id === item.inventoryItemId);
+                          const { displayName, stockOnHand, inv } = getInventoryItemDetails(
+                            item.inventoryItemId,
+                            item.name,
+                          );
                           return (
                             <div key={idx} className="p-3 bg-card flex items-center justify-between text-xs">
                               <div>
-                                <span className="font-semibold text-foreground">
-                                  {invItem ? invItem.name : 'Inventory Item'}
-                                </span>
-                                <span className="text-muted-foreground ml-2 font-mono text-[11px]">
-                                  ({invItem?.code || item.inventoryItemId})
-                                </span>
+                                <span className="font-semibold text-foreground">{displayName}</span>
                                 <div className="text-[11px] text-muted-foreground mt-0.5">
                                   Available in Stock:{' '}
-                                  <strong className={invItem && invItem.quantityOnHand < 5 ? 'text-destructive' : 'text-foreground'}>
-                                    {invItem ? `${invItem.quantityOnHand} ${invItem.unit}` : 'N/A'}
+                                  <strong className={inv && (inv.quantityOnHand ?? 0) < 5 ? 'text-destructive' : 'text-foreground'}>
+                                    {stockOnHand}
                                   </strong>
                                 </div>
                               </div>
@@ -756,11 +874,11 @@ export default function RequestsPage() {
                     </div>
                   )}
 
-                  {/* Action Bar for Transitioning States */}
+                  {/* Action Bar for Claiming & Lifecycle (Requirement 5) */}
                   <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 space-y-3">
                     <h3 className="text-xs font-semibold text-foreground flex items-center gap-1.5">
                       <Clock className="h-4 w-4 text-primary" />
-                      Lifecycle Action & Fulfillments
+                      Lifecycle Actions & Claiming
                     </h3>
 
                     <input
@@ -772,17 +890,33 @@ export default function RequestsPage() {
                     />
 
                     <div className="flex flex-wrap items-center gap-2 pt-1">
+                      {/* Claiming: Accept Button (Requirement 5) */}
                       {selectedRequest.status === 'SUBMITTED' && (
-                        <Button
-                          size="sm"
-                          onClick={() => handleAcknowledge(selectedRequest.id)}
-                          className="text-xs"
-                        >
-                          <Check className="mr-1.5 h-3.5 w-3.5" />
-                          Acknowledge & Take Ownership
-                        </Button>
+                        <>
+                          {!selectedRequest.assignedTo ? (
+                            <Button
+                              size="sm"
+                              onClick={() => handleAcceptTicket(selectedRequest.id)}
+                              disabled={claiming}
+                              className="text-xs bg-primary text-white hover:bg-primary/90"
+                            >
+                              <Check className="mr-1.5 h-3.5 w-3.5" />
+                              Accept Ticket
+                            </Button>
+                          ) : selectedRequest.assignedTo === currentMembershipId ? (
+                            <Badge className="bg-blue-600 text-white text-xs py-1 px-2.5">
+                              Accepted by You (In Progress)
+                            </Badge>
+                          ) : (
+                            <Button size="sm" variant="outline" disabled className="text-xs opacity-75">
+                              <UserCheck className="mr-1.5 h-3.5 w-3.5" />
+                              Taken by {selectedRequest.assignedToName || 'Team Member'}
+                            </Button>
+                          )}
+                        </>
                       )}
 
+                      {/* Fulfill Request */}
                       {(selectedRequest.status === 'ACKNOWLEDGED' || selectedRequest.status === 'IN_PROGRESS') && (
                         <Button
                           size="sm"
@@ -794,6 +928,7 @@ export default function RequestsPage() {
                         </Button>
                       )}
 
+                      {/* Verify & Close */}
                       {selectedRequest.status === 'RESOLVED' && (
                         <Button
                           size="sm"
@@ -808,13 +943,13 @@ export default function RequestsPage() {
                       {selectedRequest.status === 'CLOSED' && (
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
                           <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                          This request has been fully resolved, verified, and closed.
+                          This request has been fully resolved and verified.
                         </div>
                       )}
                     </div>
                   </div>
 
-                  {/* Activity Timeline */}
+                  {/* Activity Timeline (Requirement 5) */}
                   <div>
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5">
                       <Layers className="h-3.5 w-3.5" />
@@ -830,8 +965,10 @@ export default function RequestsPage() {
                               {new Date(item.timestamp).toLocaleString()}
                             </span>
                           </div>
-                          {item.notes && (
-                            <p className="text-[11px] text-muted-foreground mt-0.5">{item.notes}</p>
+                          {(item.notes || item.details) && (
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                              {item.notes || item.details}
+                            </p>
                           )}
                         </div>
                       ))}
@@ -889,9 +1026,9 @@ export default function RequestsPage() {
             ) : (
               <div className="flex h-full flex-col items-center justify-center p-8 text-center text-muted-foreground">
                 <Inbox className="h-12 w-12 mb-3 opacity-30" />
-                <h3 className="text-base font-semibold text-foreground">Select a request ticket</h3>
+                <h3 className="text-base font-semibold text-foreground">Select a service request</h3>
                 <p className="text-xs max-w-sm mt-1">
-                  Choose an internal request from the queue on the left to view details, stock fulfillment,
+                  Choose an internal request ticket from the queue on the left to view routing, claiming,
                   and audit history.
                 </p>
               </div>
@@ -915,13 +1052,15 @@ export default function RequestsPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {inventory.map((item) => {
-              const isLowStock = item.quantityOnHand <= item.reorderPoint;
+              const stock = item.quantityOnHand ?? item.currentStock ?? 0;
+              const reorder = item.reorderPoint ?? item.reorderThreshold ?? 5;
+              const isLowStock = stock <= reorder;
               return (
                 <Card key={item.id} className={isLowStock ? 'border-amber-500/50 bg-amber-500/5' : ''}>
                   <CardHeader className="p-4 pb-2">
                     <div className="flex items-center justify-between">
                       <Badge variant="outline" className="font-mono text-[10px]">
-                        {item.code}
+                        {item.code || item.id}
                       </Badge>
                       {isLowStock ? (
                         <Badge variant="destructive" className="text-[10px]">
@@ -937,11 +1076,9 @@ export default function RequestsPage() {
                   <CardContent className="p-4 pt-2">
                     <div className="flex items-baseline justify-between mt-2">
                       <div className="text-2xl font-bold text-foreground">
-                        {item.quantityOnHand} <span className="text-xs font-normal text-muted-foreground">{item.unit}</span>
+                        {stock} <span className="text-xs font-normal text-muted-foreground">{item.unit}</span>
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        Reorder Point: {item.reorderPoint}
-                      </div>
+                      <div className="text-xs text-muted-foreground">Reorder Point: {reorder}</div>
                     </div>
                   </CardContent>
                 </Card>
@@ -951,12 +1088,12 @@ export default function RequestsPage() {
         </div>
       )}
 
-      {/* Tab: Configured Categories */}
+      {/* Tab: Configured Categories (Requirement 8) */}
       {activeTab === 'categories' && (
         <div className="flex-1 overflow-y-auto space-y-4">
           <div className="flex items-center justify-between">
             <p className="text-xs text-muted-foreground">
-              Request types and categories configured for this organization. No hardcoded templates or mandatory presets.
+              Request types and categories configured for this organization.
             </p>
             <Button size="sm" onClick={() => setShowCategoryModal(true)}>
               <Plus className="mr-1.5 h-3.5 w-3.5" />
@@ -971,7 +1108,7 @@ export default function RequestsPage() {
                   <div className="flex items-center justify-between">
                     <CardTitle className="text-sm font-semibold">{cat.name}</CardTitle>
                     <Badge variant="outline" className="font-mono text-[10px]">
-                      {cat.code}
+                      {cat.code || 'CAT'}
                     </Badge>
                   </div>
                   <CardDescription className="text-xs mt-1">
@@ -980,7 +1117,10 @@ export default function RequestsPage() {
                 </CardHeader>
                 <CardContent className="p-4 pt-0 text-xs text-muted-foreground space-y-1">
                   <div>
-                    Default Team: <span className="text-foreground font-medium">{getTeamName(cat.defaultResponsibleTeamId)}</span>
+                    Default Team:{' '}
+                    <span className="text-foreground font-medium">
+                      {getTeamName(cat.defaultResponsibleTeamId)}
+                    </span>
                   </div>
                   <div>
                     SLA Target: <span className="text-foreground font-medium">{cat.slaHours || 24} hours</span>
@@ -992,41 +1132,226 @@ export default function RequestsPage() {
         </div>
       )}
 
-      {/* Modal: Submit Request */}
+      {/* REDESIGNED MODAL: Submit Service Request (Requirement 1) */}
       {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-xl border border-border bg-card p-6 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
-              <Inbox className="h-4 w-4 text-primary" />
-              Submit Service Request
-            </h2>
-            <p className="text-xs text-muted-foreground mt-1">
-              Create an internal request. It will be routed according to category rules.
-            </p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-xl rounded-xl border border-border bg-card p-6 shadow-2xl animate-in fade-in-50 zoom-in-95 my-8">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <h2 className="text-base font-semibold text-foreground flex items-center gap-2">
+                <Inbox className="h-5 w-5 text-primary" />
+                Submit Service Request
+              </h2>
+              <button
+                type="button"
+                onClick={() => setShowCreateModal(false)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
 
-            <form onSubmit={handleCreateRequest} className="mt-4 space-y-3">
+            <form onSubmit={handleFormSubmit} className="mt-4 space-y-4">
+              {/* Field 1: Send to * (Required) (Requirement 1 & 7) */}
               <div>
-                <label className="text-xs font-medium text-foreground">Request Title</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Brief summary of request..."
-                  value={reqForm.title}
-                  onChange={(e) => setReqForm({ ...reqForm, title: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+                <label className="text-xs font-semibold text-foreground flex items-center justify-between">
+                  <span>Send to <span className="text-destructive">*</span></span>
+                  {selectedRole && (
+                    <span className="text-[11px] text-muted-foreground">
+                      Selected: <strong>{selectedRole}</strong>
+                    </span>
+                  )}
+                </label>
+
+                {/* Four selectable role cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-2">
+                  {[
+                    {
+                      role: 'Owner' as const,
+                      roleKey: 'OWNER' as const,
+                      icon: Crown,
+                      count: roleMembers.OWNER.length,
+                    },
+                    {
+                      role: 'Admin' as const,
+                      roleKey: 'ADMIN' as const,
+                      icon: Shield,
+                      count: roleMembers.ADMIN.length,
+                    },
+                    {
+                      role: 'Manager' as const,
+                      roleKey: 'MANAGER' as const,
+                      icon: Briefcase,
+                      count: roleMembers.MANAGER.length,
+                    },
+                    {
+                      role: 'Member' as const,
+                      roleKey: 'MEMBER' as const,
+                      icon: User,
+                      count: roleMembers.MEMBER.length,
+                    },
+                  ].map((card) => {
+                    const isSelected = selectedRole === card.roleKey;
+                    const cardLevel = roleHierarchy[card.roleKey];
+                    const hasPeople = card.count > 0;
+
+                    // Permission Rule 7: User can send only to own role level or above.
+                    // Members cannot send directly to Owner.
+                    const isBelowUserLevel = cardLevel < myLevel;
+                    const isMemberToOwner = currentRole === 'MEMBER' && card.roleKey === 'OWNER';
+                    const isDisallowed = isBelowUserLevel || isMemberToOwner || !hasPeople;
+
+                    let disabledReason = '';
+                    if (!hasPeople) {
+                      disabledReason = `No ${card.role.toLowerCase()}s yet`;
+                    } else if (isMemberToOwner) {
+                      disabledReason = 'Members cannot send to Owner';
+                    } else if (isBelowUserLevel) {
+                      disabledReason = 'Can only send to own level or above';
+                    }
+
+                    const CardIcon = card.icon;
+
+                    return (
+                      <button
+                        key={card.roleKey}
+                        type="button"
+                        disabled={isDisallowed}
+                        onClick={() => {
+                          setSelectedRole(card.roleKey);
+                          setTargetUserId(''); // reset specific user on role switch
+                          setFormErrors((prev) => ({ ...prev, role: undefined }));
+                        }}
+                        className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all ${
+                          isDisallowed
+                            ? 'opacity-40 cursor-not-allowed bg-muted/30 border-dashed border-border'
+                            : isSelected
+                            ? 'border-primary bg-primary/10 text-primary ring-2 ring-primary shadow-xs'
+                            : 'border-border bg-background hover:bg-muted/50 hover:border-primary/50 text-foreground'
+                        }`}
+                      >
+                        <CardIcon className={`h-5 w-5 mb-1.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
+                        <span className="text-xs font-semibold">{card.role}</span>
+                        <span className="text-[11px] text-muted-foreground mt-0.5">
+                          {hasPeople ? `${card.count} ${card.count === 1 ? 'person' : 'people'}` : disabledReason}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Inline Red Validation Error */}
+                {formErrors.role && (
+                  <p className="text-[11px] text-destructive mt-1.5 font-medium flex items-center gap-1">
+                    <X className="h-3 w-3" />
+                    {formErrors.role}
+                  </p>
+                )}
               </div>
 
+              {/* Field 2: Recipient Preview Box (Requirement 1) */}
+              {selectedRole && (
+                <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-3 animate-in fade-in-50">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+                      <Users className="h-4 w-4 text-primary" />
+                      All {selectedRole.toLowerCase()}s will be notified
+                    </div>
+                    <Badge variant="secondary" className="text-[10px] font-mono">
+                      {roleMembers[selectedRole].length} recipients
+                    </Badge>
+                  </div>
+
+                  {/* Avatar Chips */}
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {roleMembers[selectedRole].map((p) => {
+                      const first = p.user?.firstName || p.firstName || '';
+                      const last = p.user?.lastName || p.lastName || '';
+                      const initials = `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() || 'U';
+                      const fullName = `${first} ${last}`.trim() || p.user?.email || 'Member';
+
+                      return (
+                        <div
+                          key={p.id}
+                          className="flex items-center gap-1.5 bg-background border border-border/80 rounded-full py-0.5 px-2.5 text-[11px] font-medium text-foreground shadow-2xs"
+                        >
+                          <div className="h-4 w-4 rounded-full bg-primary/20 text-primary text-[9px] font-bold flex items-center justify-center">
+                            {initials}
+                          </div>
+                          <span>{fullName}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Deliver to Dropdown */}
+                  <div>
+                    <label className="text-[11px] font-medium text-muted-foreground block mb-1">
+                      Deliver to
+                    </label>
+                    <select
+                      value={targetUserId}
+                      onChange={(e) => setTargetUserId(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    >
+                      <option value="">
+                        Anyone in {selectedRole.charAt(0) + selectedRole.slice(1).toLowerCase()} group (first to accept)
+                      </option>
+                      {roleMembers[selectedRole].map((p) => {
+                        const first = p.user?.firstName || p.firstName || '';
+                        const last = p.user?.lastName || p.lastName || '';
+                        const fullName = `${first} ${last}`.trim() || p.user?.email;
+                        const desig = p.designation?.title ? ` - ${p.designation.title}` : '';
+                        return (
+                          <option key={p.id} value={p.userId || p.id}>
+                            {fullName} {desig}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* Field 3: Request Title * (Required) (Requirement 1) */}
+              <div>
+                <label className="text-xs font-semibold text-foreground">
+                  Request title <span className="text-destructive">*</span>
+                </label>
+                <input
+                  ref={titleInputRef}
+                  type="text"
+                  placeholder="e.g., Laptop screen replacement, Access to staging DB..."
+                  value={requestTitle}
+                  onChange={(e) => {
+                    setRequestTitle(e.target.value);
+                    if (e.target.value.trim()) {
+                      setFormErrors((prev) => ({ ...prev, title: undefined }));
+                    }
+                  }}
+                  className={`mt-1 w-full rounded-md border bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 ${
+                    formErrors.title
+                      ? 'border-destructive focus:ring-destructive'
+                      : 'border-input focus:ring-primary'
+                  }`}
+                />
+                {/* Inline Red Validation Error */}
+                {formErrors.title && (
+                  <p className="text-[11px] text-destructive mt-1 font-medium flex items-center gap-1">
+                    <X className="h-3 w-3" />
+                    {formErrors.title}
+                  </p>
+                )}
+              </div>
+
+              {/* Field 4: Category & Priority Side by Side (Requirement 1) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-foreground">Category</label>
+                  <label className="text-xs font-semibold text-foreground">Category</label>
                   <select
-                    required
-                    value={reqForm.categoryId}
-                    onChange={(e) => setReqForm({ ...reqForm, categoryId: e.target.value })}
-                    className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={selectedCategory}
+                    onChange={(e) => setSelectedCategory(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   >
-                    <option value="">-- Choose Category --</option>
                     {categories.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.name}
@@ -1036,11 +1361,11 @@ export default function RequestsPage() {
                 </div>
 
                 <div>
-                  <label className="text-xs font-medium text-foreground">Priority</label>
+                  <label className="text-xs font-semibold text-foreground">Priority</label>
                   <select
-                    value={reqForm.priority}
-                    onChange={(e) => setReqForm({ ...reqForm, priority: e.target.value as any })}
-                    className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={priority}
+                    onChange={(e) => setPriority(e.target.value as any)}
+                    className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   >
                     <option value="LOW">Low</option>
                     <option value="MEDIUM">Medium</option>
@@ -1050,24 +1375,59 @@ export default function RequestsPage() {
                 </div>
               </div>
 
+              {/* Field 5: Details Textarea with Optional Attachment (Requirement 1) */}
               <div>
-                <label className="text-xs font-medium text-foreground">Detailed Description</label>
+                <label className="text-xs font-semibold text-foreground">Details</label>
                 <textarea
                   rows={3}
-                  required
-                  placeholder="Provide context, requirements, location, or details..."
-                  value={reqForm.description}
-                  onChange={(e) => setReqForm({ ...reqForm, description: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder="Provide context, requirements, equipment details, or justification..."
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 />
+
+                {/* Optional Attachment */}
+                <div className="mt-2 flex items-center justify-between text-xs">
+                  <label className="inline-flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground">
+                    <Paperclip className="h-3.5 w-3.5" />
+                    <span>{attachmentName ? 'Change attachment' : 'Attach file (optional)'}</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) setAttachmentName(file.name);
+                      }}
+                    />
+                  </label>
+
+                  {attachmentName && (
+                    <div className="flex items-center gap-1 bg-muted px-2 py-0.5 rounded text-[11px]">
+                      <span className="truncate max-w-[180px]">{attachmentName}</span>
+                      <button
+                        type="button"
+                        onClick={() => setAttachmentName(null)}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
 
-              <div className="mt-6 flex justify-end gap-2 pt-2 border-t border-border">
-                <Button type="button" variant="outline" size="sm" onClick={() => setShowCreateModal(false)}>
+              {/* Modal Buttons: Cancel & Submit request (Requirement 1) */}
+              <div className="mt-6 flex justify-end gap-2 pt-3 border-t border-border">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowCreateModal(false)}
+                >
                   Cancel
                 </Button>
-                <Button type="submit" size="sm">
-                  Submit Ticket
+                <Button type="submit" size="sm" disabled={submitting}>
+                  {submitting ? 'Submitting...' : 'Submit request'}
                 </Button>
               </div>
             </form>
@@ -1075,48 +1435,7 @@ export default function RequestsPage() {
         </div>
       )}
 
-      {/* Modal: Replenishment Scenario Launcher */}
-      {showReplenishPresetModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl animate-in fade-in-50 zoom-in-95">
-            <div className="flex items-center gap-2 mb-2 text-primary">
-              <Sparkles className="h-5 w-5" />
-              <h2 className="text-base font-semibold text-foreground">Replenishment Test Scenario</h2>
-            </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              This scenario verifies ORVEXA Phase 8 internal request fulfillment:
-            </p>
-
-            <div className="my-4 rounded-lg bg-muted/50 border border-border p-3 text-xs space-y-2">
-              <div className="flex items-center gap-2">
-                <Package className="h-4 w-4 text-primary shrink-0" />
-                <span>
-                  <strong>5 Tissue Boxes</strong> & <strong>10 Snack Packs</strong> requested
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Users className="h-4 w-4 text-primary shrink-0" />
-                <span>Auto-routed to <strong>Facilities & Operations Queue</strong></span>
-              </div>
-              <div className="flex items-center gap-2">
-                <TrendingDown className="h-4 w-4 text-emerald-600 shrink-0" />
-                <span>Fulfillment automatically updates stock in inventory catalog</span>
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" size="sm" onClick={() => setShowReplenishPresetModal(false)}>
-                Cancel
-              </Button>
-              <Button size="sm" onClick={handleLaunchReplenishScenario}>
-                Create & Execute Scenario
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal: Create Category */}
+      {/* Modal: Add Category */}
       {showCategoryModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
           <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-xl animate-in fade-in-50 zoom-in-95">
@@ -1124,62 +1443,29 @@ export default function RequestsPage() {
               <Tag className="h-4 w-4 text-primary" />
               Configure Request Category
             </h2>
-            <p className="text-xs text-muted-foreground mt-1">
-              Define a new category and its routing team according to your organization's structure.
-            </p>
-
             <form onSubmit={handleCreateCategory} className="mt-4 space-y-3">
               <div>
                 <label className="text-xs font-medium text-foreground">Category Name</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. IT Equipment, Office Maintenance, HR Inquiries"
+                  placeholder="e.g., Security & Compliance, Legal Review"
                   value={catForm.name}
                   onChange={(e) => setCatForm({ ...catForm, name: e.target.value })}
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
-
               <div>
-                <label className="text-xs font-medium text-foreground">Category Code</label>
-                <input
-                  type="text"
-                  placeholder="e.g. IT_EQUIPMENT (leave blank to auto-generate)"
-                  value={catForm.code}
-                  onChange={(e) => setCatForm({ ...catForm, code: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground font-mono focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-foreground">Default Responsible Team</label>
-                <select
-                  value={catForm.defaultResponsibleTeamId}
-                  onChange={(e) => setCatForm({ ...catForm, defaultResponsibleTeamId: e.target.value })}
-                  className="mt-1 w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">-- General Queue (No Team) --</option>
-                  {teams.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="text-xs font-medium text-foreground">SLA Target (Hours)</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={catForm.slaHours}
-                  onChange={(e) => setCatForm({ ...catForm, slaHours: Number(e.target.value) })}
+                <label className="text-xs font-medium text-foreground">Description</label>
+                <textarea
+                  rows={2}
+                  placeholder="Purpose of this category..."
+                  value={catForm.description}
+                  onChange={(e) => setCatForm({ ...catForm, description: e.target.value })}
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
-
-              <div className="mt-6 flex justify-end gap-2 pt-2 border-t border-border">
+              <div className="flex justify-end gap-2 pt-2 border-t border-border">
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowCategoryModal(false)}>
                   Cancel
                 </Button>

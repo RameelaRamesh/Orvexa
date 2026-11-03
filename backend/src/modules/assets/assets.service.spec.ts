@@ -293,20 +293,20 @@ describe('PHASE 9: Assets, Inventory and Native Document Storage Acceptance Suit
     });
 
     it('triggers low-stock alert notifications when stock drops to or below threshold', async () => {
-      // Current stock is 20, threshold is 5. Issue 16 units -> balance drops to 4 <= 5
+      // Current stock is 20 (loc_main: 15, loc_floor2: 5), threshold is 5. Issue 15 units -> balance drops to 5 <= 5
       const { updatedItem } = await inventoryService.recordStockMovement(
         workspaceIdA,
         memberAliceId,
         {
           itemId: 'inv_laptop_dock',
           movementType: 'OUTWARD',
-          quantity: 16,
+          quantity: 15,
           fromLocationId: 'loc_main',
           reason: 'Bulk team deployment',
         },
       );
 
-      expect(updatedItem.totalQuantityOnHand).toBe(4);
+      expect(updatedItem.totalQuantityOnHand).toBe(5);
       expect(updatedItem.isLowStock).toBe(true);
 
       // Verify low-stock notification was dispatched to workspace managers
