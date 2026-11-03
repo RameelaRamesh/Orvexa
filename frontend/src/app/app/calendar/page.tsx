@@ -94,16 +94,103 @@ export default function UniversalCalendarPage() {
         layers: activeLayers.join(','),
       });
 
-      const res = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'x-workspace-id': wsId,
-        },
-      });
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        'x-workspace-id': wsId,
+      };
 
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.message || 'Failed to load calendar events');
-      setEvents(json.events || []);
+      // Query both the analytics calendar and raw modules concurrently for guaranteed coverage
+      const [calRes, tasksRes, leavesRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/leave`, { headers }).catch(() => null),
+      ]);
+
+      const mergedEventsMap = new Map<string, CalendarEvent>();
+
+      // 1. Ingest analytics calendar events if returned
+      if (calRes && calRes.ok) {
+        const calJson = await calRes.json().catch(() => ({}));
+        if (Array.isArray(calJson.events)) {
+          for (const ev of calJson.events) {
+            mergedEventsMap.set(ev.id || `${ev.entityType}-${ev.entityId}`, ev);
+          }
+        }
+      }
+
+      // 2. Ingest tasks directly from /tasks (same endpoint used by Projects & Tasks)
+      if (tasksRes && tasksRes.ok) {
+        const taskData = await tasksRes.json().catch(() => []);
+        const rawTasks: any[] = Array.isArray(taskData) ? taskData : (taskData?.data || []);
+
+        for (const t of rawTasks) {
+          const key = `task-${t.id}`;
+          if (!mergedEventsMap.has(key)) {
+            const taskDate = t.dueDate || t.startDate || t.createdAt || new Date().toISOString();
+            const dateIso = new Date(taskDate).toISOString();
+            const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+            const assigneeName = t.assignee?.user
+              ? `${t.assignee.user.firstName || ''} ${t.assignee.user.lastName || ''}`.trim()
+              : (t.assigneeMembershipId ? 'Assigned Member' : 'Unassigned');
+
+            mergedEventsMap.set(key, {
+              id: key,
+              title: `${t.dueDate ? 'Due' : 'Task'}: ${t.title} [${t.priority || 'MEDIUM'}]`,
+              type: 'TASK_DEADLINE',
+              layer: 'TASKS',
+              startDate: dateIso,
+              endDate: t.dueDate ? new Date(t.dueDate).toISOString() : dateIso,
+              allDay: true,
+              status: t.status || 'TODO',
+              color: isUrgent ? '#ef4444' : '#8b5cf6',
+              entityType: 'TASK',
+              entityId: t.id,
+              details: {
+                projectName: t.project?.name || 'General',
+                assigneeName,
+                priority: t.priority || 'MEDIUM',
+                dueDate: t.dueDate || null,
+              },
+            });
+          }
+        }
+      }
+
+      // 3. Ingest leaves directly from /leave if available
+      if (leavesRes && leavesRes.ok) {
+        const leaveData = await leavesRes.json().catch(() => []);
+        const rawLeaves: any[] = Array.isArray(leaveData) ? leaveData : (leaveData?.data || []);
+
+        for (const l of rawLeaves) {
+          const key = `leave-${l.id}`;
+          if (!mergedEventsMap.has(key) && l.startDate) {
+            const memberName = l.membership?.user
+              ? `${l.membership.user.firstName || ''} ${l.membership.user.lastName || ''}`.trim()
+              : 'Team Member';
+
+            mergedEventsMap.set(key, {
+              id: key,
+              title: `${memberName} — ${l.leaveType || 'Leave'} (${l.totalDays || 1}d)`,
+              type: 'LEAVE_REQUEST',
+              layer: 'LEAVE',
+              startDate: new Date(l.startDate).toISOString(),
+              endDate: new Date(l.endDate || l.startDate).toISOString(),
+              allDay: true,
+              status: l.status || 'APPROVED',
+              color: l.status === 'APPROVED' ? '#f59e0b' : '#9ca3af',
+              entityType: 'LEAVE',
+              entityId: l.id,
+              details: {
+                memberName,
+                reason: l.reason || 'Leave request',
+                days: l.totalDays || 1,
+              },
+            });
+          }
+        }
+      }
+
+      setEvents(Array.from(mergedEventsMap.values()));
     } catch (err: any) {
       console.error(err);
       setError(err.message);
@@ -165,9 +252,12 @@ export default function UniversalCalendarPage() {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
+  // Active events scoped to selected layers
+  const activeEvents = events.filter((ev) => activeLayers.includes(ev.layer));
+
   // Map events by Day of Month (Timezone-resilient)
   const getEventsForDay = (day: number) => {
-    return events.filter((ev) => {
+    return activeEvents.filter((ev) => {
       if (!ev.startDate) return false;
       const d = new Date(ev.startDate);
       if (d.getFullYear() === year && d.getMonth() === month && d.getDate() === day) {
@@ -370,7 +460,7 @@ export default function UniversalCalendarPage() {
             </Badge>
           )}
         </div>
-        <span className="text-xs text-muted-foreground font-mono">{events.length} active events in scope</span>
+        <span className="text-xs text-muted-foreground font-mono">{activeEvents.length} active events in scope</span>
       </div>
 
       {/* MONTH VIEW GRID */}
@@ -472,7 +562,7 @@ export default function UniversalCalendarPage() {
             <CardDescription>Upcoming deadlines and operations ordered by date</CardDescription>
           </CardHeader>
           <CardContent>
-            {events.length === 0 ? (
+            {activeEvents.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <CheckCircle2 className="h-10 w-10 text-muted-foreground/40 mb-3" />
                 <h4 className="text-sm font-semibold text-foreground">No events recorded for this month</h4>
@@ -482,7 +572,9 @@ export default function UniversalCalendarPage() {
               </div>
             ) : (
               <div className="divide-y divide-border">
-                {events.map((ev) => (
+                {[...activeEvents]
+                  .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
+                  .map((ev) => (
                   <div
                     key={ev.id}
                     className="flex flex-col sm:flex-row sm:items-center justify-between py-3 gap-2 hover:bg-surface-secondary/40 px-2 rounded-lg transition-colors"
