@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Users,
+  User,
   UserPlus,
   Building2,
   Briefcase,
@@ -84,6 +85,9 @@ export default function PeoplePage() {
   const [editingMember, setEditingMember] = useState<any>(null);
   const [updatingMember, setUpdatingMember] = useState(false);
   const [editForm, setEditForm] = useState({
+    firstName: '',
+    lastName: '',
+    email: '',
     accessRole: 'MEMBER',
     roleId: '',
     departmentId: '',
@@ -596,6 +600,9 @@ export default function PeoplePage() {
   const handleOpenEditModal = (m: any) => {
     setEditingMember(m);
     setEditForm({
+      firstName: m.user?.firstName || '',
+      lastName: m.user?.lastName || '',
+      email: m.user?.email || '',
       accessRole: m.accessRole || 'MEMBER',
       roleId: m.roleId || m.role?.id || '',
       departmentId: m.departmentId || m.department?.id || '',
@@ -616,6 +623,9 @@ export default function PeoplePage() {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify({
+          firstName: editForm.firstName.trim(),
+          lastName: editForm.lastName.trim(),
+          email: editForm.email.trim(),
           accessRole: editForm.accessRole,
           roleId: editForm.roleId || undefined,
           departmentId: editForm.departmentId || null,
@@ -628,7 +638,7 @@ export default function PeoplePage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to update member role & designation');
 
-      toast.success(`Updated role & designation for ${editingMember.user?.firstName || 'member'}`);
+      toast.success(`Updated details for ${editForm.firstName || editingMember.user?.firstName || 'member'}`);
       setShowEditModal(false);
       setEditingMember(null);
       await loadData();
@@ -637,6 +647,13 @@ export default function PeoplePage() {
         setSelectedMember((prev: any) => ({
           ...prev,
           ...data,
+          user: {
+            ...prev?.user,
+            ...(data.user || {}),
+            firstName: editForm.firstName.trim() || prev?.user?.firstName,
+            lastName: editForm.lastName.trim() || prev?.user?.lastName,
+            email: editForm.email.trim() || prev?.user?.email,
+          },
           accessRole: editForm.accessRole,
           designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || 'Unassigned' },
           department: departments.find((d: any) => d.id === editForm.departmentId) || null,
@@ -1317,6 +1334,17 @@ export default function PeoplePage() {
               {/* SECTION A: Personal */}
               {activeProfileTab === 'personal' && (
                 <div className="space-y-3">
+                  <div className="flex items-center justify-between pb-2 border-b border-border">
+                    <span className="font-semibold text-foreground text-xs">Personal Identity & Contact</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                      onClick={() => handleOpenEditModal(selectedMember)}
+                    >
+                      <Pencil className="h-3 w-3" /> Edit Personal Details
+                    </Button>
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <span className="text-muted-foreground block">Full Name:</span>
@@ -1606,7 +1634,7 @@ export default function PeoplePage() {
             <CardHeader className="pb-3 border-b border-border">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-base font-bold flex items-center gap-2">
-                  <Pencil className="h-4 w-4 text-primary" /> Edit Member Role & Designation
+                  <Pencil className="h-4 w-4 text-primary" /> Edit Member Details & Access
                 </CardTitle>
                 <Badge
                   variant={
@@ -1622,7 +1650,7 @@ export default function PeoplePage() {
                 </Badge>
               </div>
               <CardDescription className="text-xs">
-                Modify access permissions, designation title, department, and operational scope for{' '}
+                Update personal name, work email address, system access role, designation, and organizational placement for{' '}
                 <strong className="text-foreground">
                   {editingMember.user?.firstName} {editingMember.user?.lastName}
                 </strong>.
@@ -1630,17 +1658,48 @@ export default function PeoplePage() {
             </CardHeader>
             <form onSubmit={handleSaveMemberOrgDetails}>
               <CardContent className="space-y-4 pt-4 text-xs">
-                {/* User Identity Card */}
-                <div className="p-3 rounded-lg border border-border bg-muted/30 flex items-center gap-3">
-                  <div className="h-9 w-9 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-xs shrink-0">
-                    {editingMember.user?.firstName?.[0] || 'U'}
-                    {editingMember.user?.lastName?.[0] || ''}
+                {/* Member Identity & Credentials (Editable Name & Email) */}
+                <div className="p-3.5 rounded-lg border border-border bg-muted/20 space-y-3">
+                  <div className="flex items-center gap-2 text-foreground font-semibold">
+                    <User className="h-3.5 w-3.5 text-primary" />
+                    <span>Member Personal Info & Work Email</span>
                   </div>
-                  <div className="overflow-hidden">
-                    <p className="font-semibold text-foreground text-xs truncate">
-                      {editingMember.user?.firstName} {editingMember.user?.lastName}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="font-medium text-foreground text-[11px]">First Name *</label>
+                      <input
+                        type="text"
+                        required
+                        value={editForm.firstName}
+                        onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
+                        placeholder="First name"
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-medium text-foreground text-[11px]">Last Name</label>
+                      <input
+                        type="text"
+                        value={editForm.lastName}
+                        onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
+                        placeholder="Last name"
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-medium text-foreground text-[11px]">Work Email Address *</label>
+                    <input
+                      type="email"
+                      required
+                      value={editForm.email}
+                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                      placeholder="email@company.com"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Updating this changes the employee's login email address for their account.
                     </p>
-                    <p className="text-muted-foreground text-[11px] truncate">{editingMember.user?.email}</p>
                   </div>
                 </div>
 

@@ -160,6 +160,7 @@ export class PeopleService {
     data: {
       firstName?: string;
       lastName?: string;
+      email?: string;
       phone?: string;
       avatarUrl?: string;
       employeeId?: string;
@@ -180,15 +181,37 @@ export class PeopleService {
     }
 
     // Update user info
-    if (data.firstName || data.lastName || data.phone || data.avatarUrl !== undefined) {
+    const userUpdates: { firstName?: string; lastName?: string; email?: string; phone?: string; avatarUrl?: string } = {};
+    if (data.firstName !== undefined && data.firstName.trim().length > 0) {
+      userUpdates.firstName = data.firstName.trim();
+    }
+    if (data.lastName !== undefined) {
+      userUpdates.lastName = data.lastName.trim();
+    }
+    if (data.phone !== undefined) {
+      userUpdates.phone = data.phone;
+    }
+    if (data.avatarUrl !== undefined) {
+      userUpdates.avatarUrl = data.avatarUrl;
+    }
+    if (data.email !== undefined && data.email.trim().length > 0) {
+      const emailLower = data.email.trim().toLowerCase();
+      const existingUser = await this.prisma.user.findFirst({
+        where: {
+          email: { equals: emailLower, mode: 'insensitive' },
+          id: { not: membership.userId },
+        },
+      });
+      if (existingUser) {
+        throw new ConflictException('A user with this email address already exists.');
+      }
+      userUpdates.email = emailLower;
+    }
+
+    if (Object.keys(userUpdates).length > 0) {
       await this.prisma.user.update({
         where: { id: membership.userId },
-        data: {
-          ...(data.firstName ? { firstName: data.firstName } : {}),
-          ...(data.lastName ? { lastName: data.lastName } : {}),
-          ...(data.phone !== undefined ? { phone: data.phone } : {}),
-          ...(data.avatarUrl !== undefined ? { avatarUrl: data.avatarUrl } : {}),
-        },
+        data: userUpdates,
       });
     }
 
@@ -218,6 +241,9 @@ export class PeopleService {
     workspaceId: string,
     membershipId: string,
     data: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
       accessRole?: SystemAccessRole;
       roleId?: string;
       departmentId?: string;
@@ -248,6 +274,35 @@ export class PeopleService {
           'Cannot demote the sole workspace Owner. Transfer workspace ownership first.',
         );
       }
+    }
+
+    // Handle user personal info updates (firstName, lastName, email)
+    const userUpdates: { firstName?: string; lastName?: string; email?: string } = {};
+    if (data.firstName !== undefined && data.firstName.trim().length > 0) {
+      userUpdates.firstName = data.firstName.trim();
+    }
+    if (data.lastName !== undefined) {
+      userUpdates.lastName = data.lastName.trim();
+    }
+    if (data.email !== undefined && data.email.trim().length > 0) {
+      const emailLower = data.email.trim().toLowerCase();
+      const existingUser = await this.prisma.user.findFirst({
+        where: {
+          email: { equals: emailLower, mode: 'insensitive' },
+          id: { not: membership.userId },
+        },
+      });
+      if (existingUser) {
+        throw new ConflictException('A user with this email address already exists.');
+      }
+      userUpdates.email = emailLower;
+    }
+
+    if (Object.keys(userUpdates).length > 0) {
+      await this.prisma.user.update({
+        where: { id: membership.userId },
+        data: userUpdates,
+      });
     }
 
     let finalDesignationId = data.designationId !== undefined ? cleanId(data.designationId) : undefined;
