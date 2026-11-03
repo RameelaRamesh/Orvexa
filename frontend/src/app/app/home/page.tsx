@@ -38,7 +38,6 @@ export default function HomePage() {
   const [dismissOnboardingBanner, setDismissOnboardingBanner] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [selectedBreakType, setSelectedBreakType] = useState('TEA_COFFEE');
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
 
   const reloadTodayAttendance = async () => {
@@ -215,7 +214,7 @@ export default function HomePage() {
 
     setActionLoading(true);
     try {
-      const bType = breakTypeOverride || selectedBreakType || 'TEA_COFFEE';
+      const bType = breakTypeOverride || 'TEA_COFFEE';
       const res = await fetch(`${BRANDING.apiUrl}/time/break/start`, {
         method: 'POST',
         headers: {
@@ -412,30 +411,16 @@ export default function HomePage() {
                   </>
                 ) : isClockedIn ? (
                   <>
-                    <div className="flex items-center gap-1.5">
-                      <select
-                        value={selectedBreakType}
-                        onChange={(e) => setSelectedBreakType(e.target.value)}
-                        disabled={actionLoading}
-                        className="h-8 text-xs px-2 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                        title="Select break type"
-                      >
-                        <option value="TEA_COFFEE">Tea Break</option>
-                        <option value="SHORT_BREAK">Short Break</option>
-                        <option value="LUNCH">Lunch Break</option>
-                        <option value="PERSONAL">Personal Break</option>
-                      </select>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleStartBreak(selectedBreakType)}
-                        disabled={actionLoading}
-                        className="h-8 text-xs gap-1.5 border-amber-500/50 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-medium"
-                      >
-                        <Coffee className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                        <span>{selectedBreakType === 'TEA_COFFEE' ? 'Tea Break' : 'Take Break'}</span>
-                      </Button>
-                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleStartBreak('TEA_COFFEE')}
+                      disabled={actionLoading}
+                      className="h-8 text-xs gap-1.5 border-amber-500/50 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 font-medium shadow-sm"
+                    >
+                      <Coffee className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
+                      <span>Tea Break</span>
+                    </Button>
                     <Button
                       size="sm"
                       variant="destructive"
@@ -455,17 +440,6 @@ export default function HomePage() {
                       className="h-8 text-xs shadow-sm"
                     >
                       Clock In
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleStartBreak('TEA_COFFEE')}
-                      disabled={actionLoading}
-                      className="h-8 text-xs gap-1.5 border-amber-500/40 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 opacity-80 hover:opacity-100"
-                      title="Please clock in first to start a tea break"
-                    >
-                      <Coffee className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                      <span>Tea Break</span>
                     </Button>
                   </>
                 )}
