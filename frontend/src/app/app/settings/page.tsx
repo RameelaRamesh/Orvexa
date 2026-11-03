@@ -43,6 +43,7 @@ import {
   EyeOff,
   ChevronDown,
   Package,
+  Search,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -233,8 +234,42 @@ const DEFAULT_SYSTEM_ROLES = [
   },
 ];
 
+const MODULE_DISPLAY_ORDER: Record<string, number> = {
+  Assets: 1,
+  Inventory: 2,
+  Ledger: 3,
+  Documents: 4,
+  Approvals: 5,
+  Attendance: 6,
+  Time: 7,
+  Tasks: 8,
+  Projects: 9,
+  People: 10,
+  WorkQueue: 11,
+  Leave: 12,
+  Quality: 13,
+  SLA: 14,
+  Clients: 15,
+  Reports: 16,
+  Payroll: 17,
+  Organization: 18,
+  Invitations: 19,
+  Roles: 20,
+  Departments: 21,
+  Settings: 22,
+  Billing: 23,
+};
+
+const MODULE_DISPLAY_NAMES: Record<string, string> = {
+  Assets: 'COMPANY ASSETS',
+  Inventory: 'INVENTORY & STOCK',
+  Ledger: 'MOVEMENT LEDGER',
+  Documents: 'DOCUMENT VAULT',
+};
+
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<'details' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
+  const [permissionSearch, setPermissionSearch] = useState('');
 
   // Loading states
   const [loading, setLoading] = useState(true);
@@ -417,15 +452,19 @@ export default function SettingsPage() {
           return a.name.localeCompare(b.name);
         });
         setRoles(sorted);
-        if (sorted.length > 0 && !selectedRoleId) {
-          const defaultRole = sorted.find((r) => r.name === 'ADMIN') || sorted[0];
-          setSelectedRoleId(defaultRole.id);
-        }
+        setSelectedRoleId((prev) => {
+          const found = sorted.find((r) => r.id === prev);
+          if (found) return prev;
+          const adminRole = sorted.find((r) => r.name === 'ADMIN') || sorted[0];
+          return adminRole ? adminRole.id : null;
+        });
       }
 
-      const rawPerms = await permsRes.json();
-      const permsData = rawPerms.data !== undefined ? rawPerms.data : rawPerms;
-      if (Array.isArray(permsData)) setAllPermissions(permsData);
+      if (permsRes && permsRes.ok) {
+        const rawPerms = await permsRes.json();
+        const permsData = rawPerms.data !== undefined ? rawPerms.data : rawPerms;
+        if (Array.isArray(permsData) && permsData.length > 0) setAllPermissions(permsData);
+      }
 
       const rawDepts = await deptsRes.json();
       const deptsData = rawDepts.data !== undefined ? rawDepts.data : rawDepts;
@@ -1296,7 +1335,10 @@ export default function SettingsPage() {
     { id: 'LEAN_SERVICES', name: 'Lean Professional Services', icon: DollarSign, desc: 'Optimized for client deliverables, approval chains, time logging, and billing.' },
   ];
 
-  const selectedRoleObj = roles.find((r) => r.id === selectedRoleId);
+  const selectedRoleObj =
+    roles.find((r) => r.id === selectedRoleId) ||
+    roles.find((r) => r.name === 'ADMIN') ||
+    roles[0];
 
   return (
     <div className="space-y-6">
@@ -1580,7 +1622,7 @@ export default function SettingsPage() {
 
                 <div className="space-y-2">
                   {roles.map((r) => {
-                    const isSelected = selectedRoleId === r.id;
+                    const isSelected = selectedRoleObj?.id === r.id || selectedRoleId === r.id;
                     return (
                       <div
                         key={r.id}
@@ -1798,28 +1840,80 @@ export default function SettingsPage() {
                   )}
                 </div>
 
-                {!selectedRoleObj?.isActive && (
+                {selectedRoleObj && !selectedRoleObj.isSystemRole && selectedRoleObj.isActive === false && (
                   <div className="mt-4 p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 flex items-center gap-2">
                     <AlertCircle className="h-4 w-4 shrink-0" />
                     <span>This role is currently deactivated. Permissions are suspended for all assigned members.</span>
                   </div>
                 )}
 
+                {/* Quick Search for Permissions */}
+                <div className="relative mt-4">
+                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search permissions or modules (e.g. assets, inventory, stock, attendance)..."
+                    value={permissionSearch}
+                    onChange={(e) => setPermissionSearch(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background pl-9 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  {permissionSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setPermissionSearch('')}
+                      className="absolute right-2.5 top-2 text-muted-foreground hover:text-foreground text-xs font-medium"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+
                 {/* Permissions by Module */}
-                <div className="space-y-6 max-h-[620px] overflow-y-auto pr-2 mt-6">
+                <div className="space-y-6 max-h-[620px] overflow-y-auto pr-2 mt-4">
                   {Array.from(new Set((allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG).map((p) => p.module || 'General')))
-                    .sort((a, b) => a.localeCompare(b))
+                    .sort((a, b) => {
+                      const orderA = MODULE_DISPLAY_ORDER[a] ?? 99;
+                      const orderB = MODULE_DISPLAY_ORDER[b] ?? 99;
+                      if (orderA !== orderB) return orderA - orderB;
+                      return a.localeCompare(b);
+                    })
+                    .filter((modName) => {
+                      if (!permissionSearch.trim()) return true;
+                      const q = permissionSearch.toLowerCase().trim();
+                      const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
+                      const matchesMod = modName.toLowerCase().includes(q) || (MODULE_DISPLAY_NAMES[modName] || '').toLowerCase().includes(q);
+                      const hasMatchingPerm = effectiveCatalog.some(
+                        (p) => (p.module || 'General') === modName && (p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))
+                      );
+                      return matchesMod || hasMatchingPerm;
+                    })
                     .map((modName) => {
                       const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
+                      const q = permissionSearch.toLowerCase().trim();
                       const modPerms = effectiveCatalog
-                        .filter((p) => (p.module || 'General') === modName)
+                        .filter((p) => {
+                          if ((p.module || 'General') !== modName) return false;
+                          if (!q) return true;
+                          const matchesMod = modName.toLowerCase().includes(q) || (MODULE_DISPLAY_NAMES[modName] || '').toLowerCase().includes(q);
+                          if (matchesMod) return true;
+                          return p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+                        })
                         .sort((a, b) => a.code.localeCompare(b.code));
+
+                      if (modPerms.length === 0) return null;
+
+                      const groupTitle = MODULE_DISPLAY_NAMES[modName] || modName.toUpperCase();
 
                       return (
                         <div key={modName} className="space-y-3">
                           <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-foreground tracking-wider uppercase">
-                              {modName}
+                            <h4 className="text-xs font-bold text-foreground tracking-wider uppercase flex items-center gap-2">
+                              <span>{groupTitle}</span>
+                              {['Assets', 'Inventory', 'Ledger', 'Documents'].includes(modName) && (
+                                <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-primary/40 text-primary">
+                                  Assets & Docs
+                                </Badge>
+                              )}
                             </h4>
                             <span className="text-[10px] text-muted-foreground bg-muted font-medium px-2 py-0.5 rounded-md">
                               {modPerms.length} {modPerms.length === 1 ? 'action' : 'actions'}
@@ -1829,21 +1923,19 @@ export default function SettingsPage() {
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             {modPerms.map((perm) => {
                               const assignedPerms: any[] = selectedRoleObj?.permissions || [];
-                              const isGranted = assignedPerms.some(
-                                (p) =>
-                                  p === perm.id ||
-                                  p.permissionId === perm.id ||
-                                  p.id === perm.id ||
-                                  p.permission?.id === perm.id ||
-                                  p.permission?.code === perm.code ||
-                                  p.code === perm.code
-                              );
+                              const isGranted =
+                                selectedRoleObj?.name === 'OWNER' ||
+                                assignedPerms.some((p) => {
+                                  const code = p.permission?.code || p.code || (typeof p === 'string' ? p : '');
+                                  const id = p.permissionId || p.permission?.id || p.id;
+                                  return code === perm.code || id === perm.id || p === perm.id || p === perm.code;
+                                });
 
                               return (
                                 <div
                                   key={perm.id}
                                   onClick={() => {
-                                    if (selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive) {
+                                    if (selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive !== false) {
                                       handleTogglePermission(selectedRoleObj.id, perm.id);
                                     }
                                   }}

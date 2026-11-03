@@ -135,6 +135,7 @@ export class InMemoryDatabase {
         name: roleName,
         description: `${roleName} system access role`,
         isSystemRole: true,
+        isActive: true,
       });
     });
 
