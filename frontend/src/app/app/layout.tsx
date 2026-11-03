@@ -300,12 +300,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       visible: (hasPerm('time:view') || hasPerm('attendance:view') || hasPerm('attendance:clock')) && (enabledModules.includes('time') || enabledModules.includes('attendance')),
     },
     {
-      name: 'Quality Scorecards',
-      href: '/app/quality',
-      icon: Award,
-      visible: hasPerm('quality:view') && enabledModules.includes('quality'),
-    },
-    {
       name: 'Team Communication',
       href: '/app/communication',
       icon: MessageSquare,
