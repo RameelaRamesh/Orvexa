@@ -1263,7 +1263,7 @@ export default function ProjectsPage() {
 
             {/* Description & Overview Grid */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-              <div className="md:col-span-2 space-y-3">
+              <div className="md:col-span-2 space-y-3 min-w-0">
                 <div className="text-sm text-foreground leading-relaxed whitespace-pre-wrap bg-surface-secondary/20 p-3.5 rounded-lg border border-border">
                   {selectedTask.description || 'No description provided for this work item.'}
                 </div>
@@ -1286,7 +1286,7 @@ export default function ProjectsPage() {
                 </div>
 
                 {/* Dependencies Section */}
-                <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                <div className="p-3.5 rounded-lg border border-border bg-card space-y-3 min-w-0 overflow-hidden">
                   <div className="flex items-center justify-between">
                     <div className="font-semibold text-foreground flex items-center gap-1.5">
                       <LinkIcon className="h-3.5 w-3.5 text-primary" /> Blocking Dependencies
@@ -1307,11 +1307,11 @@ export default function ProjectsPage() {
                     <div className="text-muted-foreground text-xs italic">No blocking dependencies defined.</div>
                   )}
 
-                  <div className="flex items-center gap-2 pt-2 border-t border-border">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-2 border-t border-border min-w-0">
                     <select
                       value={selectedNewDepId}
                       onChange={(e) => setSelectedNewDepId(e.target.value)}
-                      className="text-xs px-2.5 py-1.5 rounded border border-border bg-background text-foreground flex-1"
+                      className="text-xs px-2.5 py-1.5 rounded border border-border bg-background text-foreground flex-1 min-w-0 truncate focus:outline-none focus:ring-1 focus:ring-primary"
                     >
                       <option value="">Select task that must complete before this...</option>
                       {tasks
@@ -1322,14 +1322,19 @@ export default function ProjectsPage() {
                           </option>
                         ))}
                     </select>
-                    <Button size="sm" onClick={handleAddDependency} disabled={!selectedNewDepId} className="text-xs">
+                    <Button
+                      size="sm"
+                      onClick={handleAddDependency}
+                      disabled={!selectedNewDepId}
+                      className="shrink-0 text-xs whitespace-nowrap"
+                    >
                       Add Blocker
                     </Button>
                   </div>
                 </div>
 
                 {/* Discussions & Comments Thread */}
-                <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                <div className="p-3.5 rounded-lg border border-border bg-card space-y-3 min-w-0 overflow-hidden">
                   <div className="font-semibold text-foreground flex items-center gap-1.5">
                     <MessageSquare className="h-3.5 w-3.5 text-primary" /> Discussions &amp; Notes
                   </div>
@@ -1349,15 +1354,15 @@ export default function ProjectsPage() {
                       <div className="text-muted-foreground text-xs italic">No comments yet. Start a discussion below.</div>
                     )}
                   </div>
-                  <form onSubmit={handleAddComment} className="flex items-center gap-2 pt-2 border-t border-border">
+                  <form onSubmit={handleAddComment} className="flex items-center gap-2 pt-2 border-t border-border min-w-0">
                     <input
                       type="text"
                       placeholder="Add an update or discuss with team..."
                       value={newCommentText}
                       onChange={(e) => setNewCommentText(e.target.value)}
-                      className="flex-1 text-xs px-3 py-1.5 rounded border border-border bg-background text-foreground"
+                      className="flex-1 min-w-0 text-xs px-3 py-1.5 rounded border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                     />
-                    <Button size="sm" type="submit" disabled={!newCommentText.trim()} className="gap-1 text-xs">
+                    <Button size="sm" type="submit" disabled={!newCommentText.trim()} className="shrink-0 gap-1 text-xs">
                       <Send className="h-3.5 w-3.5" /> Post
                     </Button>
                   </form>
