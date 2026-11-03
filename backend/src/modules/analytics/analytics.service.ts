@@ -369,11 +369,15 @@ export class AnalyticsService {
       memberId?: string;
     } = {},
   ) {
-    const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
+    const roleUpper = (userRole || '').toUpperCase();
+    const isManagerOrAdmin = 
+      ['OWNER', 'ADMIN', 'MANAGER', 'HR', 'TEAM_LEAD', 'LEAD'].some((r) => roleUpper.includes(r));
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+    start.setHours(0, 0, 0, 0);
     const end = filters.endDate ? new Date(filters.endDate) : new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59);
+    end.setHours(23, 59, 59, 999);
 
-    const targetMembershipId = isManagerOrAdmin && filters.memberId ? filters.memberId : (!isManagerOrAdmin ? membershipId : undefined);
+    const targetMembershipId = filters.memberId ? filters.memberId : (isManagerOrAdmin ? undefined : undefined);
     const activeLayers = filters.layers && filters.layers.length > 0
       ? filters.layers.map((l) => l.toUpperCase())
       : ['ATTENDANCE', 'SHIFTS', 'LEAVE', 'TASKS', 'QUALITY'];
@@ -505,9 +509,16 @@ export class AnalyticsService {
     if (activeLayers.includes('TASKS')) {
       const taskWhere: any = {
         workspaceId,
-        dueDate: { gte: start, lte: end },
+        OR: [
+          { dueDate: { gte: start, lte: end } },
+          { startDate: { gte: start, lte: end } },
+          { createdAt: { gte: start, lte: end } },
+          { AND: [{ dueDate: null }, { status: { notIn: ['COMPLETED', 'CANCELLED'] } }] },
+        ],
       };
-      if (targetMembershipId) taskWhere.assigneeMembershipId = targetMembershipId;
+      if (filters.memberId) {
+        taskWhere.assigneeMembershipId = filters.memberId;
+      }
 
       const tasks = await this.prisma.task.findMany({
         where: taskWhere,
@@ -520,15 +531,17 @@ export class AnalyticsService {
       });
 
       for (const t of tasks) {
-        if (!t.dueDate) continue;
+        const taskDate = t.dueDate || t.startDate || t.createdAt || new Date();
         const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+        const dateIso = taskDate.toISOString();
+        const prefix = t.dueDate ? 'Due' : 'Task';
         events.push({
           id: `task-${t.id}`,
-          title: `Due: ${t.title} [${t.priority}]`,
+          title: `${prefix}: ${t.title} [${t.priority}]`,
           type: 'TASK_DEADLINE',
           layer: 'TASKS',
-          startDate: t.dueDate.toISOString(),
-          endDate: t.dueDate.toISOString(),
+          startDate: dateIso,
+          endDate: (t.dueDate || taskDate).toISOString(),
           allDay: true,
           status: t.status,
           color: isUrgent ? '#ef4444' : '#8b5cf6',
@@ -538,6 +551,7 @@ export class AnalyticsService {
             projectName: t.project?.name || 'General',
             assigneeName: t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : 'Unassigned',
             priority: t.priority,
+            dueDate: t.dueDate ? t.dueDate.toISOString() : null,
           },
         });
       }

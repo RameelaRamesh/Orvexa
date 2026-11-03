@@ -41,6 +41,7 @@ interface CalendarEvent {
 export default function UniversalCalendarPage() {
   const router = useRouter();
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'agenda'>('month');
 
   // Active Layers
@@ -63,6 +64,16 @@ export default function UniversalCalendarPage() {
   const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
   const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
 
+  const today = new Date();
+
+  // Helper to format date to YYYY-MM-DD for date input
+  const toDateInputValue = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
   // Calculate Start & End of Month / Range
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -73,7 +84,9 @@ export default function UniversalCalendarPage() {
     setError(null);
     try {
       const firstDay = new Date(year, month, 1);
-      const lastDay = new Date(year, month + 1, 0, 23, 59, 59);
+      firstDay.setHours(0, 0, 0, 0);
+      const lastDay = new Date(year, month + 1, 0);
+      lastDay.setHours(23, 59, 59, 999);
 
       const params = new URLSearchParams({
         startDate: firstDay.toISOString(),
@@ -117,15 +130,34 @@ export default function UniversalCalendarPage() {
     }
   };
 
-  // Date Navigation
+  // Date Navigation Handlers
+  const handleDatePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (!val) return;
+    const parts = val.split('-').map(Number);
+    if (parts.length === 3) {
+      const newDate = new Date(parts[0], parts[1] - 1, parts[2]);
+      setSelectedDate(newDate);
+      setCurrentDate(newDate);
+    }
+  };
+
   const prevMonth = () => {
-    setCurrentDate(new Date(year, month - 1, 1));
+    const newMonthDate = new Date(year, month - 1, 1);
+    setCurrentDate(newMonthDate);
+    setSelectedDate(new Date(year, month - 1, Math.min(selectedDate.getDate(), 28)));
   };
+
   const nextMonth = () => {
-    setCurrentDate(new Date(year, month + 1, 1));
+    const newMonthDate = new Date(year, month + 1, 1);
+    setCurrentDate(newMonthDate);
+    setSelectedDate(new Date(year, month + 1, Math.min(selectedDate.getDate(), 28)));
   };
+
   const goToToday = () => {
-    setCurrentDate(new Date());
+    const now = new Date();
+    setSelectedDate(now);
+    setCurrentDate(now);
   };
 
   // Month Grid Calculation
@@ -133,11 +165,27 @@ export default function UniversalCalendarPage() {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
 
-  // Map events by Day of Month
+  // Map events by Day of Month (Timezone-resilient)
   const getEventsForDay = (day: number) => {
     return events.filter((ev) => {
+      if (!ev.startDate) return false;
       const d = new Date(ev.startDate);
-      return d.getFullYear() === year && d.getMonth() === month && d.getDate() === day;
+      if (d.getFullYear() === year && d.getMonth() === month && d.getDate() === day) {
+        return true;
+      }
+      const datePart = typeof ev.startDate === 'string' ? ev.startDate.split('T')[0] : '';
+      if (datePart) {
+        const parts = datePart.split('-');
+        if (parts.length === 3) {
+          const y = Number(parts[0]);
+          const m = Number(parts[1]) - 1;
+          const dt = Number(parts[2]);
+          if (y === year && m === month && dt === day) {
+            return true;
+          }
+        }
+      }
+      return false;
     });
   };
 
@@ -177,14 +225,29 @@ export default function UniversalCalendarPage() {
 
         {/* View Switcher & Date Nav */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Date Navigator with Calendar Icon Date Picker */}
           <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-sm">
             <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7" title="Previous Month">
               <ChevronLeft className="h-4 w-4" />
             </Button>
+
+            {/* Interactive Calendar Icon Date Picker */}
+            <div className="relative flex items-center gap-1.5 px-2 py-0.5 border-x border-border mx-1">
+              <CalendarIcon className="h-4 w-4 text-primary shrink-0 pointer-events-none" />
+              <input
+                type="date"
+                title="Select date to jump to"
+                value={toDateInputValue(selectedDate)}
+                onChange={handleDatePick}
+                className="bg-transparent text-xs font-semibold text-foreground border-none outline-none cursor-pointer focus:ring-0"
+              />
+            </div>
+
             <button
               type="button"
               onClick={goToToday}
-              className="px-3 py-1 text-xs font-semibold text-foreground hover:bg-surface-secondary rounded"
+              className="px-2.5 py-1 text-xs font-semibold text-primary hover:bg-surface-secondary rounded transition-colors"
+              title="Jump to Today"
             >
               Today
             </button>
@@ -293,9 +356,20 @@ export default function UniversalCalendarPage() {
         </button>
       </div>
 
-      {/* Month Label Banner */}
-      <div className="flex items-center justify-between bg-card border border-border px-4 py-3 rounded-lg shadow-xs">
-        <span className="text-base font-bold text-foreground">{monthName}</span>
+      {/* Month Label & Today Banner */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-card border border-border px-4 py-3 rounded-lg shadow-xs gap-3">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className="text-base font-bold text-foreground">{monthName}</span>
+          <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20 flex items-center gap-1.5 font-medium py-1">
+            <CalendarIcon className="h-3.5 w-3.5" />
+            Today: {today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+          </Badge>
+          {selectedDate.toDateString() !== today.toDateString() && (
+            <Badge variant="secondary" className="text-xs flex items-center gap-1 font-medium py-1">
+              Selected: {selectedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+            </Badge>
+          )}
+        </div>
         <span className="text-xs text-muted-foreground font-mono">{events.length} active events in scope</span>
       </div>
 
@@ -323,25 +397,41 @@ export default function UniversalCalendarPage() {
               const day = idx + 1;
               const dayEvents = getEventsForDay(day);
               const isToday =
-                new Date().getDate() === day &&
-                new Date().getMonth() === month &&
-                new Date().getFullYear() === year;
+                today.getDate() === day &&
+                today.getMonth() === month &&
+                today.getFullYear() === year;
+              const isSelected =
+                selectedDate.getDate() === day &&
+                selectedDate.getMonth() === month &&
+                selectedDate.getFullYear() === year;
 
               return (
                 <div
                   key={`day-${day}`}
-                  className={`min-h-28 p-1.5 sm:p-2 transition-colors flex flex-col justify-between ${
-                    isToday ? 'bg-primary/5 font-semibold' : 'hover:bg-surface-secondary/30'
+                  onClick={() => setSelectedDate(new Date(year, month, day))}
+                  className={`min-h-28 p-1.5 sm:p-2 transition-all flex flex-col justify-between cursor-pointer rounded-xs ${
+                    isSelected
+                      ? 'ring-2 ring-primary ring-inset bg-primary/10 font-semibold shadow-2xs'
+                      : isToday
+                      ? 'bg-primary/5 font-semibold'
+                      : 'hover:bg-surface-secondary/40'
                   }`}
                 >
                   <div className="flex items-center justify-between">
                     <span
-                      className={`text-xs rounded-full h-5 w-5 flex items-center justify-center ${
-                        isToday ? 'bg-primary text-primary-foreground font-bold' : 'text-foreground font-medium'
+                      className={`text-xs rounded-full h-5 w-5 flex items-center justify-center transition-all ${
+                        isToday
+                          ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                          : isSelected
+                          ? 'bg-foreground text-background font-bold'
+                          : 'text-foreground font-medium'
                       }`}
                     >
                       {day}
                     </span>
+                    {isToday && (
+                      <span className="text-[10px] font-semibold text-primary uppercase tracking-tight">Today</span>
+                    )}
                     {dayEvents.length > 2 && (
                       <span className="text-[10px] text-muted-foreground font-mono">
                         +{dayEvents.length - 2}

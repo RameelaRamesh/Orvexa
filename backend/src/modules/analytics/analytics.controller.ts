@@ -53,8 +53,15 @@ export class AnalyticsController {
     @Query('layers') layers?: string,
     @Query('memberId') memberId?: string,
   ) {
-    const membershipId = req.membership?.id || req.membershipId;
-    const userRole = req.membership?.accessRole || 'MEMBER';
+    const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    const userRole = (
+      req.userContext?.accessRole ||
+      req.membership?.accessRole ||
+      req.userContext?.roleName ||
+      req.membership?.role?.name ||
+      req.membership?.designation?.title ||
+      'MEMBER'
+    ).toString();
     const parsedLayers = layers ? layers.split(',') : undefined;
 
     return this.analyticsService.getCalendarEvents(workspaceId, membershipId, userRole, {
