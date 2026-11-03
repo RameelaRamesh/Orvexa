@@ -41,7 +41,58 @@ export default function ProjectsPage() {
   const [workflowExecutions, setWorkflowExecutions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Filters
+  // User Context for assignment scoping
+  const [currentUserId, setCurrentUserId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.id || '';
+    } catch {
+      return '';
+    }
+  });
+  const [currentMembershipId, setCurrentMembershipId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      const ws = localStorage.getItem('activeWorkspaceId');
+      const mem = (p.memberships || []).find((m: any) => m.workspaceId === ws) || p.memberships?.[0];
+      return mem?.id || '';
+    } catch {
+      return '';
+    }
+  });
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.email || '';
+    } catch {
+      return '';
+    }
+  });
+  const [currentFirstName, setCurrentFirstName] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.firstName || '';
+    } catch {
+      return '';
+    }
+  });
+  const [currentLastName, setCurrentLastName] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.lastName || '';
+    } catch {
+      return '';
+    }
+  });
+
+  // Filters & Scope Toggles
+  const [assignmentScope, setAssignmentScope] = useState<'MY_RELEVANT' | 'ASSIGNED_TO_ME' | 'ASSIGNED_BY_ME' | 'ALL'>('MY_RELEVANT');
+  const [statusToggle, setStatusToggle] = useState<'ALL' | 'PENDING' | 'COMPLETED'>('ALL');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [priorityFilter, setPriorityFilter] = useState<string>('ALL');
@@ -117,8 +168,14 @@ export default function ProjectsPage() {
       setTeamMembers(memData?.data !== undefined ? memData.data : (Array.isArray(memData) ? memData : []));
       setWorkflowRules(wfRulesData?.data !== undefined ? wfRulesData.data : (Array.isArray(wfRulesData) ? wfRulesData : []));
 
-      const memberships = meData?.data?.memberships || [];
+      const userObj = meData?.data?.user || meData?.data || {};
+      const memberships = meData?.data?.memberships || userObj?.memberships || [];
       const activeMem = memberships.find((m: any) => m.workspaceId === wsId) || memberships[0];
+      if (userObj?.id) setCurrentUserId(userObj.id);
+      if (userObj?.email) setCurrentUserEmail(userObj.email);
+      if (userObj?.firstName) setCurrentFirstName(userObj.firstName);
+      if (userObj?.lastName) setCurrentLastName(userObj.lastName);
+      if (activeMem?.id) setCurrentMembershipId(activeMem.id);
       if (activeMem?.accessRole) {
         setCurrentRole(activeMem.accessRole);
       }
@@ -219,6 +276,73 @@ export default function ProjectsPage() {
     // Fallback to workspace Owner or Admin if task was created during setup
     const ownerOrAdmin = safeMembers.find((m) => m && (m.accessRole === 'OWNER' || m.accessRole === 'ADMIN'));
     return ownerOrAdmin || null;
+  };
+
+  const isTaskAssignedToMe = (task: any) => {
+    if (!task) return false;
+    const memId = currentMembershipId;
+    const usrId = currentUserId;
+    const usrEmail = (currentUserEmail || '').toLowerCase();
+
+    // 1. Direct assignee membership ID
+    if (memId && task.assigneeMembershipId === memId) return true;
+    if (memId && task.assignee?.id === memId) return true;
+
+    // 2. Assignee user ID or email
+    if (usrId && task.assignee?.userId === usrId) return true;
+    if (usrId && task.assignee?.user?.id === usrId) return true;
+    if (usrEmail && task.assignee?.user?.email?.toLowerCase() === usrEmail) return true;
+
+    // 3. Multi-assignee arrays
+    const assigneeIds = Array.isArray(task.assigneeMembershipIds)
+      ? task.assigneeMembershipIds
+      : Array.isArray((task.sla as any)?.assigneeMembershipIds)
+      ? (task.sla as any).assigneeMembershipIds
+      : [];
+    if (memId && assigneeIds.includes(memId)) return true;
+
+    // 4. Collaborators
+    const collabIds = Array.isArray(task.collaboratorIds) ? task.collaboratorIds : [];
+    if (memId && collabIds.includes(memId)) return true;
+
+    return false;
+  };
+
+  const isTaskAssignedByMe = (task: any) => {
+    if (!task) return false;
+    const memId = currentMembershipId;
+    const usrId = currentUserId;
+    const usrEmail = (currentUserEmail || '').toLowerCase();
+    const fullName = `${currentFirstName} ${currentLastName}`.trim().toLowerCase();
+
+    // 1. Creator membership or user ID in task metadata
+    const creatorId = task.creatorMembershipId || (task.sla as any)?.creatorMembershipId;
+    if (memId && creatorId === memId) return true;
+    if (usrId && creatorId === usrId) return true;
+
+    const creatorUserId = (task.sla as any)?.creatorUserId;
+    if (usrId && creatorUserId === usrId) return true;
+
+    // 2. Activity log created actor
+    if (Array.isArray(task.activityLog) && task.activityLog.length > 0) {
+      const createdLog = task.activityLog.find((a: any) => a.action === 'CREATED') || task.activityLog[0];
+      if (createdLog?.actorId) {
+        if (memId && createdLog.actorId === memId) return true;
+        if (usrId && createdLog.actorId === usrId) return true;
+      }
+    }
+
+    // 3. Resolved assigner match
+    const assigner = getTaskAssigner(task);
+    if (assigner) {
+      if (memId && assigner.id === memId) return true;
+      if (usrId && assigner.userId === usrId) return true;
+      if (usrEmail && assigner.user?.email?.toLowerCase() === usrEmail) return true;
+      const assignerName = getMemberDisplayName(assigner).trim().toLowerCase();
+      if (fullName && assignerName && assignerName === fullName) return true;
+    }
+
+    return false;
   };
 
   const handleSaveAssignees = async () => {
@@ -453,11 +577,48 @@ export default function ProjectsPage() {
   // Filter Tasks
   const isManagerOrAdmin = currentRole === 'MANAGER' || currentRole === 'ADMIN' || currentRole === 'OWNER';
 
-  const filteredTasks = tasks.filter((t) => {
+  const isTaskInAssignmentScope = (task: any, scope: 'MY_RELEVANT' | 'ASSIGNED_TO_ME' | 'ASSIGNED_BY_ME' | 'ALL') => {
+    if (scope === 'ALL') return true;
+    const assignedToMe = isTaskAssignedToMe(task);
+    const assignedByMe = isTaskAssignedByMe(task);
+    if (scope === 'ASSIGNED_TO_ME') return assignedToMe;
+    if (scope === 'ASSIGNED_BY_ME') return assignedByMe;
+    return assignedToMe || assignedByMe;
+  };
+
+  // 1. Scoped Tasks based on assignment filter (defaults to assigned to me OR by me)
+  const scopedTasks = tasks.filter((t) => isTaskInAssignmentScope(t, assignmentScope));
+
+  // 2. Only show projects that actually have tasks in the current assignment scope
+  const visibleProjects = assignmentScope === 'ALL'
+    ? projects
+    : projects.filter((p) => scopedTasks.some((t) => t.projectId === p.id));
+
+  // 3. Tasks in selected project context
+  const tasksInProjectView = scopedTasks.filter((t) => {
     if (selectedProjectId === 'STANDALONE' && t.projectId) return false;
     if (selectedProjectId !== 'ALL' && selectedProjectId !== 'STANDALONE' && t.projectId !== selectedProjectId) return false;
+    return true;
+  });
+
+  // 4. Counts for the status toggle buttons (All / Pending / Completed)
+  const pendingCount = tasksInProjectView.filter((t) => t.status !== 'COMPLETED' && t.status !== 'CANCELLED').length;
+  const completedCount = tasksInProjectView.filter((t) => t.status === 'COMPLETED').length;
+  const allCount = tasksInProjectView.length;
+
+  // 5. Final filtered tasks list
+  const filteredTasks = tasksInProjectView.filter((t) => {
+    // Status Toggle
+    if (statusToggle === 'PENDING' && (t.status === 'COMPLETED' || t.status === 'CANCELLED')) return false;
+    if (statusToggle === 'COMPLETED' && t.status !== 'COMPLETED') return false;
+
+    // Detailed Status dropdown
     if (statusFilter !== 'ALL' && t.status !== statusFilter) return false;
+
+    // Priority filter
     if (priorityFilter !== 'ALL' && t.priority !== priorityFilter) return false;
+
+    // Search query
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       const matchTitle = t.title.toLowerCase().includes(q);
@@ -497,7 +658,7 @@ export default function ProjectsPage() {
               : 'border-transparent text-muted-foreground hover:text-foreground'
           }`}
         >
-          <CheckSquare className="h-4 w-4" /> Work Items &amp; Tasks ({tasks.length})
+          <CheckSquare className="h-4 w-4" /> Work Items &amp; Tasks ({scopedTasks.length})
         </button>
         <button
           onClick={() => setActiveTab('workflows')}
@@ -526,7 +687,7 @@ export default function ProjectsPage() {
                   : 'bg-card border-border text-foreground hover:bg-surface-secondary'
               }`}
             >
-              All Work Items ({tasks.length})
+              All Work Items ({scopedTasks.length})
             </button>
             <button
               onClick={() => setSelectedProjectId('STANDALONE')}
@@ -536,30 +697,34 @@ export default function ProjectsPage() {
                   : 'bg-card border-border text-foreground hover:bg-surface-secondary'
               }`}
             >
-              Standalone Tasks ({tasks.filter((t) => !t.projectId).length})
+              Standalone Tasks ({scopedTasks.filter((t) => !t.projectId).length})
             </button>
-            {projects.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setSelectedProjectId(p.id)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
-                  selectedProjectId === p.id
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'bg-card border-border text-foreground hover:bg-surface-secondary'
-                }`}
-              >
-                <span
-                  className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold tracking-wide ${
+            {visibleProjects.map((p) => {
+              const projectCount = scopedTasks.filter((t) => t.projectId === p.id).length;
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => setSelectedProjectId(p.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border flex items-center gap-1.5 ${
                     selectedProjectId === p.id
-                      ? 'bg-primary-foreground/20 text-primary-foreground'
-                      : 'bg-primary/10 text-primary border border-primary/20'
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-card border-border text-foreground hover:bg-surface-secondary'
                   }`}
                 >
-                  {p.key}
-                </span>
-                <span>{p.name}</span>
-              </button>
-            ))}
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] font-mono font-bold tracking-wide ${
+                      selectedProjectId === p.id
+                        ? 'bg-primary-foreground/20 text-primary-foreground'
+                        : 'bg-primary/10 text-primary border border-primary/20'
+                    }`}
+                  >
+                    {p.key}
+                  </span>
+                  <span>{p.name}</span>
+                  <span className="text-[10px] opacity-75 font-mono">({projectCount})</span>
+                </button>
+              );
+            })}
           </div>
 
           {/* Selected Project Details Card */}
@@ -595,44 +760,154 @@ export default function ProjectsPage() {
 
           {/* Filters Bar */}
           <Card>
-            <CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-                <div className="relative">
-                  <Search className="h-4 w-4 absolute left-3 top-3 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search tasks..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 pr-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground w-60"
-                  />
+            <CardContent className="p-4 space-y-3.5">
+              {/* Row 1: Assignment Scope & Status Toggle */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border/60 pb-3">
+                {/* Assignment Scope Pills */}
+                <div className="flex flex-wrap items-center gap-1.5 bg-muted/40 p-1 rounded-lg border border-border">
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentScope('MY_RELEVANT')}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      assignmentScope === 'MY_RELEVANT'
+                        ? 'bg-primary text-primary-foreground shadow-sm font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <UserCheck className="h-3.5 w-3.5" />
+                    Assigned To / By Me ({tasks.filter((t) => isTaskInAssignmentScope(t, 'MY_RELEVANT')).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentScope('ASSIGNED_TO_ME')}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      assignmentScope === 'ASSIGNED_TO_ME'
+                        ? 'bg-primary text-primary-foreground shadow-sm font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Assigned for Me ({tasks.filter((t) => isTaskAssignedToMe(t)).length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAssignmentScope('ASSIGNED_BY_ME')}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      assignmentScope === 'ASSIGNED_BY_ME'
+                        ? 'bg-primary text-primary-foreground shadow-sm font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Assigned by Me ({tasks.filter((t) => isTaskAssignedByMe(t)).length})
+                  </button>
+                  {isManagerOrAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setAssignmentScope('ALL')}
+                      className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                        assignmentScope === 'ALL'
+                          ? 'bg-primary text-primary-foreground shadow-sm font-semibold'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      All Workspace ({tasks.length})
+                    </button>
+                  )}
                 </div>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                  className="px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="TODO">To Do</option>
-                  <option value="IN_PROGRESS">In Progress</option>
-                  <option value="IN_REVIEW">In Review</option>
-                  <option value="COMPLETED">Completed</option>
-                  <option value="CANCELLED">Cancelled</option>
-                </select>
-                <select
-                  value={priorityFilter}
-                  onChange={(e) => setPriorityFilter(e.target.value)}
-                  className="px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground"
-                >
-                  <option value="ALL">All Priorities</option>
-                  <option value="LOW">Low</option>
-                  <option value="MEDIUM">Medium</option>
-                  <option value="HIGH">High</option>
-                  <option value="URGENT">Urgent</option>
-                </select>
+
+                {/* Status Toggle (All / Pending / Completed) */}
+                <div className="flex items-center gap-1 bg-muted/40 p-1 rounded-lg border border-border shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatusToggle('ALL');
+                      setStatusFilter('ALL');
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                      statusToggle === 'ALL'
+                        ? 'bg-background text-foreground shadow-sm font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    All ({allCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatusToggle('PENDING');
+                      setStatusFilter('ALL');
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      statusToggle === 'PENDING'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Clock className="h-3.5 w-3.5 text-amber-500" />
+                    Pending ({pendingCount})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setStatusToggle('COMPLETED');
+                      setStatusFilter('ALL');
+                    }}
+                    className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all flex items-center gap-1.5 ${
+                      statusToggle === 'COMPLETED'
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 font-semibold'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />
+                    Completed ({completedCount})
+                  </button>
+                </div>
               </div>
-              <div className="text-xs text-muted-foreground">
-                Showing <strong>{filteredTasks.length}</strong> task(s)
+
+              {/* Row 2: Search & Detailed Dropdowns */}
+              <div className="flex flex-col md:flex-row items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
+                  <div className="relative">
+                    <Search className="h-4 w-4 absolute left-3 top-2.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="Search tasks..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-9 pr-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground w-60 focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                  </div>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => {
+                      setStatusFilter(e.target.value);
+                      if (e.target.value === 'COMPLETED') setStatusToggle('COMPLETED');
+                      else if (e.target.value !== 'ALL') setStatusToggle('PENDING');
+                      else setStatusToggle('ALL');
+                    }}
+                    className="px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="TODO">To Do</option>
+                    <option value="IN_PROGRESS">In Progress</option>
+                    <option value="IN_REVIEW">In Review</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="CANCELLED">Cancelled</option>
+                  </select>
+                  <select
+                    value={priorityFilter}
+                    onChange={(e) => setPriorityFilter(e.target.value)}
+                    className="px-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="ALL">All Priorities</option>
+                    <option value="LOW">Low</option>
+                    <option value="MEDIUM">Medium</option>
+                    <option value="HIGH">High</option>
+                    <option value="URGENT">Urgent</option>
+                  </select>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  Showing <strong>{filteredTasks.length}</strong> task(s)
+                </div>
               </div>
             </CardContent>
           </Card>
