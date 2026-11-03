@@ -42,9 +42,9 @@ services:
       SMTP_HOST: smtp.gmail.com
       SMTP_PORT: 465
       SMTP_SECURE: "true"
-      SMTP_USER: operations@vattara.com
+      SMTP_USER: vattaraofficial@gmail.com
       SMTP_PASS: bacasnuqhkyupdrl
-      SMTP_FROM: "ORVEXA Notifications <operations@vattara.com>"
+      SMTP_FROM: "ORVEXA Notifications <vattaraofficial@gmail.com>"
       FRONTEND_URL: ${FRONTEND_URL:-https://app.orvexa.io}
     depends_on:
       - postgres

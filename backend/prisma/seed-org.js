@@ -247,8 +247,8 @@ async function main() {
   }
   console.log('✔ Teams created (Tech Team, Marketing Team)');
 
-  // 8. Hash Password ('password')
-  const passwordHash = await bcrypt.hash('password', 10);
+  // 8. Hash Password ('vattara@123')
+  const passwordHash = await bcrypt.hash('vattara@123', 10);
 
   // Helper to upsert user and membership
   async function setupUserAndMembership({
@@ -329,15 +329,15 @@ async function main() {
 
   // A. Create Owner
   const owner = await setupUserAndMembership({
-    email: 'owner@orvexa.local',
-    firstName: 'Victor',
-    lastName: 'Vance (Owner)',
+    email: 'vattaraofficial@gmail.com',
+    firstName: 'John',
+    lastName: 'Daniel (Owner)',
     systemRole: 'OWNER',
     designationTitle: 'Founder & Owner',
     departmentName: 'Executive',
     dataScope: 'GLOBAL',
   });
-  console.log('✔ Owner created: owner@orvexa.local');
+  console.log('✔ Owner created: vattaraofficial@gmail.com');
 
   // B. Create Operations Head (Reports to Owner)
   const head = await setupUserAndMembership({
