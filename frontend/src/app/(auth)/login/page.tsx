@@ -147,13 +147,13 @@ export default function LoginPage() {
                 O
               </div>
               <CardTitle className="text-2xl font-bold">Sign in to {BRANDING.name}</CardTitle>
-              <CardDescription>Enter your work email and password to access your workspace</CardDescription>
+              <CardDescription>Enter your registered email and password to access your workspace</CardDescription>
             </CardHeader>
             <form onSubmit={handleLogin}>
               <CardContent className="space-y-4 pt-2">
                 <div className="space-y-2">
                   <label className="text-sm font-medium text-foreground">
-                    Work Email <span className="text-destructive font-semibold ml-0.5">*</span>
+                    Email Address <span className="text-destructive font-semibold ml-0.5">*</span>
                   </label>
                   <input
                     type="email"
@@ -170,7 +170,7 @@ export default function LoginPage() {
                       Password <span className="text-destructive font-semibold ml-0.5">*</span>
                     </label>
                     <Link href="/forgot-password" className="text-xs text-primary hover:underline">
-                      Forgot?
+                      Forgot your password?
                     </Link>
                   </div>
                   <div className="relative">
@@ -194,13 +194,13 @@ export default function LoginPage() {
                 </div>
               </CardContent>
               <CardFooter className="flex flex-col space-y-4 pt-2">
-                <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? 'Authenticating...' : 'Sign In'}
+                <Button type="submit" className="w-full font-semibold shadow-sm" disabled={loading}>
+                  {loading ? 'Signing In...' : 'Sign In'}
                 </Button>
                 <div className="text-center text-xs text-muted-foreground">
-                  Don't have a workspace yet?{' '}
-                  <Link href="/register" className="text-primary font-medium hover:underline">
-                    Create one now
+                  Don't have an account?{' '}
+                  <Link href="/register" className="text-primary font-semibold hover:underline">
+                    Register
                   </Link>
                 </div>
               </CardFooter>
