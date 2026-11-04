@@ -203,7 +203,7 @@ function AcceptInvitationContent() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-foreground">Set Password *</label>
+                  <label className="text-xs font-medium text-foreground">Password *</label>
                   <div className="relative">
                     <input
                       type={showPassword ? 'text' : 'password'}
@@ -258,7 +258,7 @@ function AcceptInvitationContent() {
 
           <CardFooter className="flex flex-col gap-3 pt-2">
             <Button type="submit" className="w-full" disabled={accepting}>
-              {accepting ? 'Activating Membership...' : userExists ? 'Accept & Join Workspace' : 'Activate Account & Join'}
+              {accepting ? 'Accepting Invitation...' : 'Accept Invitation & Join'}
             </Button>
             <div className="text-center text-xs text-muted-foreground">
               Already have another account? <Link href="/login" className="text-primary hover:underline">Sign In</Link>
