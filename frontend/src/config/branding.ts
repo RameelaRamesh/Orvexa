@@ -35,7 +35,7 @@ const getApiUrl = (): string => {
     }
   }
 
-  return envApi || 'http://localhost:4000/api/v1';
+  return envApi || 'https://orvexa-api-jt4c.onrender.com/api/v1';
 };
 
 export const BRANDING = {

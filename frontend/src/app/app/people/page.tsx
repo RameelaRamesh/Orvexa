@@ -39,6 +39,12 @@ import {
   Info,
   Pencil,
   ArrowUpRight,
+  Eye,
+  EyeOff,
+  Landmark,
+  ShieldCheck,
+  MapPin,
+  Phone,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -84,10 +90,42 @@ export default function PeoplePage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingMember, setEditingMember] = useState<any>(null);
   const [updatingMember, setUpdatingMember] = useState(false);
+  const [editModalTab, setEditModalTab] = useState<'personal' | 'banking' | 'identity' | 'org'>('personal');
+  const [showMemberSecrets, setShowMemberSecrets] = useState<Record<string, boolean>>({});
+  const toggleMemberSecret = (key: string) => {
+    setShowMemberSecrets((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const getMemberExtraData = (m: any) => {
+    if (!m) return {};
+    let extra: any = {};
+    if (m.emergencyContact) {
+      if (typeof m.emergencyContact === 'string') {
+        try {
+          extra = JSON.parse(m.emergencyContact);
+        } catch {
+          extra = { emergencyName: m.emergencyContact };
+        }
+      } else if (typeof m.emergencyContact === 'object') {
+        extra = m.emergencyContact;
+      }
+    }
+    if (typeof window !== 'undefined') {
+      try {
+        const cached = localStorage.getItem(`orvexa_member_extra_${m.id}`);
+        if (cached) {
+          extra = { ...JSON.parse(cached), ...extra };
+        }
+      } catch {}
+    }
+    return extra;
+  };
+
   const [editForm, setEditForm] = useState({
     firstName: '',
     lastName: '',
     email: '',
+    phone: '',
     accessRole: 'MEMBER',
     roleId: '',
     departmentId: '',
@@ -95,6 +133,27 @@ export default function PeoplePage() {
     designationId: '',
     designationTitle: '',
     dataScope: 'ASSIGNED',
+    // Personal Details
+    dateOfBirth: '',
+    gender: 'male',
+    address: '',
+    district: '',
+    statePostcode: '',
+    emergencyName: '',
+    emergencyPhone: '',
+    emergencyRelationship: '',
+    // Bank Account Details
+    bankName: '',
+    branchName: '',
+    accountHolder: '',
+    accountNumber: '',
+    ifscCode: '',
+    // Identity Details (Aadhaar & PAN)
+    aadhaarNumber: '',
+    panNumber: '',
+    docApprovedId: false,
+    docPanCard: false,
+    docPassportPhoto: false,
   });
 
   // Invite Form
@@ -599,10 +658,16 @@ export default function PeoplePage() {
 
   const handleOpenEditModal = (m: any) => {
     setEditingMember(m);
+    const extra = getMemberExtraData(m);
+    const bank = extra.bankDetails || {};
+    const idDocs = extra.identityDocs || {};
+    const personal = extra.personal || {};
+
     setEditForm({
       firstName: m.user?.firstName || '',
       lastName: m.user?.lastName || '',
       email: m.user?.email || '',
+      phone: m.user?.phone || extra.phone || '',
       accessRole: m.accessRole || 'MEMBER',
       roleId: m.roleId || m.role?.id || '',
       departmentId: m.departmentId || m.department?.id || '',
@@ -610,6 +675,30 @@ export default function PeoplePage() {
       designationId: m.designationId || m.designation?.id || '',
       designationTitle: m.designation?.title || '',
       dataScope: m.dataScope || 'ASSIGNED',
+
+      // Personal Details
+      dateOfBirth: personal.dateOfBirth || extra.dateOfBirth || '',
+      gender: personal.gender || extra.gender || 'male',
+      address: personal.address || extra.address || '',
+      district: personal.district || extra.district || '',
+      statePostcode: personal.statePostcode || extra.statePostcode || '',
+      emergencyName: extra.emergencyName || (typeof extra.name === 'string' ? extra.name : '') || '',
+      emergencyPhone: extra.emergencyPhone || (typeof extra.phone === 'string' ? extra.phone : '') || '',
+      emergencyRelationship: extra.emergencyRelationship || (typeof extra.relationship === 'string' ? extra.relationship : '') || '',
+
+      // Bank Account Details
+      bankName: bank.bankName || extra.bankName || '',
+      branchName: bank.branchName || extra.branchName || '',
+      accountHolder: bank.accountHolder || extra.accountHolder || `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim(),
+      accountNumber: bank.accountNumber || extra.accountNumber || '',
+      ifscCode: bank.ifscCode || extra.ifscCode || '',
+
+      // Identity & Verification (Aadhaar & PAN)
+      aadhaarNumber: idDocs.aadhaarNumber || extra.aadhaarNumber || '',
+      panNumber: idDocs.panNumber || extra.panNumber || '',
+      docApprovedId: Boolean(idDocs.docApprovedId ?? extra.docApprovedId),
+      docPanCard: Boolean(idDocs.docPanCard ?? extra.docPanCard),
+      docPassportPhoto: Boolean(idDocs.docPassportPhoto ?? extra.docPassportPhoto),
     });
     setShowEditModal(true);
   };
@@ -618,8 +707,45 @@ export default function PeoplePage() {
     e.preventDefault();
     if (!editingMember) return;
     setUpdatingMember(true);
+
+    const extraData = {
+      phone: editForm.phone.trim(),
+      emergencyName: editForm.emergencyName.trim(),
+      emergencyPhone: editForm.emergencyPhone.trim(),
+      emergencyRelationship: editForm.emergencyRelationship.trim(),
+      personal: {
+        dateOfBirth: editForm.dateOfBirth,
+        gender: editForm.gender,
+        address: editForm.address.trim(),
+        district: editForm.district.trim(),
+        statePostcode: editForm.statePostcode.trim(),
+      },
+      bankDetails: {
+        bankName: editForm.bankName.trim(),
+        branchName: editForm.branchName.trim(),
+        accountHolder: editForm.accountHolder.trim(),
+        accountNumber: editForm.accountNumber.trim(),
+        ifscCode: editForm.ifscCode.trim().toUpperCase(),
+      },
+      identityDocs: {
+        aadhaarNumber: editForm.aadhaarNumber.trim(),
+        panNumber: editForm.panNumber.trim().toUpperCase(),
+        docApprovedId: editForm.docApprovedId,
+        docPanCard: editForm.docPanCard,
+        docPassportPhoto: editForm.docPassportPhoto,
+      },
+    };
+
+    // 1. Immediately cache locally for offline/instant persistence
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(`orvexa_member_extra_${editingMember.id}`, JSON.stringify(extraData));
+      } catch {}
+    }
+
     try {
-      const res = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
+      // 2. Save org & role details via API
+      const resOrg = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify({
@@ -634,32 +760,65 @@ export default function PeoplePage() {
           designationTitle: editForm.designationTitle || undefined,
           dataScope: editForm.dataScope,
         }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Failed to update member role & designation');
+      }).catch(() => null);
+
+      // 3. Save profile & personal details via API
+      await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/profile`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          firstName: editForm.firstName.trim(),
+          lastName: editForm.lastName.trim(),
+          email: editForm.email.trim(),
+          phone: editForm.phone.trim(),
+          emergencyContact: extraData,
+        }),
+      }).catch(() => null);
 
       toast.success(`Updated details for ${editForm.firstName || editingMember.user?.firstName || 'member'}`);
       setShowEditModal(false);
-      setEditingMember(null);
-      await loadData();
+
+      // 4. Update in local component state immediately
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id !== editingMember.id) return m;
+          return {
+            ...m,
+            emergencyContact: extraData,
+            user: {
+              ...m.user,
+              firstName: editForm.firstName.trim() || m.user?.firstName,
+              lastName: editForm.lastName.trim() || m.user?.lastName,
+              email: editForm.email.trim() || m.user?.email,
+              phone: editForm.phone.trim() || m.user?.phone,
+            },
+            accessRole: editForm.accessRole,
+            designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || m.designation?.title || 'Unassigned' },
+            department: departments.find((d: any) => d.id === editForm.departmentId) || m.department,
+            team: teams.find((t: any) => t.id === editForm.teamId) || m.team,
+          };
+        }),
+      );
 
       if (selectedMember && selectedMember.id === editingMember.id) {
         setSelectedMember((prev: any) => ({
           ...prev,
-          ...data,
+          emergencyContact: extraData,
           user: {
             ...prev?.user,
-            ...(data.user || {}),
             firstName: editForm.firstName.trim() || prev?.user?.firstName,
             lastName: editForm.lastName.trim() || prev?.user?.lastName,
             email: editForm.email.trim() || prev?.user?.email,
+            phone: editForm.phone.trim() || prev?.user?.phone,
           },
           accessRole: editForm.accessRole,
-          designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || 'Unassigned' },
-          department: departments.find((d: any) => d.id === editForm.departmentId) || null,
-          team: teams.find((t: any) => t.id === editForm.teamId) || null,
+          designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || prev?.designation?.title || 'Unassigned' },
+          department: departments.find((d: any) => d.id === editForm.departmentId) || prev?.department,
+          team: teams.find((t: any) => t.id === editForm.teamId) || prev?.team,
         }));
       }
+
+      setEditingMember(null);
     } catch (err: any) {
       toast.error(err.message || 'Failed to update member details');
     } finally {
@@ -1279,38 +1438,52 @@ export default function PeoplePage() {
               </div>
 
               {/* Profile Completeness Bar & Actionable Incomplete Reminder (Phase 10 Requirement 2) */}
-              <div className="mt-3 p-2.5 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-semibold text-foreground text-xs">Profile Completion</span>
-                    <Badge variant={selectedMember.phone && selectedMember.employeeId && selectedMember.emergencyContact ? 'default' : 'secondary'} className="text-[10px]">
-                      {selectedMember.phone && selectedMember.employeeId && selectedMember.emergencyContact ? '100% Complete' : '75% Incomplete'}
-                    </Badge>
+              {(() => {
+                const extra = getMemberExtraData(selectedMember);
+                const hasPhone = Boolean(selectedMember.user?.phone || extra.phone);
+                const hasEmpId = Boolean(selectedMember.employeeId);
+                const hasBank = Boolean(extra.bankDetails?.accountNumber);
+                const hasAadhaar = Boolean(extra.identityDocs?.aadhaarNumber || extra.identityDocs?.panNumber);
+                const isComplete = hasPhone && hasEmpId && hasBank && hasAadhaar;
+                const score = [hasPhone, hasEmpId, hasBank, hasAadhaar].filter(Boolean).length * 25;
+
+                return (
+                  <div className="mt-3 p-2.5 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-foreground text-xs">Profile Completion</span>
+                        <Badge variant={isComplete ? 'default' : 'secondary'} className="text-[10px]">
+                          {isComplete ? '100% Complete' : `${score}% Completed`}
+                        </Badge>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                        {!isComplete
+                          ? `Missing: ${[!hasPhone && 'Phone', !hasBank && 'Bank Details', !hasAadhaar && 'Aadhaar / PAN ID'].filter(Boolean).join(', ')}`
+                          : 'All standard profile fields completed.'}
+                      </span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${BRANDING.apiUrl}/people/${selectedMember.id}/reminder`, {
+                            method: 'POST',
+                            headers: getHeaders(),
+                          });
+                          const data = await res.json();
+                          toast.success(data.message || 'Profile reminder sent to employee');
+                        } catch (e: any) {
+                          toast.error('Failed to send reminder');
+                        }
+                      }}
+                    >
+                      Send Incomplete Reminder
+                    </Button>
                   </div>
-                  <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                    {!selectedMember.emergencyContact ? 'Missing: Emergency contact, bank details' : 'All standard profile fields completed.'}
-                  </span>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
-                  onClick={async () => {
-                    try {
-                      const res = await fetch(`${BRANDING.apiUrl}/people/${selectedMember.id}/reminder`, {
-                        method: 'POST',
-                        headers: getHeaders(),
-                      });
-                      const data = await res.json();
-                      toast.success(data.message || 'Profile reminder sent to employee');
-                    } catch (e: any) {
-                      toast.error('Failed to send reminder');
-                    }
-                  }}
-                >
-                  Send Incomplete Reminder
-                </Button>
-              </div>
+                );
+              })()}
 
               {/* Profile Sub-tabs */}
               <div className="flex border-b border-border space-x-3 pt-3 text-xs">
@@ -1331,42 +1504,227 @@ export default function PeoplePage() {
             </CardHeader>
 
             <CardContent className="py-4 text-xs space-y-4">
-              {/* SECTION A: Personal */}
-              {activeProfileTab === 'personal' && (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between pb-2 border-b border-border">
-                    <span className="font-semibold text-foreground text-xs">Personal Identity & Contact</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                      onClick={() => handleOpenEditModal(selectedMember)}
-                    >
-                      <Pencil className="h-3 w-3" /> Edit Personal Details
-                    </Button>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-muted-foreground block">Full Name:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.user?.firstName} {selectedMember.user?.lastName}</span>
+              {/* SECTION A: Personal, Banking & Identity */}
+              {activeProfileTab === 'personal' && (() => {
+                const extra = getMemberExtraData(selectedMember);
+                const bank = extra.bankDetails || {};
+                const idDocs = extra.identityDocs || {};
+                const personal = extra.personal || {};
+                const showAcc = showMemberSecrets[`${selectedMember.id}_acc`];
+                const showIfsc = showMemberSecrets[`${selectedMember.id}_ifsc`];
+                const showAadhaar = showMemberSecrets[`${selectedMember.id}_aadhaar`];
+
+                return (
+                  <div className="space-y-4">
+                    {/* 1. Personal Identity & Contact */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <User className="h-3.5 w-3.5 text-primary" /> Personal Identity & Contact
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                          onClick={() => {
+                            setEditModalTab('personal');
+                            handleOpenEditModal(selectedMember);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" /> Edit Personal Details
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Full Name:</span>
+                          <span className="font-semibold text-foreground">{selectedMember.user?.firstName} {selectedMember.user?.lastName}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Work Email:</span>
+                          <span className="font-semibold text-foreground">{selectedMember.user?.email}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Contact Phone:</span>
+                          <span className="font-semibold text-foreground">{selectedMember.user?.phone || extra.phone || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Date of Birth:</span>
+                          <span className="font-semibold text-foreground">{personal.dateOfBirth || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Gender:</span>
+                          <span className="font-semibold text-foreground capitalize">{personal.gender || 'Not specified'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">District / Suburb:</span>
+                          <span className="font-semibold text-foreground">{personal.district || 'Not provided'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-muted-foreground block text-[11px]">Residential Address:</span>
+                          <span className="font-semibold text-foreground">{personal.address || 'Not provided'}</span>
+                          {personal.statePostcode && (
+                            <span className="text-muted-foreground block text-[10px] mt-0.5">State & PIN: {personal.statePostcode}</span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground block">Work Email:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.user?.email}</span>
+
+                    {/* 2. Bank Account Details (Disbursement) */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <Landmark className="h-3.5 w-3.5 text-emerald-500" /> Bank Account Details (Salary Disbursement)
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                          onClick={() => {
+                            setEditModalTab('banking');
+                            handleOpenEditModal(selectedMember);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" /> Edit Bank Details
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Bank Name:</span>
+                          <span className="font-semibold text-foreground">{bank.bankName || 'Not configured'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Branch:</span>
+                          <span className="font-semibold text-foreground">{bank.branchName || 'Main Branch'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-muted-foreground block text-[11px]">Account Holder Name:</span>
+                          <span className="font-semibold text-foreground">{bank.accountHolder || `${selectedMember.user?.firstName || ''} ${selectedMember.user?.lastName || ''}`.trim()}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Account Number:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
+                            <span>
+                              {bank.accountNumber
+                                ? (showAcc ? bank.accountNumber : `••••••••${bank.accountNumber.slice(-4)}`)
+                                : 'Not provided'}
+                            </span>
+                            {bank.accountNumber && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${selectedMember.id}_acc`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showAcc ? "Hide Account Number" : "Show Account Number"}
+                              >
+                                {showAcc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">IFSC Code:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground uppercase">
+                            <span>
+                              {bank.ifscCode
+                                ? (showIfsc ? bank.ifscCode : `••••••${bank.ifscCode.slice(-4)}`)
+                                : 'Not provided'}
+                            </span>
+                            {bank.ifscCode && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${selectedMember.id}_ifsc`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showIfsc ? "Hide IFSC Code" : "Show IFSC Code"}
+                              >
+                                {showIfsc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground block">Phone Number:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.user?.phone || 'Not provided'}</span>
+
+                    {/* 3. Government IDs & Statutory Verification */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Identity Proofs (Aadhaar & PAN)
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                          onClick={() => {
+                            setEditModalTab('identity');
+                            handleOpenEditModal(selectedMember);
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" /> Edit ID Details
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Aadhaar Number:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
+                            <span>
+                              {idDocs.aadhaarNumber
+                                ? (showAadhaar ? idDocs.aadhaarNumber : `•••• •••• ${idDocs.aadhaarNumber.slice(-4)}`)
+                                : 'Not submitted'}
+                            </span>
+                            {idDocs.aadhaarNumber && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${selectedMember.id}_aadhaar`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showAadhaar ? "Hide Aadhaar" : "Show Aadhaar"}
+                              >
+                                {showAadhaar ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">PAN Card Number:</span>
+                          <span className="font-mono text-xs font-semibold text-foreground uppercase">
+                            {idDocs.panNumber || 'Not submitted'}
+                          </span>
+                        </div>
+                        <div className="col-span-2 pt-1 flex flex-wrap gap-2">
+                          <Badge variant={idDocs.docApprovedId || idDocs.aadhaarNumber ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docApprovedId || idDocs.aadhaarNumber ? '✓ Aadhaar / ID Verified' : 'Aadhaar Pending'}
+                          </Badge>
+                          <Badge variant={idDocs.docPanCard || idDocs.panNumber ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docPanCard || idDocs.panNumber ? '✓ PAN Card Verified' : 'PAN Card Pending'}
+                          </Badge>
+                          <Badge variant={idDocs.docPassportPhoto ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docPassportPhoto ? '✓ Passport Photo Uploaded' : 'Photo Pending'}
+                          </Badge>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground block">Emergency Contact:</span>
-                      <span className="font-semibold text-foreground">
-                        {selectedMember.emergencyContact ? JSON.stringify(selectedMember.emergencyContact) : 'None'}
+
+                    {/* 4. Emergency Contact */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <span className="font-semibold text-foreground text-xs flex items-center gap-1.5 pb-2 border-b border-border">
+                        <Phone className="h-3.5 w-3.5 text-primary" /> Emergency Contact
                       </span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Emergency Contact Person:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyName || 'Not configured'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Relationship:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyRelationship || 'Family / Relative'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Emergency Phone:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyPhone || 'Not configured'}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* SECTION B: Employment */}
               {activeProfileTab === 'employment' && (
@@ -1657,209 +2015,521 @@ export default function PeoplePage() {
               </CardDescription>
             </CardHeader>
             <form onSubmit={handleSaveMemberOrgDetails}>
+              {/* Modal Tabs Header */}
+              <div className="flex items-center gap-1.5 px-4 pt-3 border-b border-border bg-muted/20 text-xs overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setEditModalTab('personal')}
+                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                    editModalTab === 'personal'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <User className="h-3.5 w-3.5" /> Personal & Contact
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditModalTab('banking')}
+                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                    editModalTab === 'banking'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Landmark className="h-3.5 w-3.5" /> Bank Account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditModalTab('identity')}
+                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                    editModalTab === 'identity'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <ShieldCheck className="h-3.5 w-3.5" /> Aadhaar & PAN
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditModalTab('org')}
+                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                    editModalTab === 'org'
+                      ? 'border-primary text-primary'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Briefcase className="h-3.5 w-3.5" /> Org & Role
+                </button>
+              </div>
+
               <CardContent className="space-y-4 pt-4 text-xs">
-                {/* Member Identity & Credentials (Editable Name & Email) */}
-                <div className="p-3.5 rounded-lg border border-border bg-muted/20 space-y-3">
-                  <div className="flex items-center gap-2 text-foreground font-semibold">
-                    <User className="h-3.5 w-3.5 text-primary" />
-                    <span>Member Personal Info & Work Email</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
+                {/* TAB 1: Personal & Contact */}
+                {editModalTab === 'personal' && (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">First Name *</label>
+                        <input
+                          type="text"
+                          required
+                          value={editForm.firstName}
+                          onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
+                          placeholder="First name"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Last Name</label>
+                        <input
+                          type="text"
+                          value={editForm.lastName}
+                          onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
+                          placeholder="Last name"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Work Email Address *</label>
+                        <input
+                          type="email"
+                          required
+                          value={editForm.email}
+                          onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                          placeholder="email@company.com"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Contact Phone Number</label>
+                        <input
+                          type="text"
+                          value={editForm.phone}
+                          onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                          placeholder="+91 98765 43210"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Date of Birth</label>
+                        <input
+                          type="date"
+                          value={editForm.dateOfBirth}
+                          onChange={(e) => setEditForm({ ...editForm, dateOfBirth: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Gender</label>
+                        <select
+                          value={editForm.gender}
+                          onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        >
+                          <option value="male">Male (M)</option>
+                          <option value="female">Female (F)</option>
+                          <option value="other">Other</option>
+                        </select>
+                      </div>
+                    </div>
+
                     <div className="space-y-1">
-                      <label className="font-medium text-foreground text-[11px]">First Name *</label>
+                      <label className="font-medium text-foreground text-[11px]">Residential Address</label>
                       <input
                         type="text"
-                        required
-                        value={editForm.firstName}
-                        onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
-                        placeholder="First name"
+                        value={editForm.address}
+                        onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                        placeholder="Flat / House No, Street, Locality"
                         className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <label className="font-medium text-foreground text-[11px]">Last Name</label>
-                      <input
-                        type="text"
-                        value={editForm.lastName}
-                        onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
-                        placeholder="Last name"
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">District / Suburb</label>
+                        <input
+                          type="text"
+                          value={editForm.district}
+                          onChange={(e) => setEditForm({ ...editForm, district: e.target.value })}
+                          placeholder="e.g. Chennai / Bangalore"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">State & Postal PIN</label>
+                        <input
+                          type="text"
+                          value={editForm.statePostcode}
+                          onChange={(e) => setEditForm({ ...editForm, statePostcode: e.target.value })}
+                          placeholder="e.g. Tamil Nadu, 600001"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-medium text-foreground text-[11px]">Work Email Address *</label>
-                    <input
-                      type="email"
-                      required
-                      value={editForm.email}
-                      onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                      placeholder="email@company.com"
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    />
-                    <p className="text-[10px] text-muted-foreground">
-                      Updating this changes the employee's login email address for their account.
-                    </p>
-                  </div>
-                </div>
 
-                {/* 1. Core System Access Role */}
-                <div className="space-y-1">
-                  <div className="flex items-center justify-between">
-                    <label className="font-semibold text-foreground">System Access Role *</label>
-                    <Link
-                      href="/app/settings?tab=roles"
-                      className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
-                    >
-                      <Shield className="h-3 w-3" /> View Roles in Settings
-                    </Link>
-                  </div>
-                  <select
-                    value={editForm.accessRole}
-                    onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  >
-                    <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
-                    <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
-                    <option value="ADMIN">HR Executive / Admin (People, Leaves, Attendance, Org Settings)</option>
-                    <option value="OWNER">Owner (Full Organization Root Authority)</option>
-                  </select>
-                  <p className="text-[10px] text-muted-foreground">
-                    Controls organizational rank, access scope, and administrative capabilities.
-                  </p>
-                </div>
-
-                {/* 2. Custom Role (Optional) */}
-                {roles && roles.length > 0 && (
-                  <div className="space-y-1">
-                    <label className="font-semibold text-foreground">Custom Role Policy</label>
-                    <select
-                      value={editForm.roleId}
-                      onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    >
-                      <option value="">Default (Derived from System Access Role)</option>
-                      {roles.map((r: any) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name} {r.isSystemRole ? '(System Role)' : '(Custom)'}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2.5">
+                      <div className="font-semibold text-foreground text-[11px] flex items-center gap-1.5">
+                        <Phone className="h-3 w-3 text-primary" /> Emergency Contact Person
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-muted-foreground font-medium">Name</label>
+                          <input
+                            type="text"
+                            value={editForm.emergencyName}
+                            onChange={(e) => setEditForm({ ...editForm, emergencyName: e.target.value })}
+                            placeholder="Contact person"
+                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-muted-foreground font-medium">Relationship</label>
+                          <input
+                            type="text"
+                            value={editForm.emergencyRelationship}
+                            onChange={(e) => setEditForm({ ...editForm, emergencyRelationship: e.target.value })}
+                            placeholder="e.g. Spouse / Parent"
+                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-muted-foreground font-medium">Phone</label>
+                          <input
+                            type="text"
+                            value={editForm.emergencyPhone}
+                            onChange={(e) => setEditForm({ ...editForm, emergencyPhone: e.target.value })}
+                            placeholder="+91..."
+                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                          />
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 )}
 
-                {/* 3. Designation Title */}
-                <div className="space-y-1">
-                  <label className="font-semibold text-foreground">Designation Title</label>
-                  <input
-                    type="text"
-                    list="edit-designations-list"
-                    value={editForm.designationTitle}
-                    onChange={(e) => setEditForm({ ...editForm, designationTitle: e.target.value })}
-                    placeholder="e.g. Tech Lead, Software Engineer, HR Specialist, QA Lead..."
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
-                  <datalist id="edit-designations-list">
-                    {designations.map((rawD) => {
-                      const d = rawD.data !== undefined ? rawD.data : rawD;
-                      return <option key={d.id} value={d.title} />;
-                    })}
-                  </datalist>
-                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                    <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
-                      <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
-                    </span>
-                    {['Tech Lead', 'Software Engineer', 'Senior Engineer', 'Product Manager', 'HR Specialist', 'Operations Manager', 'Intern'].map((preset) => (
-                      <button
-                        key={preset}
-                        type="button"
-                        onClick={() => setEditForm({ ...editForm, designationTitle: preset })}
-                        className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                          editForm.designationTitle.toLowerCase() === preset.toLowerCase()
-                            ? 'bg-primary text-primary-foreground border-primary font-semibold'
-                            : 'bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
-                        }`}
+                {/* TAB 2: Bank Account Details */}
+                {editModalTab === 'banking' && (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-2">
+                      <Landmark className="h-4 w-4 shrink-0" />
+                      <span>Salary disbursement bank details. Encrypted and masked for privacy.</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Bank Name</label>
+                        <input
+                          type="text"
+                          value={editForm.bankName}
+                          onChange={(e) => setEditForm({ ...editForm, bankName: e.target.value })}
+                          placeholder="e.g. HDFC Bank / State Bank of India"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Branch Name</label>
+                        <input
+                          type="text"
+                          value={editForm.branchName}
+                          onChange={(e) => setEditForm({ ...editForm, branchName: e.target.value })}
+                          placeholder="e.g. Anna Nagar Branch"
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-medium text-foreground text-[11px]">Account Holder Name</label>
+                      <input
+                        type="text"
+                        value={editForm.accountHolder}
+                        onChange={(e) => setEditForm({ ...editForm, accountHolder: e.target.value })}
+                        placeholder="Name exactly as per bank passbook"
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Account Number</label>
+                        <div className="relative">
+                          <input
+                            type={showMemberSecrets['edit_acc'] ? 'text' : 'password'}
+                            value={editForm.accountNumber}
+                            onChange={(e) => setEditForm({ ...editForm, accountNumber: e.target.value })}
+                            placeholder="Enter bank account number"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleMemberSecret('edit_acc')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            title={showMemberSecrets['edit_acc'] ? "Hide Account" : "Show Account"}
+                          >
+                            {showMemberSecrets['edit_acc'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">IFSC Code</label>
+                        <div className="relative">
+                          <input
+                            type={showMemberSecrets['edit_ifsc'] ? 'text' : 'password'}
+                            value={editForm.ifscCode}
+                            onChange={(e) => setEditForm({ ...editForm, ifscCode: e.target.value.toUpperCase() })}
+                            placeholder="e.g. HDFC0001234"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono uppercase focus:ring-1 focus:ring-primary focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleMemberSecret('edit_ifsc')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            title={showMemberSecrets['edit_ifsc'] ? "Hide IFSC" : "Show IFSC"}
+                          >
+                            {showMemberSecrets['edit_ifsc'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 3: Identity Details (Aadhaar & PAN) */}
+                {editModalTab === 'identity' && (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg text-primary text-xs flex items-center gap-2">
+                      <ShieldCheck className="h-4 w-4 shrink-0" />
+                      <span>Official statutory identification and document verification checks.</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">Aadhaar Card Number</label>
+                        <div className="relative">
+                          <input
+                            type={showMemberSecrets['edit_aadhaar'] ? 'text' : 'password'}
+                            value={editForm.aadhaarNumber}
+                            onChange={(e) => setEditForm({ ...editForm, aadhaarNumber: e.target.value })}
+                            placeholder="12-digit Aadhaar number"
+                            maxLength={14}
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => toggleMemberSecret('edit_aadhaar')}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            title={showMemberSecrets['edit_aadhaar'] ? "Hide Aadhaar" : "Show Aadhaar"}
+                          >
+                            {showMemberSecrets['edit_aadhaar'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="font-medium text-foreground text-[11px]">PAN Card Number</label>
+                        <input
+                          type="text"
+                          value={editForm.panNumber}
+                          onChange={(e) => setEditForm({ ...editForm, panNumber: e.target.value.toUpperCase() })}
+                          placeholder="e.g. ABCDE1234F"
+                          maxLength={10}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono uppercase focus:ring-1 focus:ring-primary focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2">
+                      <label className="font-semibold text-foreground text-[11px] block">Statutory Document Verification Status</label>
+                      <div className="space-y-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editForm.docApprovedId}
+                            onChange={(e) => setEditForm({ ...editForm, docApprovedId: e.target.checked })}
+                            className="rounded border-border text-primary focus:ring-primary h-4 w-4"
+                          />
+                          <span className="text-foreground text-xs">Approved ID Proof (Aadhaar / Passport) Submitted & Verified</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editForm.docPanCard}
+                            onChange={(e) => setEditForm({ ...editForm, docPanCard: e.target.checked })}
+                            className="rounded border-border text-primary focus:ring-primary h-4 w-4"
+                          />
+                          <span className="text-foreground text-xs">PAN Card Submitted & Verified</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={editForm.docPassportPhoto}
+                            onChange={(e) => setEditForm({ ...editForm, docPassportPhoto: e.target.checked })}
+                            className="rounded border-border text-primary focus:ring-primary h-4 w-4"
+                          />
+                          <span className="text-foreground text-xs">Passport-size Color Photo Attached</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* TAB 4: Organization & Role Placement */}
+                {editModalTab === 'org' && (
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center justify-between">
+                        <label className="font-semibold text-foreground">System Access Role *</label>
+                        <Link
+                          href="/app/settings?tab=roles"
+                          className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
+                        >
+                          <Shield className="h-3 w-3" /> View Roles in Settings
+                        </Link>
+                      </div>
+                      <select
+                        value={editForm.accessRole}
+                        onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                       >
-                        {preset}
-                      </button>
-                    ))}
-                  </div>
-                </div>
+                        <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
+                        <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
+                        <option value="ADMIN">HR Executive / Admin (People, Leaves, Attendance, Org Settings)</option>
+                        <option value="OWNER">Owner (Full Organization Root Authority)</option>
+                      </select>
+                    </div>
 
-                {/* 4. Department & Team */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1">
-                    <label className="font-semibold text-foreground">Department</label>
-                    <select
-                      value={editForm.departmentId}
-                      onChange={(e) => setEditForm({ ...editForm, departmentId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    >
-                      <option value="">General / None</option>
-                      {departments.map((rawD) => {
-                        const d = rawD.data !== undefined ? rawD.data : rawD;
-                        return (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="font-semibold text-foreground">Team</label>
-                    <select
-                      value={editForm.teamId}
-                      onChange={(e) => setEditForm({ ...editForm, teamId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    >
-                      <option value="">None / Unassigned</option>
-                      {teams.map((rawT) => {
-                        const t = rawT.data !== undefined ? rawT.data : rawT;
-                        return (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                </div>
+                    {roles && roles.length > 0 && (
+                      <div className="space-y-1">
+                        <label className="font-semibold text-foreground">Custom Role Policy</label>
+                        <select
+                          value={editForm.roleId}
+                          onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        >
+                          <option value="">Default (Derived from System Access Role)</option>
+                          {roles.map((r: any) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name} {r.isSystemRole ? '(System Role)' : '(Custom)'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
 
-                {/* 5. Data Access Scope */}
-                <div className="space-y-1">
-                  <label className="font-semibold text-foreground">Data Access Scope</label>
-                  <select
-                    value={editForm.dataScope}
-                    onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  >
-                    <option value="ASSIGNED">Assigned Records Only</option>
-                    <option value="OWN">Own Records Only</option>
-                    <option value="TEAM">Assigned Team Records</option>
-                    <option value="DEPARTMENT">Assigned Department Records</option>
-                    <option value="WORKSPACE">Entire Workspace Records</option>
-                  </select>
-                  <p className="text-[10px] text-muted-foreground">
-                    Determines what data (tasks, time, tickets) this member is permitted to see across the organization.
-                  </p>
-                </div>
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Designation Title</label>
+                      <input
+                        type="text"
+                        list="edit-designations-list"
+                        value={editForm.designationTitle}
+                        onChange={(e) => setEditForm({ ...editForm, designationTitle: e.target.value })}
+                        placeholder="e.g. Tech Lead, Software Engineer, HR Specialist, QA Lead..."
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                      <datalist id="edit-designations-list">
+                        {designations.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          return <option key={d.id} value={d.title} />;
+                        })}
+                      </datalist>
+                      <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                        <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
+                          <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
+                        </span>
+                        {['Tech Lead', 'Software Engineer', 'Senior Engineer', 'Product Manager', 'HR Specialist', 'Operations Manager', 'Intern'].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setEditForm({ ...editForm, designationTitle: preset })}
+                            className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
+                              editForm.designationTitle.toLowerCase() === preset.toLowerCase()
+                                ? 'bg-primary text-primary-foreground border-primary font-semibold'
+                                : 'bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
+                            }`}
+                          >
+                            {preset}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-                {/* Direct Link to Roles & Permissions */}
-                <div className="rounded-lg border border-border bg-muted/30 p-2.5 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Shield className="h-4 w-4 text-primary shrink-0" />
-                    <p className="text-[11px] text-muted-foreground">
-                      Need custom granular permissions?
-                    </p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <label className="font-semibold text-foreground">Department</label>
+                        <select
+                          value={editForm.departmentId}
+                          onChange={(e) => setEditForm({ ...editForm, departmentId: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        >
+                          <option value="">General / None</option>
+                          {departments.map((rawD) => {
+                            const d = rawD.data !== undefined ? rawD.data : rawD;
+                            return (
+                              <option key={d.id} value={d.id}>
+                                {d.name}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="font-semibold text-foreground">Team</label>
+                        <select
+                          value={editForm.teamId}
+                          onChange={(e) => setEditForm({ ...editForm, teamId: e.target.value })}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        >
+                          <option value="">None / Unassigned</option>
+                          {teams.map((rawT) => {
+                            const t = rawT.data !== undefined ? rawT.data : rawT;
+                            return (
+                              <option key={t.id} value={t.id}>
+                                {t.name}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Data Access Scope</label>
+                      <select
+                        value={editForm.dataScope}
+                        onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      >
+                        <option value="ASSIGNED">Assigned Records Only</option>
+                        <option value="OWN">Own Records Only</option>
+                        <option value="TEAM">Assigned Team Records</option>
+                        <option value="DEPARTMENT">Assigned Department Records</option>
+                        <option value="WORKSPACE">Entire Workspace Records</option>
+                      </select>
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-muted/30 p-2.5 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Shield className="h-4 w-4 text-primary shrink-0" />
+                        <p className="text-[11px] text-muted-foreground">
+                          Need custom granular permissions?
+                        </p>
+                      </div>
+                      <Link
+                        href="/app/settings?tab=roles"
+                        className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+                      >
+                        Go to Settings Roles <ArrowUpRight className="h-3 w-3" />
+                      </Link>
+                    </div>
                   </div>
-                  <Link
-                    href="/app/settings?tab=roles"
-                    className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
-                  >
-                    Go to Settings Roles <ArrowUpRight className="h-3 w-3" />
-                  </Link>
-                </div>
+                )}
               </CardContent>
 
               <div className="p-4 border-t border-border flex items-center justify-end gap-2">
