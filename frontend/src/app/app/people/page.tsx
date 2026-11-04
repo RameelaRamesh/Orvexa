@@ -56,8 +56,67 @@ export default function PeoplePage() {
   const [designations, setDesignations] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
-  const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
+  const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'MEMBER';
+    try {
+      const u = localStorage.getItem('user');
+      if (u) {
+        const parsed = JSON.parse(u);
+        return parsed.role || parsed.accessRole || 'MEMBER';
+      }
+    } catch {}
+    return 'MEMBER';
+  });
+  const [currentUserId, setCurrentUserId] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const u = localStorage.getItem('user');
+      if (u) {
+        const parsed = JSON.parse(u);
+        return parsed.id || '';
+      }
+    } catch {}
+    return '';
+  });
+  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const u = localStorage.getItem('user');
+      if (u) {
+        const parsed = JSON.parse(u);
+        return (parsed.email || '').toLowerCase().trim();
+      }
+    } catch {}
+    return '';
+  });
+  const [currentMemberId, setCurrentMemberId] = useState<string>('');
   const [loading, setLoading] = useState(true);
+
+  // Permission helpers: Owner & HR (Admin) can edit any member; others can only edit their own profile
+  const isCurrentUserOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+
+  const isSelfMember = (m: any): boolean => {
+    if (!m) return false;
+    const myUid = (currentUserId || '').trim();
+    const myEmail = (currentUserEmail || '').toLowerCase().trim();
+    const myMid = (currentMemberId || '').trim();
+
+    const mUid = (m.userId || m.user?.id || '').trim();
+    const mEmail = (m.user?.email || m.email || '').toLowerCase().trim();
+    const mId = (m.id || '').trim();
+
+    if (myUid && mUid && myUid === mUid) return true;
+    if (myMid && mId && myMid === mId) return true;
+    if (myEmail && mEmail && myEmail === mEmail) return true;
+
+    return false;
+  };
+
+  const canEditMember = (m: any): boolean => {
+    if (!m) return false;
+    if (isCurrentUserOwnerOrAdmin) return true;
+    return isSelfMember(m);
+  };
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState('');
@@ -438,9 +497,33 @@ export default function PeoplePage() {
       setRoles(Array.isArray(roleData) ? roleData : []);
 
       const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
-      if (meData?.memberships) {
-        const currentMem = meData.memberships.find((m: any) => m.workspaceId === wsId);
-        if (currentMem) setCurrentUserRole(currentMem.accessRole);
+      if (meData) {
+        if (meData.id) setCurrentUserId(meData.id);
+        if (meData.email) setCurrentUserEmail(meData.email.toLowerCase().trim());
+        if (meData.memberships) {
+          const currentMem = meData.memberships.find((m: any) => m.workspaceId === wsId);
+          if (currentMem) {
+            setCurrentUserRole(currentMem.accessRole);
+            if (currentMem.id) setCurrentMemberId(currentMem.id);
+            if (currentMem.userId) setCurrentUserId(currentMem.userId);
+          }
+        }
+      }
+      const activeMembersList = Array.isArray(memData) ? memData : [];
+      if (meData?.id || meData?.email) {
+        const myEmail = (meData.email || '').toLowerCase().trim();
+        const myId = meData.id;
+        const matchingMem = activeMembersList.find(
+          (m: any) =>
+            (m.userId && m.userId === myId) ||
+            (m.user?.id && m.user.id === myId) ||
+            (m.user?.email && m.user.email.toLowerCase().trim() === myEmail) ||
+            (m.email && m.email.toLowerCase().trim() === myEmail)
+        );
+        if (matchingMem) {
+          if (matchingMem.id) setCurrentMemberId(matchingMem.id);
+          if (matchingMem.accessRole) setCurrentUserRole(matchingMem.accessRole);
+        }
       }
     } catch (err: any) {
       console.error('Error loading people data:', err);
@@ -657,7 +740,14 @@ export default function PeoplePage() {
   };
 
   const handleOpenEditModal = (m: any) => {
+    if (!canEditMember(m)) {
+      toast.error('You only have permission to edit your own details. HR (Admin) or Owner access is required to edit other members.');
+      return;
+    }
     setEditingMember(m);
+    if (!isCurrentUserOwnerOrAdmin && editModalTab === 'org') {
+      setEditModalTab('personal');
+    }
     const extra = getMemberExtraData(m);
     const bank = extra.bankDetails || {};
     const idDocs = extra.identityDocs || {};
@@ -706,6 +796,10 @@ export default function PeoplePage() {
   const handleSaveMemberOrgDetails = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingMember) return;
+    if (!canEditMember(editingMember)) {
+      toast.error('Permission denied. You can only edit your own details.');
+      return;
+    }
     setUpdatingMember(true);
 
     const extraData = {
@@ -744,23 +838,25 @@ export default function PeoplePage() {
     }
 
     try {
-      // 2. Save org & role details via API
-      const resOrg = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
-        method: 'PATCH',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          firstName: editForm.firstName.trim(),
-          lastName: editForm.lastName.trim(),
-          email: editForm.email.trim(),
-          accessRole: editForm.accessRole,
-          roleId: editForm.roleId || undefined,
-          departmentId: editForm.departmentId || null,
-          teamId: editForm.teamId || null,
-          designationId: editForm.designationId || null,
-          designationTitle: editForm.designationTitle || undefined,
-          dataScope: editForm.dataScope,
-        }),
-      }).catch(() => null);
+      // 2. Save org & role details via API (only authorized for Owner and HR/Admin)
+      if (isCurrentUserOwnerOrAdmin) {
+        await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
+          method: 'PATCH',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            firstName: editForm.firstName.trim(),
+            lastName: editForm.lastName.trim(),
+            email: editForm.email.trim(),
+            accessRole: editForm.accessRole,
+            roleId: editForm.roleId || undefined,
+            departmentId: editForm.departmentId || null,
+            teamId: editForm.teamId || null,
+            designationId: editForm.designationId || null,
+            designationTitle: editForm.designationTitle || undefined,
+            dataScope: editForm.dataScope,
+          }),
+        }).catch(() => null);
+      }
 
       // 3. Save profile & personal details via API
       await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/profile`, {
@@ -955,28 +1051,44 @@ export default function PeoplePage() {
                           </div>
                         </td>
                         <td className="py-3 px-4">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(m)}
-                            className="group flex items-center gap-1.5 focus:outline-none"
-                            title="Click to edit role & designation"
-                          >
-                            <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'} className="group-hover:ring-1 group-hover:ring-primary/40 transition-all">
+                          {isCurrentUserOwnerOrAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditModalTab('org');
+                                handleOpenEditModal(m);
+                              }}
+                              className="group flex items-center gap-1.5 focus:outline-none"
+                              title="Click to edit role & designation"
+                            >
+                              <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'} className="group-hover:ring-1 group-hover:ring-primary/40 transition-all cursor-pointer">
+                                {m.accessRole}
+                              </Badge>
+                              <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </button>
+                          ) : (
+                            <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
                               {m.accessRole}
                             </Badge>
-                            <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </button>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditModal(m)}
-                            className="group text-left hover:text-primary transition-colors flex items-center gap-1 focus:outline-none"
-                            title="Click to edit role & designation"
-                          >
+                          {isCurrentUserOwnerOrAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditModalTab('org');
+                                handleOpenEditModal(m);
+                              }}
+                              className="group text-left hover:text-primary transition-colors flex items-center gap-1 focus:outline-none"
+                              title="Click to edit role & designation"
+                            >
+                              <span>{m.designation?.title || 'Unassigned'}</span>
+                              <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </button>
+                          ) : (
                             <span>{m.designation?.title || 'Unassigned'}</span>
-                            <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                          </button>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {m.department?.name || 'General'} {m.team?.name ? `/ ${m.team.name}` : ''}
@@ -996,14 +1108,19 @@ export default function PeoplePage() {
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-right space-x-1 whitespace-nowrap">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs px-2 text-primary font-semibold hover:text-primary hover:bg-primary/10"
-                            onClick={() => handleOpenEditModal(m)}
-                          >
-                            <Pencil className="h-3 w-3 mr-1" /> Edit
-                          </Button>
+                          {canEditMember(m) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs px-2 text-primary font-semibold hover:text-primary hover:bg-primary/10"
+                              onClick={() => {
+                                setEditModalTab('personal');
+                                handleOpenEditModal(m);
+                              }}
+                            >
+                              <Pencil className="h-3 w-3 mr-1" /> Edit
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1012,37 +1129,41 @@ export default function PeoplePage() {
                           >
                             Profile
                           </Button>
-                          {m.status === 'ACTIVE' ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2 text-amber-600 hover:text-amber-700"
-                              onClick={() => handleSuspendMember(m.id)}
-                            >
-                              Suspend
-                            </Button>
-                          ) : m.status === 'SUSPENDED' ? (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2 text-emerald-600 hover:text-emerald-700"
-                              onClick={() => handleReactivateMember(m.id)}
-                            >
-                              Reactivate
-                            </Button>
-                          ) : null}
-                          {m.accessRole !== 'OWNER' && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2 text-destructive"
-                              onClick={() => {
-                                setOffboardMember(m);
-                                setShowOffboardModal(true);
-                              }}
-                            >
-                              Offboard
-                            </Button>
+                          {isCurrentUserOwnerOrAdmin && !isSelfMember(m) && (
+                            <>
+                              {m.status === 'ACTIVE' ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2 text-amber-600 hover:text-amber-700"
+                                  onClick={() => handleSuspendMember(m.id)}
+                                >
+                                  Suspend
+                                </Button>
+                              ) : m.status === 'SUSPENDED' ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2 text-emerald-600 hover:text-emerald-700"
+                                  onClick={() => handleReactivateMember(m.id)}
+                                >
+                                  Reactivate
+                                </Button>
+                              ) : null}
+                              {m.accessRole !== 'OWNER' && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs px-2 text-destructive"
+                                  onClick={() => {
+                                    setOffboardMember(m);
+                                    setShowOffboardModal(true);
+                                  }}
+                                >
+                                  Offboard
+                                </Button>
+                              )}
+                            </>
                           )}
                         </td>
                       </tr>
@@ -1522,17 +1643,19 @@ export default function PeoplePage() {
                         <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
                           <User className="h-3.5 w-3.5 text-primary" /> Personal Identity & Contact
                         </span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                          onClick={() => {
-                            setEditModalTab('personal');
-                            handleOpenEditModal(selectedMember);
-                          }}
-                        >
-                          <Pencil className="h-3 w-3" /> Edit Personal Details
-                        </Button>
+                        {canEditMember(selectedMember) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('personal');
+                              handleOpenEditModal(selectedMember);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit Personal Details
+                          </Button>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1575,17 +1698,19 @@ export default function PeoplePage() {
                         <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
                           <Landmark className="h-3.5 w-3.5 text-emerald-500" /> Bank Account Details (Salary Disbursement)
                         </span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                          onClick={() => {
-                            setEditModalTab('banking');
-                            handleOpenEditModal(selectedMember);
-                          }}
-                        >
-                          <Pencil className="h-3 w-3" /> Edit Bank Details
-                        </Button>
+                        {canEditMember(selectedMember) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('banking');
+                              handleOpenEditModal(selectedMember);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit Bank Details
+                          </Button>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1649,17 +1774,19 @@ export default function PeoplePage() {
                         <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
                           <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Identity Proofs (Aadhaar & PAN)
                         </span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                          onClick={() => {
-                            setEditModalTab('identity');
-                            handleOpenEditModal(selectedMember);
-                          }}
-                        >
-                          <Pencil className="h-3 w-3" /> Edit ID Details
-                        </Button>
+                        {canEditMember(selectedMember) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('identity');
+                              handleOpenEditModal(selectedMember);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit ID Details
+                          </Button>
+                        )}
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1731,14 +1858,19 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                      onClick={() => handleOpenEditModal(selectedMember)}
-                    >
-                      <Pencil className="h-3 w-3" /> Edit Designation & Org Details
-                    </Button>
+                    {isCurrentUserOwnerOrAdmin && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                        onClick={() => {
+                          setEditModalTab('org');
+                          handleOpenEditModal(selectedMember);
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit Designation & Org Details
+                      </Button>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -1774,14 +1906,19 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                      onClick={() => handleOpenEditModal(selectedMember)}
-                    >
-                      <Pencil className="h-3 w-3" /> Edit Access Role
-                    </Button>
+                    {isCurrentUserOwnerOrAdmin && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                        onClick={() => {
+                          setEditModalTab('org');
+                          handleOpenEditModal(selectedMember);
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit Access Role
+                      </Button>
+                    )}
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
@@ -1987,150 +2124,178 @@ export default function PeoplePage() {
 
       {/* MODAL: Edit Member Role & Designation */}
       {showEditModal && editingMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-lg bg-card border-border shadow-2xl max-h-[90vh] overflow-y-auto">
-            <CardHeader className="pb-3 border-b border-border">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 sm:p-6 overflow-y-auto">
+          <Card className="w-full max-w-4xl bg-card border-border shadow-2xl max-h-[92vh] flex flex-col rounded-xl overflow-hidden my-auto animate-in fade-in zoom-in-95 duration-150">
+            <CardHeader className="pb-3 pt-5 px-6 border-b border-border bg-card shrink-0">
               <div className="flex items-center justify-between">
-                <CardTitle className="text-base font-bold flex items-center gap-2">
-                  <Pencil className="h-4 w-4 text-primary" /> Edit Member Details & Access
-                </CardTitle>
-                <Badge
-                  variant={
-                    editingMember.status === 'ACTIVE'
-                      ? 'success'
-                      : editingMember.status === 'SUSPENDED'
-                      ? 'destructive'
-                      : 'outline'
-                  }
-                  className="text-[10px]"
-                >
-                  {editingMember.status}
-                </Badge>
+                <div className="flex items-center gap-3">
+                  <div className="h-10 w-10 rounded-full bg-primary/10 text-primary font-bold text-sm flex items-center justify-center shrink-0">
+                    {editingMember.user?.firstName?.[0] || 'U'}{editingMember.user?.lastName?.[0] || ''}
+                  </div>
+                  <div>
+                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+                      <Pencil className="h-4 w-4 text-primary" /> Edit Member Details & Access
+                    </CardTitle>
+                    <CardDescription className="text-xs text-muted-foreground mt-0.5">
+                      {isSelfMember(editingMember)
+                        ? 'Update your personal profile, banking details, and statutory identity records.'
+                        : `Update personal profile, credentials, and organizational settings for ${editingMember.user?.firstName} ${editingMember.user?.lastName}.`}
+                    </CardDescription>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge
+                    variant={
+                      editingMember.status === 'ACTIVE'
+                        ? 'success'
+                        : editingMember.status === 'SUSPENDED'
+                        ? 'destructive'
+                        : 'outline'
+                    }
+                    className="text-[11px] font-semibold"
+                  >
+                    {editingMember.status}
+                  </Badge>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 p-0 rounded-full text-muted-foreground hover:text-foreground"
+                    onClick={() => {
+                      setShowEditModal(false);
+                      setEditingMember(null);
+                    }}
+                  >
+                    ✕
+                  </Button>
+                </div>
               </div>
-              <CardDescription className="text-xs">
-                Update personal name, work email address, system access role, designation, and organizational placement for{' '}
-                <strong className="text-foreground">
-                  {editingMember.user?.firstName} {editingMember.user?.lastName}
-                </strong>.
-              </CardDescription>
             </CardHeader>
-            <form onSubmit={handleSaveMemberOrgDetails}>
+            <form onSubmit={handleSaveMemberOrgDetails} className="flex flex-col flex-1 overflow-hidden">
               {/* Modal Tabs Header */}
-              <div className="flex items-center gap-1.5 px-4 pt-3 border-b border-border bg-muted/20 text-xs overflow-x-auto">
+              <div className="flex items-center gap-1 sm:gap-2 px-6 pt-2.5 border-b border-border bg-muted/20 text-xs sm:text-sm shrink-0">
                 <button
                   type="button"
                   onClick={() => setEditModalTab('personal')}
-                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  className={`px-4 py-2.5 font-semibold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap text-xs sm:text-sm ${
                     editModalTab === 'personal'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <User className="h-3.5 w-3.5" /> Personal & Contact
+                  <User className="h-4 w-4" /> Personal & Contact
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditModalTab('banking')}
-                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  className={`px-4 py-2.5 font-semibold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap text-xs sm:text-sm ${
                     editModalTab === 'banking'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <Landmark className="h-3.5 w-3.5" /> Bank Account
+                  <Landmark className="h-4 w-4" /> Bank Account
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditModalTab('identity')}
-                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  className={`px-4 py-2.5 font-semibold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap text-xs sm:text-sm ${
                     editModalTab === 'identity'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <ShieldCheck className="h-3.5 w-3.5" /> Aadhaar & PAN
+                  <ShieldCheck className="h-4 w-4" /> Aadhaar & PAN
                 </button>
                 <button
                   type="button"
                   onClick={() => setEditModalTab('org')}
-                  className={`px-3 py-1.5 font-semibold border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap ${
+                  className={`px-4 py-2.5 font-semibold border-b-2 transition-all flex items-center gap-2 whitespace-nowrap text-xs sm:text-sm ${
                     editModalTab === 'org'
                       ? 'border-primary text-primary'
                       : 'border-transparent text-muted-foreground hover:text-foreground'
                   }`}
                 >
-                  <Briefcase className="h-3.5 w-3.5" /> Org & Role
+                  <Briefcase className="h-4 w-4" /> Org & Role
+                  {!isCurrentUserOwnerOrAdmin && (
+                    <Badge variant="outline" className="text-[9px] py-0 px-1 border-muted-foreground/30 text-muted-foreground">View-Only</Badge>
+                  )}
                 </button>
               </div>
 
-              <CardContent className="space-y-4 pt-4 text-xs">
+              <CardContent className="space-y-5 p-6 overflow-y-auto flex-1 text-xs sm:text-sm">
                 {/* TAB 1: Personal & Contact */}
                 {editModalTab === 'personal' && (
-                  <div className="space-y-3">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">First Name *</label>
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">First Name *</label>
                         <input
                           type="text"
                           required
                           value={editForm.firstName}
                           onChange={(e) => setEditForm({ ...editForm, firstName: e.target.value })}
                           placeholder="First name"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Last Name</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Last Name</label>
                         <input
                           type="text"
                           value={editForm.lastName}
                           onChange={(e) => setEditForm({ ...editForm, lastName: e.target.value })}
                           placeholder="Last name"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Work Email Address *</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Work Email Address *</label>
                         <input
                           type="email"
                           required
+                          disabled={!isCurrentUserOwnerOrAdmin}
                           value={editForm.email}
                           onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                           placeholder="email@company.com"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className={`w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all ${
+                            !isCurrentUserOwnerOrAdmin ? 'opacity-70 bg-muted/30 cursor-not-allowed' : ''
+                          }`}
                         />
+                        {!isCurrentUserOwnerOrAdmin && (
+                          <span className="text-[11px] text-muted-foreground block">Work email can only be changed by HR / Admin.</span>
+                        )}
                       </div>
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Contact Phone Number</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Contact Phone Number</label>
                         <input
                           type="text"
                           value={editForm.phone}
                           onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
                           placeholder="+91 98765 43210"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Date of Birth</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Date of Birth</label>
                         <input
                           type="date"
                           value={editForm.dateOfBirth}
                           onChange={(e) => setEditForm({ ...editForm, dateOfBirth: e.target.value })}
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Gender</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Gender</label>
                         <select
                           value={editForm.gender}
                           onChange={(e) => setEditForm({ ...editForm, gender: e.target.value })}
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         >
                           <option value="male">Male (M)</option>
                           <option value="female">Female (F)</option>
@@ -2139,73 +2304,73 @@ export default function PeoplePage() {
                       </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="font-medium text-foreground text-[11px]">Residential Address</label>
+                    <div className="space-y-1.5">
+                      <label className="font-semibold text-foreground text-xs">Residential Address</label>
                       <input
                         type="text"
                         value={editForm.address}
                         onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
                         placeholder="Flat / House No, Street, Locality"
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">District / Suburb</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">District / Suburb</label>
                         <input
                           type="text"
                           value={editForm.district}
                           onChange={(e) => setEditForm({ ...editForm, district: e.target.value })}
-                          placeholder="e.g. Chennai / Bangalore"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          placeholder="e.g. Chennai / Bangalore / Hyderabad"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">State & Postal PIN</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">State & Postal PIN</label>
                         <input
                           type="text"
                           value={editForm.statePostcode}
                           onChange={(e) => setEditForm({ ...editForm, statePostcode: e.target.value })}
                           placeholder="e.g. Tamil Nadu, 600001"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
                     </div>
 
-                    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2.5">
-                      <div className="font-semibold text-foreground text-[11px] flex items-center gap-1.5">
-                        <Phone className="h-3 w-3 text-primary" /> Emergency Contact Person
+                    <div className="p-4 rounded-xl border border-border bg-muted/20 space-y-3">
+                      <div className="font-semibold text-foreground text-xs sm:text-sm flex items-center gap-2">
+                        <Phone className="h-4 w-4 text-primary" /> Emergency Contact Person
                       </div>
-                      <div className="grid grid-cols-3 gap-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                         <div className="space-y-1">
-                          <label className="text-[10px] text-muted-foreground font-medium">Name</label>
+                          <label className="text-xs text-muted-foreground font-medium">Contact Person Name</label>
                           <input
                             type="text"
                             value={editForm.emergencyName}
                             onChange={(e) => setEditForm({ ...editForm, emergencyName: e.target.value })}
-                            placeholder="Contact person"
-                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                            placeholder="Full name"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs sm:text-sm"
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[10px] text-muted-foreground font-medium">Relationship</label>
+                          <label className="text-xs text-muted-foreground font-medium">Relationship</label>
                           <input
                             type="text"
                             value={editForm.emergencyRelationship}
                             onChange={(e) => setEditForm({ ...editForm, emergencyRelationship: e.target.value })}
-                            placeholder="e.g. Spouse / Parent"
-                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                            placeholder="e.g. Spouse / Parent / Sibling"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs sm:text-sm"
                           />
                         </div>
                         <div className="space-y-1">
-                          <label className="text-[10px] text-muted-foreground font-medium">Phone</label>
+                          <label className="text-xs text-muted-foreground font-medium">Phone Number</label>
                           <input
                             type="text"
                             value={editForm.emergencyPhone}
                             onChange={(e) => setEditForm({ ...editForm, emergencyPhone: e.target.value })}
                             placeholder="+91..."
-                            className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs"
+                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs sm:text-sm"
                           />
                         </div>
                       </div>
@@ -2215,85 +2380,86 @@ export default function PeoplePage() {
 
                 {/* TAB 2: Bank Account Details */}
                 {editModalTab === 'banking' && (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-700 dark:text-emerald-400 text-xs flex items-center gap-2">
-                      <Landmark className="h-4 w-4 shrink-0" />
-                      <span>Salary disbursement bank details. Encrypted and masked for privacy.</span>
+                  <div className="space-y-4">
+                    <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-700 dark:text-emerald-400 text-xs sm:text-sm flex items-center gap-2.5">
+                      <Landmark className="h-5 w-5 shrink-0" />
+                      <span>Direct salary disbursement bank account. Information is encrypted and confidential.</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Bank Name</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Bank Name</label>
                         <input
                           type="text"
                           value={editForm.bankName}
                           onChange={(e) => setEditForm({ ...editForm, bankName: e.target.value })}
-                          placeholder="e.g. HDFC Bank / State Bank of India"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          placeholder="e.g. HDFC Bank / State Bank of India / ICICI Bank"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Branch Name</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Branch Name</label>
                         <input
                           type="text"
                           value={editForm.branchName}
                           onChange={(e) => setEditForm({ ...editForm, branchName: e.target.value })}
-                          placeholder="e.g. Anna Nagar Branch"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                          placeholder="e.g. Anna Nagar Branch / Indiranagar Branch"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="font-medium text-foreground text-[11px]">Account Holder Name</label>
+                    <div className="space-y-1.5">
+                      <label className="font-semibold text-foreground text-xs">Account Holder Name</label>
                       <input
                         type="text"
                         value={editForm.accountHolder}
                         onChange={(e) => setEditForm({ ...editForm, accountHolder: e.target.value })}
-                        placeholder="Name exactly as per bank passbook"
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        placeholder="Account holder name exactly as printed in bank passbook"
+                        className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Account Number</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Bank Account Number</label>
                         <div className="relative">
                           <input
                             type={showMemberSecrets['edit_acc'] ? 'text' : 'password'}
                             value={editForm.accountNumber}
                             onChange={(e) => setEditForm({ ...editForm, accountNumber: e.target.value })}
-                            placeholder="Enter bank account number"
-                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                            placeholder="Enter complete account number"
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 pr-10 text-sm font-mono focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           />
                           <button
                             type="button"
                             onClick={() => toggleMemberSecret('edit_acc')}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
                             title={showMemberSecrets['edit_acc'] ? "Hide Account" : "Show Account"}
                           >
-                            {showMemberSecrets['edit_acc'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            {showMemberSecrets['edit_acc'] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </button>
                         </div>
                       </div>
 
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">IFSC Code</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">IFSC Code (11 alphanumeric characters)</label>
                         <div className="relative">
                           <input
                             type={showMemberSecrets['edit_ifsc'] ? 'text' : 'password'}
                             value={editForm.ifscCode}
                             onChange={(e) => setEditForm({ ...editForm, ifscCode: e.target.value.toUpperCase() })}
                             placeholder="e.g. HDFC0001234"
-                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono uppercase focus:ring-1 focus:ring-primary focus:outline-none"
+                            maxLength={11}
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 pr-10 text-sm font-mono uppercase focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           />
                           <button
                             type="button"
                             onClick={() => toggleMemberSecret('edit_ifsc')}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
                             title={showMemberSecrets['edit_ifsc'] ? "Hide IFSC" : "Show IFSC"}
                           >
-                            {showMemberSecrets['edit_ifsc'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            {showMemberSecrets['edit_ifsc'] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </button>
                         </div>
                       </div>
@@ -2303,15 +2469,15 @@ export default function PeoplePage() {
 
                 {/* TAB 3: Identity Details (Aadhaar & PAN) */}
                 {editModalTab === 'identity' && (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg text-primary text-xs flex items-center gap-2">
-                      <ShieldCheck className="h-4 w-4 shrink-0" />
-                      <span>Official statutory identification and document verification checks.</span>
+                  <div className="space-y-4">
+                    <div className="p-3.5 bg-primary/10 border border-primary/20 rounded-xl text-primary text-xs sm:text-sm flex items-center gap-2.5">
+                      <ShieldCheck className="h-5 w-5 shrink-0" />
+                      <span>Statutory compliance identity documents for payroll, tax deduction, and regulatory verification.</span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">Aadhaar Card Number</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Aadhaar Card Number (12 Digits)</label>
                         <div className="relative">
                           <input
                             type={showMemberSecrets['edit_aadhaar'] ? 'text' : 'password'}
@@ -2319,220 +2485,263 @@ export default function PeoplePage() {
                             onChange={(e) => setEditForm({ ...editForm, aadhaarNumber: e.target.value })}
                             placeholder="12-digit Aadhaar number"
                             maxLength={14}
-                            className="w-full rounded-md border border-input bg-background px-3 py-1.5 pr-8 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 pr-10 text-sm font-mono focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           />
                           <button
                             type="button"
                             onClick={() => toggleMemberSecret('edit_aadhaar')}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-1"
                             title={showMemberSecrets['edit_aadhaar'] ? "Hide Aadhaar" : "Show Aadhaar"}
                           >
-                            {showMemberSecrets['edit_aadhaar'] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                            {showMemberSecrets['edit_aadhaar'] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                           </button>
                         </div>
                       </div>
 
-                      <div className="space-y-1">
-                        <label className="font-medium text-foreground text-[11px]">PAN Card Number</label>
+                      <div className="space-y-1.5">
+                        <label className="font-semibold text-foreground text-xs">Permanent Account Number (PAN Card)</label>
                         <input
                           type="text"
                           value={editForm.panNumber}
                           onChange={(e) => setEditForm({ ...editForm, panNumber: e.target.value.toUpperCase() })}
                           placeholder="e.g. ABCDE1234F"
                           maxLength={10}
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono uppercase focus:ring-1 focus:ring-primary focus:outline-none"
+                          className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm font-mono uppercase focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                         />
                       </div>
                     </div>
 
-                    <div className="p-3 rounded-lg border border-border bg-muted/20 space-y-2">
-                      <label className="font-semibold text-foreground text-[11px] block">Statutory Document Verification Status</label>
-                      <div className="space-y-2">
-                        <label className="flex items-center gap-2 cursor-pointer">
+                    <div className="p-4 rounded-xl border border-border bg-muted/20 space-y-3">
+                      <label className="font-semibold text-foreground text-xs sm:text-sm block">Statutory Document Verification Status</label>
+                      <div className="space-y-2.5">
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docApprovedId}
                             onChange={(e) => setEditForm({ ...editForm, docApprovedId: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
-                          <span className="text-foreground text-xs">Approved ID Proof (Aadhaar / Passport) Submitted & Verified</span>
+                          <span className="text-foreground text-xs sm:text-sm">Government Approved ID Proof (Aadhaar / Passport) Submitted & Verified</span>
                         </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docPanCard}
                             onChange={(e) => setEditForm({ ...editForm, docPanCard: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
-                          <span className="text-foreground text-xs">PAN Card Submitted & Verified</span>
+                          <span className="text-foreground text-xs sm:text-sm">PAN Card Verified with Income Tax Department</span>
                         </label>
-                        <label className="flex items-center gap-2 cursor-pointer">
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docPassportPhoto}
                             onChange={(e) => setEditForm({ ...editForm, docPassportPhoto: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
-                          <span className="text-foreground text-xs">Passport-size Color Photo Attached</span>
+                          <span className="text-foreground text-xs sm:text-sm">Official Passport-size Color Photograph Attached</span>
                         </label>
                       </div>
+                      {!isCurrentUserOwnerOrAdmin && (
+                        <span className="text-[11px] text-muted-foreground block pt-1">
+                          Document verification status is managed and validated by HR (Admin).
+                        </span>
+                      )}
                     </div>
                   </div>
                 )}
 
                 {/* TAB 4: Organization & Role Placement */}
                 {editModalTab === 'org' && (
-                  <div className="space-y-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between">
-                        <label className="font-semibold text-foreground">System Access Role *</label>
-                        <Link
-                          href="/app/settings?tab=roles"
-                          className="text-[11px] text-primary hover:underline flex items-center gap-1 font-medium"
-                        >
-                          <Shield className="h-3 w-3" /> View Roles in Settings
-                        </Link>
+                  <div className="space-y-4">
+                    {!isCurrentUserOwnerOrAdmin ? (
+                      <div className="space-y-4">
+                        <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 dark:text-amber-400 text-xs sm:text-sm flex items-center gap-2.5">
+                          <Shield className="h-5 w-5 shrink-0" />
+                          <span>View-Only Mode: System access roles and organizational placements can only be modified by HR (Admin) or the Workspace Owner.</span>
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="p-3.5 rounded-lg border border-border bg-card space-y-1">
+                            <span className="text-xs text-muted-foreground block">System Access Role:</span>
+                            <Badge variant={editingMember.accessRole === 'OWNER' ? 'default' : editingMember.accessRole === 'ADMIN' ? 'warning' : 'secondary'} className="mt-1">
+                              {editingMember.accessRole}
+                            </Badge>
+                          </div>
+                          <div className="p-3.5 rounded-lg border border-border bg-card space-y-1">
+                            <span className="text-xs text-muted-foreground block">Designation:</span>
+                            <span className="font-semibold text-foreground text-sm mt-1 block">{editingMember.designation?.title || editForm.designationTitle || 'Unassigned'}</span>
+                          </div>
+                          <div className="p-3.5 rounded-lg border border-border bg-card space-y-1">
+                            <span className="text-xs text-muted-foreground block">Department:</span>
+                            <span className="font-semibold text-foreground text-sm mt-1 block">{editingMember.department?.name || 'General'}</span>
+                          </div>
+                          <div className="p-3.5 rounded-lg border border-border bg-card space-y-1">
+                            <span className="text-xs text-muted-foreground block">Team:</span>
+                            <span className="font-semibold text-foreground text-sm mt-1 block">{editingMember.team?.name || 'None'}</span>
+                          </div>
+                          <div className="p-3.5 rounded-lg border border-border bg-card sm:col-span-2 space-y-1">
+                            <span className="text-xs text-muted-foreground block">Data Access Scope:</span>
+                            <span className="font-semibold text-foreground text-sm mt-1 block">{editingMember.dataScope || editForm.dataScope || 'ASSIGNED'}</span>
+                          </div>
+                        </div>
                       </div>
-                      <select
-                        value={editForm.accessRole}
-                        onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
-                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      >
-                        <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
-                        <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
-                        <option value="ADMIN">HR Executive / Admin (People, Leaves, Attendance, Org Settings)</option>
-                        <option value="OWNER">Owner (Full Organization Root Authority)</option>
-                      </select>
-                    </div>
-
-                    {roles && roles.length > 0 && (
-                      <div className="space-y-1">
-                        <label className="font-semibold text-foreground">Custom Role Policy</label>
-                        <select
-                          value={editForm.roleId}
-                          onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
-                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                        >
-                          <option value="">Default (Derived from System Access Role)</option>
-                          {roles.map((r: any) => (
-                            <option key={r.id} value={r.id}>
-                              {r.name} {r.isSystemRole ? '(System Role)' : '(Custom)'}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-
-                    <div className="space-y-1">
-                      <label className="font-semibold text-foreground">Designation Title</label>
-                      <input
-                        type="text"
-                        list="edit-designations-list"
-                        value={editForm.designationTitle}
-                        onChange={(e) => setEditForm({ ...editForm, designationTitle: e.target.value })}
-                        placeholder="e.g. Tech Lead, Software Engineer, HR Specialist, QA Lead..."
-                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
-                      <datalist id="edit-designations-list">
-                        {designations.map((rawD) => {
-                          const d = rawD.data !== undefined ? rawD.data : rawD;
-                          return <option key={d.id} value={d.title} />;
-                        })}
-                      </datalist>
-                      <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                        <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
-                          <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
-                        </span>
-                        {['Tech Lead', 'Software Engineer', 'Senior Engineer', 'Product Manager', 'HR Specialist', 'Operations Manager', 'Intern'].map((preset) => (
-                          <button
-                            key={preset}
-                            type="button"
-                            onClick={() => setEditForm({ ...editForm, designationTitle: preset })}
-                            className={`text-[10px] px-2 py-0.5 rounded-full border transition-all ${
-                              editForm.designationTitle.toLowerCase() === preset.toLowerCase()
-                                ? 'bg-primary text-primary-foreground border-primary font-semibold'
-                                : 'bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
-                            }`}
+                    ) : (
+                      <>
+                        <div className="space-y-1.5">
+                          <div className="flex items-center justify-between">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">System Access Role *</label>
+                            <Link
+                              href="/app/settings?tab=roles"
+                              className="text-xs text-primary hover:underline flex items-center gap-1 font-medium"
+                            >
+                              <Shield className="h-3.5 w-3.5" /> View Roles in Settings
+                            </Link>
+                          </div>
+                          <select
+                            value={editForm.accessRole}
+                            onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           >
-                            {preset}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                            <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
+                            <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
+                            <option value="ADMIN">HR Executive / Admin (People, Leaves, Attendance, Org Settings)</option>
+                            <option value="OWNER">Owner (Full Organization Root Authority)</option>
+                          </select>
+                        </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1">
-                        <label className="font-semibold text-foreground">Department</label>
-                        <select
-                          value={editForm.departmentId}
-                          onChange={(e) => setEditForm({ ...editForm, departmentId: e.target.value })}
-                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                        >
-                          <option value="">General / None</option>
-                          {departments.map((rawD) => {
-                            const d = rawD.data !== undefined ? rawD.data : rawD;
-                            return (
-                              <option key={d.id} value={d.id}>
-                                {d.name}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="font-semibold text-foreground">Team</label>
-                        <select
-                          value={editForm.teamId}
-                          onChange={(e) => setEditForm({ ...editForm, teamId: e.target.value })}
-                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                        >
-                          <option value="">None / Unassigned</option>
-                          {teams.map((rawT) => {
-                            const t = rawT.data !== undefined ? rawT.data : rawT;
-                            return (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                    </div>
+                        {roles && roles.length > 0 && (
+                          <div className="space-y-1.5">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Custom Role Policy</label>
+                            <select
+                              value={editForm.roleId}
+                              onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
+                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                            >
+                              <option value="">Default (Derived from System Access Role)</option>
+                              {roles.map((r: any) => (
+                                <option key={r.id} value={r.id}>
+                                  {r.name} {r.isSystemRole ? '(System Role)' : '(Custom)'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
 
-                    <div className="space-y-1">
-                      <label className="font-semibold text-foreground">Data Access Scope</label>
-                      <select
-                        value={editForm.dataScope}
-                        onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
-                        className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      >
-                        <option value="ASSIGNED">Assigned Records Only</option>
-                        <option value="OWN">Own Records Only</option>
-                        <option value="TEAM">Assigned Team Records</option>
-                        <option value="DEPARTMENT">Assigned Department Records</option>
-                        <option value="WORKSPACE">Entire Workspace Records</option>
-                      </select>
-                    </div>
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-foreground text-xs sm:text-sm">Designation Title</label>
+                          <input
+                            type="text"
+                            list="edit-designations-list"
+                            value={editForm.designationTitle}
+                            onChange={(e) => setEditForm({ ...editForm, designationTitle: e.target.value })}
+                            placeholder="e.g. Tech Lead, Software Engineer, HR Specialist, QA Lead..."
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                          />
+                          <datalist id="edit-designations-list">
+                            {designations.map((rawD) => {
+                              const d = rawD.data !== undefined ? rawD.data : rawD;
+                              return <option key={d.id} value={d.title} />;
+                            })}
+                          </datalist>
+                          <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                            <span className="text-[11px] text-muted-foreground font-medium flex items-center gap-1">
+                              <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
+                            </span>
+                            {['Tech Lead', 'Software Engineer', 'Senior Engineer', 'Product Manager', 'HR Specialist', 'Operations Manager', 'Intern'].map((preset) => (
+                              <button
+                                key={preset}
+                                type="button"
+                                onClick={() => setEditForm({ ...editForm, designationTitle: preset })}
+                                className={`text-[11px] px-2.5 py-0.5 rounded-full border transition-all ${
+                                  editForm.designationTitle.toLowerCase() === preset.toLowerCase()
+                                    ? 'bg-primary text-primary-foreground border-primary font-semibold'
+                                    : 'bg-muted/60 hover:bg-muted text-muted-foreground hover:text-foreground border-border'
+                                }`}
+                              >
+                                {preset}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
 
-                    <div className="rounded-lg border border-border bg-muted/30 p-2.5 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Shield className="h-4 w-4 text-primary shrink-0" />
-                        <p className="text-[11px] text-muted-foreground">
-                          Need custom granular permissions?
-                        </p>
-                      </div>
-                      <Link
-                        href="/app/settings?tab=roles"
-                        className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
-                      >
-                        Go to Settings Roles <ArrowUpRight className="h-3 w-3" />
-                      </Link>
-                    </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Department</label>
+                            <select
+                              value={editForm.departmentId}
+                              onChange={(e) => setEditForm({ ...editForm, departmentId: e.target.value })}
+                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                            >
+                              <option value="">General / None</option>
+                              {departments.map((rawD) => {
+                                const d = rawD.data !== undefined ? rawD.data : rawD;
+                                return (
+                                  <option key={d.id} value={d.id}>
+                                    {d.name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Team</label>
+                            <select
+                              value={editForm.teamId}
+                              onChange={(e) => setEditForm({ ...editForm, teamId: e.target.value })}
+                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                            >
+                              <option value="">None / Unassigned</option>
+                              {teams.map((rawT) => {
+                                const t = rawT.data !== undefined ? rawT.data : rawT;
+                                return (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                );
+                              })}
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="font-semibold text-foreground text-xs sm:text-sm">Data Access Scope</label>
+                          <select
+                            value={editForm.dataScope}
+                            onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
+                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                          >
+                            <option value="ASSIGNED">Assigned Records Only</option>
+                            <option value="OWN">Own Records Only</option>
+                            <option value="TEAM">Assigned Team Records</option>
+                            <option value="DEPARTMENT">Assigned Department Records</option>
+                            <option value="WORKSPACE">Entire Workspace Records</option>
+                          </select>
+                        </div>
+
+                        <div className="rounded-lg border border-border bg-muted/30 p-3 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Shield className="h-4 w-4 text-primary shrink-0" />
+                            <p className="text-xs text-muted-foreground">
+                              Need custom granular permissions?
+                            </p>
+                          </div>
+                          <Link
+                            href="/app/settings?tab=roles"
+                            className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"
+                          >
+                            Go to Settings Roles <ArrowUpRight className="h-3 w-3" />
+                          </Link>
+                        </div>
+                      </>
+                    )}
                   </div>
                 )}
               </CardContent>
 
-              <div className="p-4 border-t border-border flex items-center justify-end gap-2">
+              <div className="px-6 py-4 border-t border-border bg-muted/10 flex items-center justify-end gap-3 shrink-0">
                 <Button
                   type="button"
                   variant="outline"
@@ -2544,7 +2753,7 @@ export default function PeoplePage() {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" size="sm" disabled={updatingMember} className="gap-1.5">
+                <Button type="submit" size="sm" disabled={updatingMember} className="gap-1.5 px-4 font-semibold">
                   {updatingMember ? 'Saving...' : 'Save Changes'}
                 </Button>
               </div>
