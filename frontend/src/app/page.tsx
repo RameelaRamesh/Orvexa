@@ -18,11 +18,12 @@ import {
   Zap,
   BarChart3,
   Award,
+  HelpCircle,
 } from 'lucide-react';
 
 export default function MarketingLandingPage() {
   return (
-    <div className="flex min-h-screen flex-col bg-background selection:bg-primary/20">
+    <div className="flex min-h-screen flex-col bg-background selection:bg-primary/20 scroll-smooth">
       {/* Header / Navbar */}
       <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-md">
         <div className="container mx-auto flex h-16 items-center justify-between px-4 sm:px-6">
@@ -238,13 +239,12 @@ export default function MarketingLandingPage() {
               <CardHeader>
                 <CardTitle className="text-xl">Free</CardTitle>
                 <CardDescription>For small teams getting started</CardDescription>
-                <div className="mt-4 text-4xl font-extrabold text-foreground">₹0</div>
+                <div className="mt-4 text-4xl font-extrabold text-foreground">₹0<span className="text-sm font-normal text-muted-foreground">/mo</span></div>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 5 Team Members</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 1 GB Cloud Storage</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Core Work: Tasks & Projects</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Basic Time Tracking</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 5 Members</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 1 GB Storage</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Tasks, Projects, Basic Time Tracking</div>
                 <Link href="/register" className="block pt-4">
                   <Button variant="outline" className="w-full">Start Free</Button>
                 </Link>
@@ -253,8 +253,8 @@ export default function MarketingLandingPage() {
 
             {/* Starter */}
             <Card className="border-primary shadow-lg relative bg-card">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs font-bold px-3 py-1 rounded-full">
-                POPULAR
+              <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1">
+                ★ POPULAR
               </div>
               <CardHeader>
                 <CardTitle className="text-xl">Starter Growth</CardTitle>
@@ -262,11 +262,9 @@ export default function MarketingLandingPage() {
                 <div className="mt-4 text-4xl font-extrabold text-foreground">₹4,999 <span className="text-sm font-normal text-muted-foreground">/mo</span></div>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 25 Team Members</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 10 GB Cloud Storage</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Operations Work Queue Engine</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Attendance, Leave & Approvals</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Quality Audits & SLAs</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 25 Members</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 10 GB Storage</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Operations Queue, Attendance, Leave, Quality, SLAs</div>
                 <Link href="/register" className="block pt-4">
                   <Button className="w-full">Choose Starter</Button>
                 </Link>
@@ -281,14 +279,73 @@ export default function MarketingLandingPage() {
                 <div className="mt-4 text-4xl font-extrabold text-foreground">₹14,999 <span className="text-sm font-normal text-muted-foreground">/mo</span></div>
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 100 Team Members</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 50 GB Cloud Storage</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Unrestricted Operational Modules</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Custom Roles & Permissions</div>
-                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Priority SLAs & Dedicated Support</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Up to 100 Members</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> 50 GB Storage</div>
+                <div className="flex items-center gap-2"><CheckCircle2 className="h-4 w-4 text-emerald-500" /> Unrestricted modules, Custom Roles, Priority SLAs</div>
                 <Link href="/register" className="block pt-4">
                   <Button variant="outline" className="w-full">Get Business Pro</Button>
                 </Link>
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      </section>
+
+      {/* FAQ Section */}
+      <section id="faq" className="py-20 border-t border-border">
+        <div className="container mx-auto px-4 sm:px-6">
+          <div className="text-center max-w-3xl mx-auto mb-16">
+            <Badge variant="outline" className="mb-3">Got Questions?</Badge>
+            <h2 className="text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+              Frequently Asked Questions
+            </h2>
+            <p className="mt-4 text-muted-foreground">
+              Learn about ORVEXA features, dual work engines, tenant data security, and plans.
+            </p>
+          </div>
+
+          <div className="max-w-3xl mx-auto space-y-4">
+            <Card className="border-border shadow-xs">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-primary shrink-0" /> How does ORVEXA guarantee 99.9% tenant data isolation?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                ORVEXA uses multi-tenant workspace isolation at both the application gateway and database layer. Workspaces, team hierarchies, tasks, operational queues, and reports are partitioned and secured with strict tenant token verification.
+              </CardContent>
+            </Card>
+
+            <Card className="border-border shadow-xs">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-primary shrink-0" /> What is the Dual Work Engine?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                Unlike standard project management tools, ORVEXA combines traditional sprint deliverables (Projects & Tasks) with high-volume transactional Operations Work Queues (stage-based processing, batch SLAs, and scorecard quality audits) on a single platform.
+              </CardContent>
+            </Card>
+
+            <Card className="border-border shadow-xs">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-primary shrink-0" /> What is Orthogonal People Architecture?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                It decouples system security roles (Owner, Admin, Manager, Member) from designations and departments. This allows someone with an engineering or team lead title to have exact access scopes tailored to their responsibilities without rigid title hierarchies.
+              </CardContent>
+            </Card>
+
+            <Card className="border-border shadow-xs">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base font-bold flex items-center gap-2">
+                  <HelpCircle className="h-4 w-4 text-primary shrink-0" /> How do the pricing tiers and limits work?
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="text-sm text-muted-foreground">
+                The Free plan supports up to 5 members with core tasks and basic time tracking. Growing teams can upgrade to Starter Growth (₹4,999/mo, 25 members, operations queues, attendance, leave, quality audits, SLAs) or Business Pro (₹14,999/mo, 100 members, unrestricted modules, and custom roles).
               </CardContent>
             </Card>
           </div>
