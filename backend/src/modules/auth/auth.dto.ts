@@ -23,12 +23,12 @@ export class RegisterDto {
   workspaceName: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Country is required.' })
-  country: string;
+  @IsOptional()
+  country?: string;
 
   @IsString()
-  @IsNotEmpty({ message: 'Timezone is required.' })
-  timezone: string;
+  @IsOptional()
+  timezone?: string;
 
   @IsString()
   @IsOptional()
