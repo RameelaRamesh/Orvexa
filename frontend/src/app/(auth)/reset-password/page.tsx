@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, Suspense } from 'react';
+import Link from 'next/link';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -105,9 +106,12 @@ function ResetPasswordForm() {
             </div>
           </CardContent>
           <CardFooter className="flex flex-col space-y-3 pt-2">
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Updating...' : 'Update Password & Sign In'}
+            <Button type="submit" className="w-full font-semibold shadow-sm" disabled={loading}>
+              {loading ? 'Resetting Password...' : 'Reset Password'}
             </Button>
+            <Link href="/login" className="text-xs text-primary font-medium hover:underline text-center">
+              Back to Login
+            </Link>
           </CardFooter>
         </form>
       </Card>

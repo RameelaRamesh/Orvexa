@@ -39,16 +39,18 @@ export default function ForgotPasswordPage() {
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <Card className="w-full max-w-md border-border shadow-md">
         <CardHeader className="space-y-1 text-center">
-          <CardTitle className="text-xl font-bold">Reset Password</CardTitle>
+          <CardTitle className="text-xl font-bold">Forgot Password</CardTitle>
           <CardDescription>
-            Enter your registered work email address to receive password reset instructions.
+            Enter your registered email address to receive password reset instructions.
           </CardDescription>
         </CardHeader>
         {!submitted ? (
           <form onSubmit={handleSubmit}>
             <CardContent className="space-y-4 pt-2">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-foreground">Work Email *</label>
+                <label className="text-xs font-medium text-foreground">
+                  Email Address <span className="text-destructive font-semibold ml-0.5">*</span>
+                </label>
                 <input
                   type="email"
                   required
@@ -60,11 +62,11 @@ export default function ForgotPasswordPage() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-3 pt-2">
-              <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Sending Request...' : 'Send Password Reset Link'}
+              <Button type="submit" className="w-full font-semibold shadow-sm" disabled={loading}>
+                {loading ? 'Sending Reset Link...' : 'Send Reset Link'}
               </Button>
-              <Link href="/login" className="text-xs text-primary hover:underline text-center">
-                Back to Sign In
+              <Link href="/login" className="text-xs text-primary font-medium hover:underline text-center">
+                Back to Login
               </Link>
             </CardFooter>
           </form>
@@ -88,8 +90,8 @@ export default function ForgotPasswordPage() {
 
             <div className="pt-2">
               <Link href="/login">
-                <Button variant="outline" className="w-full text-xs">
-                  Return to Login
+                <Button variant="outline" className="w-full text-xs font-semibold">
+                  Back to Login
                 </Button>
               </Link>
             </div>
