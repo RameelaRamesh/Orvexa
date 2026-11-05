@@ -283,22 +283,19 @@ export class CalendarService {
         workspaceId,
       };
 
-      if (!userCtx.canViewAll) {
-        if (userCtx.canViewDept && userCtx.departmentId) {
-          // Managers see tasks in their department or assigned to their members
-          taskWhere.OR = [
-            { assigneeMembershipId: membershipId },
-            { project: { departmentId: userCtx.departmentId } },
-          ];
-        } else if (userCtx.canViewTeam && userCtx.teamId) {
-          // Team leads see their team's tasks
-          taskWhere.OR = [
-            { assigneeMembershipId: membershipId },
-          ];
-        } else {
-          // Employees see strictly their assigned tasks
-          taskWhere.assigneeMembershipId = membershipId;
-        }
+      if (!userCtx.canViewAll && !userCtx.isManager && !userCtx.isLead) {
+        // Regular members see tasks assigned to them or created by them
+        taskWhere.OR = [
+          { assigneeMembershipId: membershipId },
+          { assignee: { userId: userCtx.membership?.userId } },
+          { createdByMembershipId: membershipId },
+        ];
+      } else if (userCtx.isManager && userCtx.departmentId && !userCtx.canViewAll) {
+        // Department managers see their department tasks or assigned tasks
+        taskWhere.OR = [
+          { assigneeMembershipId: membershipId },
+          { project: { departmentId: userCtx.departmentId } },
+        ];
       }
 
       const tasks = await this.prisma.task.findMany({
@@ -312,32 +309,35 @@ export class CalendarService {
       });
 
       for (const t of tasks) {
-        const dueDate = t.dueDate ? new Date(t.dueDate) : null;
-        if (!dueDate) continue;
-        if (dueDate < start || dueDate > end) continue;
+        // Fallback to startDate or createdAt if dueDate is not specified
+        const rawDate = t.dueDate || (t as any).startDate || t.createdAt || new Date();
+        const taskDate = new Date(rawDate);
+        if (isNaN(taskDate.getTime())) continue;
+        if (taskDate < start || taskDate > end) continue;
 
         const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
         const assigneeName = t.assignee?.user
           ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
-          : 'Unassigned';
+          : (t as any).assigneeName || 'Unassigned';
 
         events.push({
           id: `task-${t.id}`,
           title: t.title,
           type: 'TASK',
           layer: 'TASKS',
-          startDate: dueDate.toISOString(),
-          endDate: dueDate.toISOString(),
-          allDay: false,
+          startDate: taskDate.toISOString(),
+          endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
+          allDay: !t.dueDate,
           status: t.status || 'TODO',
           color: isUrgent ? '#ef4444' : '#8b5cf6',
           description: t.description,
           details: {
-            projectName: t.project?.name || 'General',
-            priority: t.priority,
+            projectName: t.project?.name || (t as any).projectName || 'General',
+            priority: t.priority || 'MEDIUM',
             assigneeName,
             assigneeId: t.assigneeMembershipId,
-            isMyTask: t.assigneeMembershipId === membershipId,
+            isMyTask: t.assigneeMembershipId === membershipId || userCtx.membership?.userId === (t as any).assignee?.userId,
+            hasDueDate: Boolean(t.dueDate),
           },
         });
       }
@@ -579,6 +579,19 @@ export class CalendarService {
 
     // Populate invited participants
     let invitedMembershipIds = dto.participantIds || [];
+
+    // If Entire Organization / Open to All audience, expand all active members
+    if (dto.audience === 'ALL') {
+      const allMembers = await this.prisma.membership.findMany({
+        where: { workspaceId, status: 'ACTIVE' },
+        include: { user: true },
+      });
+      for (const am of allMembers) {
+        if (!invitedMembershipIds.includes(am.id) && am.id !== membershipId) {
+          invitedMembershipIds.push(am.id);
+        }
+      }
+    }
 
     // If department audience, expand members of that department
     if (dto.audience === 'DEPARTMENT' && dto.departmentId) {
