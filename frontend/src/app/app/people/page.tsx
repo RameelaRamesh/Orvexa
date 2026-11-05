@@ -1214,16 +1214,6 @@ export default function PeoplePage() {
 
             {activeTab === 'members' && (
               <div className="flex items-center gap-2">
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search member name or email..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-9 pr-3 py-1.5 rounded-md border border-input bg-background text-xs w-60 focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
-                </div>
                 <select
                   value={filterRole}
                   onChange={(e) => setFilterRole(e.target.value)}
