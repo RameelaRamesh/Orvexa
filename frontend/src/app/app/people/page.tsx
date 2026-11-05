@@ -45,6 +45,12 @@ import {
   ShieldCheck,
   MapPin,
   Phone,
+  ChevronRight,
+  ArrowLeft,
+  Network,
+  Filter,
+  ListFilter,
+  Loader2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
@@ -121,7 +127,77 @@ export default function PeoplePage() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDept, setFilterDept] = useState('');
+  const [filterDesignation, setFilterDesignation] = useState('');
+  const [filterTeam, setFilterTeam] = useState('');
   const [filterRole, setFilterRole] = useState('');
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards');
+  const [showOrgChartModal, setShowOrgChartModal] = useState(false);
+  const [viewingEmployee, setViewingEmployee] = useState<any>(null);
+  const [employeeTasks, setEmployeeTasks] = useState<any[]>([]);
+  const [loadingEmployeeTasks, setLoadingEmployeeTasks] = useState(false);
+
+  const handleClearFilters = () => {
+    setSearchTerm('');
+    setFilterDept('');
+    setFilterDesignation('');
+    setFilterTeam('');
+    setFilterRole('');
+  };
+
+  const handleOpenEmployeeProfile = async (member: any) => {
+    setViewingEmployee(member);
+    setLoadingEmployeeTasks(true);
+    setEmployeeTasks([]);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+      const wsId = typeof window !== 'undefined' ? localStorage.getItem('currentWorkspaceId') : null;
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (wsId) headers['x-workspace-id'] = wsId;
+
+      // 1. Fetch tasks filtered by assignee membership
+      const res = await fetch(`${BRANDING.apiUrl}/tasks?assigneeMembershipId=${member.id}`, { headers });
+      let list: any[] = [];
+      if (res.ok) {
+        const data = await res.json();
+        list = Array.isArray(data.data) ? data.data : Array.isArray(data) ? data : [];
+      }
+
+      // 2. Fallback: if query returned 0, fetch all tasks and filter client-side
+      if (list.length === 0) {
+        const allRes = await fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null);
+        if (allRes && allRes.ok) {
+          const allData = await allRes.json();
+          const allTasks: any[] = Array.isArray(allData.data) ? allData.data : Array.isArray(allData) ? allData : [];
+          list = allTasks.filter((t: any) => {
+            if (t.assigneeMembershipId === member.id) return true;
+            if (Array.isArray(t.assigneeMembershipIds) && t.assigneeMembershipIds.includes(member.id)) return true;
+            if (t.assigneeId === member.id || (member.userId && t.assigneeId === member.userId)) return true;
+            if (t.assignee?.id === member.id || (member.userId && t.assignee?.userId === member.userId)) return true;
+            if (
+              t.assignee?.user?.email &&
+              member.user?.email &&
+              t.assignee.user.email.toLowerCase().trim() === member.user.email.toLowerCase().trim()
+            ) {
+              return true;
+            }
+            return false;
+          });
+        }
+      }
+
+      setEmployeeTasks(list);
+    } catch (err) {
+      console.error('Error fetching employee tasks:', err);
+      if (member.assignedTasks && Array.isArray(member.assignedTasks)) {
+        setEmployeeTasks(member.assignedTasks);
+      }
+    } finally {
+      setLoadingEmployeeTasks(false);
+    }
+  };
 
   // Modals
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -924,92 +1000,252 @@ export default function PeoplePage() {
   };
 
   const filteredMembers = members.filter((m) => {
-    const name = `${m.user?.firstName} ${m.user?.lastName}`.toLowerCase();
-    const email = m.user?.email?.toLowerCase() || '';
-    const matchesSearch = name.includes(searchTerm.toLowerCase()) || email.includes(searchTerm.toLowerCase());
-    const matchesDept = filterDept ? m.departmentId === filterDept : true;
+    const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.toLowerCase();
+    const email = (m.user?.email || m.email || '').toLowerCase();
+    const designation = (m.designation?.title || '').toLowerCase();
+    const deptName = (m.department?.name || '').toLowerCase();
+    const teamName = (m.team?.name || '').toLowerCase();
+    const searchLower = searchTerm.toLowerCase().trim();
+
+    const matchesSearch =
+      !searchLower ||
+      fullName.includes(searchLower) ||
+      email.includes(searchLower) ||
+      designation.includes(searchLower) ||
+      deptName.includes(searchLower) ||
+      teamName.includes(searchLower);
+
+    const matchesDept = filterDept ? (m.departmentId === filterDept || m.department?.name === filterDept) : true;
+    const matchesDesignation = filterDesignation ? (m.designationId === filterDesignation || m.designation?.title === filterDesignation) : true;
+    const matchesTeam = filterTeam ? (m.teamId === filterTeam || m.team?.name === filterTeam) : true;
     const matchesRole = filterRole ? m.accessRole === filterRole : true;
-    return matchesSearch && matchesDept && matchesRole;
+
+    return matchesSearch && matchesDept && matchesDesignation && matchesTeam && matchesRole;
   });
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">People Directory & Lifecycle Management</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Manage organization members, invitation flows, employee profiles, access revocation, and offboarding.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {currentUserRole === 'OWNER' && (
-            <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)}>
-              Transfer Ownership
-            </Button>
-          )}
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-            <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2">
-              <UserPlus className="h-4 w-4" /> Invite Member
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Tabs & Search */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex border-b border-border space-x-4">
-          <button
-            onClick={() => setActiveTab('members')}
-            className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
-              activeTab === 'members'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Users className="h-4 w-4" /> Active Members ({members.length})
-          </button>
-          <button
-            onClick={() => setActiveTab('invitations')}
-            className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
-              activeTab === 'invitations'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Mail className="h-4 w-4" /> Pending Invitations ({invitations.filter((i) => i.status === 'PENDING').length})
-          </button>
-        </div>
-
-        {activeTab === 'members' && (
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-              <input
-                type="text"
-                placeholder="Search member name or email..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-9 pr-3 py-1.5 rounded-md border border-input bg-background text-xs w-60 focus:ring-1 focus:ring-primary focus:outline-none"
-              />
-            </div>
-            <select
-              value={filterRole}
-              onChange={(e) => setFilterRole(e.target.value)}
-              className="py-1.5 px-2 rounded-md border border-input bg-background text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+      {viewingEmployee ? (
+        /* Image 2: Profile Details View */
+        <div className="space-y-6">
+          <div className="flex items-center justify-between pb-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setViewingEmployee(null)}
+              className="gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground pl-0"
             >
-              <option value="">All Roles</option>
-              <option value="OWNER">Owner</option>
-              <option value="ADMIN">Admin</option>
-              <option value="MANAGER">Manager</option>
-              <option value="MEMBER">Member</option>
-            </select>
+              <ArrowLeft className="h-4 w-4" /> Back to People Directory
+            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedMember(viewingEmployee)}
+                className="text-xs gap-1.5 rounded-xl"
+              >
+                <FileText className="h-3.5 w-3.5" /> Full Record
+              </Button>
+            </div>
           </div>
-        )}
-      </div>
 
-      {/* TAB 1: Members Directory */}
-      {activeTab === 'members' && (
+          {/* Employee Profile Header Card */}
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs">
+            <div className="flex items-center justify-between pb-6 border-b border-border/60">
+              <div className="flex items-center gap-4">
+                <UserAvatar
+                  avatarUrl={viewingEmployee.user?.avatarUrl}
+                  firstName={viewingEmployee.user?.firstName}
+                  lastName={viewingEmployee.user?.lastName}
+                  seed={viewingEmployee.user?.id || viewingEmployee.user?.email}
+                  size="lg"
+                  className="h-16 w-16 rounded-xl border border-border"
+                />
+                <div className="space-y-1">
+                  <h2 className="text-xl font-bold text-foreground">
+                    {viewingEmployee.user?.firstName} {viewingEmployee.user?.lastName}
+                  </h2>
+                  <p className="text-xs text-muted-foreground font-medium">
+                    {viewingEmployee.designation?.title || 'Team Member'} · {viewingEmployee.department?.name || 'General'}
+                  </p>
+                  <div className="pt-0.5">
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                      {viewingEmployee.status === 'SUSPENDED' ? 'Suspended' : 'Active'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <ChevronRight className="h-5 w-5 text-muted-foreground/60 hidden sm:block" />
+            </div>
+
+            {/* Task Metrics Row (Image 2) */}
+            <div className="grid grid-cols-3 gap-6 py-8 border-b border-border/60">
+              <div>
+                <div className="text-3xl font-extrabold text-foreground">
+                  {loadingEmployeeTasks ? (
+                    <span className="text-muted-foreground text-xl">...</span>
+                  ) : (
+                    employeeTasks.length
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground font-medium mt-1">Total tasks</div>
+              </div>
+
+              <div>
+                <div className="text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">
+                  {loadingEmployeeTasks ? (
+                    <span className="text-muted-foreground text-xl">...</span>
+                  ) : (
+                    employeeTasks.filter((t: any) => t.status === 'COMPLETED' || t.status === 'DONE').length
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground font-medium mt-1">Completed</div>
+              </div>
+
+              <div>
+                <div className="text-3xl font-extrabold text-amber-600 dark:text-amber-500">
+                  {loadingEmployeeTasks ? (
+                    <span className="text-muted-foreground text-xl">...</span>
+                  ) : (
+                    employeeTasks.filter((t: any) => t.status !== 'COMPLETED' && t.status !== 'DONE').length
+                  )}
+                </div>
+                <div className="text-xs text-muted-foreground font-medium mt-1">Pending / Active</div>
+              </div>
+            </div>
+
+            {/* Recent Assigned Tasks Section (Image 2) */}
+            <div className="pt-6 space-y-4">
+              <h3 className="text-sm font-bold text-foreground">Recent Assigned Tasks</h3>
+
+              {loadingEmployeeTasks ? (
+                <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  Loading tasks assigned to {viewingEmployee.user?.firstName}...
+                </div>
+              ) : employeeTasks.length === 0 ? (
+                <div className="py-4 text-xs text-muted-foreground italic">
+                  No tasks currently assigned to this team member.
+                </div>
+              ) : (
+                <ul className="space-y-3">
+                  {employeeTasks.slice(0, 10).map((task: any) => {
+                    const isCompleted = task.status === 'COMPLETED' || task.status === 'DONE';
+                    const isInProgress =
+                      task.status === 'IN_PROGRESS' || task.status === 'PROCESSING' || task.status === 'IN_REVIEW';
+                    const label = isCompleted ? 'Completed' : isInProgress ? 'In Progress' : 'Pending';
+
+                    const badgeClass = isCompleted
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                      : isInProgress
+                      ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800'
+                      : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+
+                    return (
+                      <li key={task.id} className="flex items-center gap-2 text-xs text-foreground">
+                        <span className="text-muted-foreground text-sm leading-none">•</span>
+                        <span className="font-medium text-foreground">{task.title || task.name}</span>
+                        <span className="text-muted-foreground">–</span>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${badgeClass}`}
+                        >
+                          {label}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Image 1: People Directory & Lifecycle Management Table View */
+        <>
+          {/* Header */}
+          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
+            <div>
+              <h1 className="text-2xl font-bold text-foreground">People Directory & Lifecycle Management</h1>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Manage organization members, invitation flows, employee profiles, access revocation, and offboarding.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowOrgChartModal(true)}
+                className="gap-2 text-xs font-semibold rounded-xl"
+              >
+                <Network className="h-4 w-4 text-primary" /> View Org Chart <ArrowUpRight className="h-3.5 w-3.5" />
+              </Button>
+              {currentUserRole === 'OWNER' && (
+                <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)} className="text-xs font-semibold rounded-xl">
+                  Transfer Ownership
+                </Button>
+              )}
+              {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+                <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
+                  <UserPlus className="h-4 w-4" /> Invite Member
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Tabs & Search (Matching Image 1) */}
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div className="flex border-b border-border space-x-4">
+              <button
+                onClick={() => setActiveTab('members')}
+                className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
+                  activeTab === 'members'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Users className="h-4 w-4" /> Active Members ({members.length})
+              </button>
+              <button
+                onClick={() => setActiveTab('invitations')}
+                className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
+                  activeTab === 'invitations'
+                    ? 'border-primary text-primary'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <Mail className="h-4 w-4" /> Pending Invitations ({invitations.filter((i) => i.status === 'PENDING').length})
+              </button>
+            </div>
+
+            {activeTab === 'members' && (
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search member name or email..."
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    className="pl-9 pr-3 py-1.5 rounded-md border border-input bg-background text-xs w-60 focus:ring-1 focus:ring-primary focus:outline-none"
+                  />
+                </div>
+                <select
+                  value={filterRole}
+                  onChange={(e) => setFilterRole(e.target.value)}
+                  className="py-1.5 px-2 rounded-md border border-input bg-background text-xs focus:ring-1 focus:ring-primary focus:outline-none cursor-pointer"
+                >
+                  <option value="">All Roles</option>
+                  <option value="OWNER">Owner</option>
+                  <option value="ADMIN">Admin</option>
+                  <option value="MANAGER">Manager</option>
+                  <option value="MEMBER">Member</option>
+                </select>
+              </div>
+            )}
+          </div>
+
+          {/* TAB 1: Members Directory (Matching Image 1) */}
+          {activeTab === 'members' && (
         <Card className="border-border">
           <CardContent className="p-0">
             <div className="overflow-x-auto">
@@ -1033,7 +1269,15 @@ export default function PeoplePage() {
                     </tr>
                   ) : (
                     filteredMembers.map((m) => (
-                      <tr key={m.id} className="hover:bg-surface-secondary/30 transition-colors">
+                      <tr
+                        key={m.id}
+                        onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenEmployeeProfile(m);
+                            }}
+                        className="hover:bg-surface-secondary/40 transition-colors cursor-pointer group"
+                        title={`Click to view profile & task metrics for ${m.user?.firstName || 'member'}`}
+                      >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
                             <UserAvatar
@@ -1045,7 +1289,7 @@ export default function PeoplePage() {
                             />
                             <div>
                               <div
-                                onClick={() => setSelectedMember(m)}
+                                onClick={() => handleOpenEmployeeProfile(m)}
                                 className="font-semibold text-foreground hover:underline cursor-pointer"
                               >
                                 {m.user?.firstName} {m.user?.lastName}
@@ -1117,7 +1361,8 @@ export default function PeoplePage() {
                               variant="ghost"
                               size="sm"
                               className="h-7 text-xs px-2 text-primary font-semibold hover:text-primary hover:bg-primary/10"
-                              onClick={() => {
+                              onClick={(e) => {
+                                e.stopPropagation();
                                 setEditModalTab('personal');
                                 handleOpenEditModal(m);
                               }}
@@ -1129,7 +1374,7 @@ export default function PeoplePage() {
                             variant="ghost"
                             size="sm"
                             className="h-7 text-xs px-2"
-                            onClick={() => setSelectedMember(m)}
+                            onClick={() => handleOpenEmployeeProfile(m)}
                           >
                             Profile
                           </Button>
@@ -1140,7 +1385,10 @@ export default function PeoplePage() {
                                   variant="ghost"
                                   size="sm"
                                   className="h-7 text-xs px-2 text-amber-600 hover:text-amber-700"
-                                  onClick={() => handleSuspendMember(m.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleSuspendMember(m.id);
+                                  }}
                                 >
                                   Suspend
                                 </Button>
@@ -1149,7 +1397,10 @@ export default function PeoplePage() {
                                   variant="ghost"
                                   size="sm"
                                   className="h-7 text-xs px-2 text-emerald-600 hover:text-emerald-700"
-                                  onClick={() => handleReactivateMember(m.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleReactivateMember(m.id);
+                                  }}
                                 >
                                   Reactivate
                                 </Button>
@@ -1159,7 +1410,8 @@ export default function PeoplePage() {
                                   variant="ghost"
                                   size="sm"
                                   className="h-7 text-xs px-2 text-destructive"
-                                  onClick={() => {
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     setOffboardMember(m);
                                     setShowOffboardModal(true);
                                   }}
@@ -1301,6 +1553,108 @@ export default function PeoplePage() {
             </div>
           </CardContent>
         </Card>
+      )}
+        </>
+      )}
+
+      {/* Org Chart Modal */}
+      {showOrgChartModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <Card className="w-full max-w-3xl bg-card border-border shadow-2xl max-h-[85vh] overflow-y-auto">
+            <CardHeader className="border-b border-border pb-3 flex flex-row items-center justify-between">
+              <div>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Network className="h-5 w-5 text-primary" /> Organization Hierarchy
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Reporting structure, leadership, and departmental breakdown.
+                </CardDescription>
+              </div>
+              <Button variant="ghost" size="sm" onClick={() => setShowOrgChartModal(false)}>
+                Close
+              </Button>
+            </CardHeader>
+            <CardContent className="p-6 space-y-6">
+              {/* Executive Leadership */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Executive Leadership
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {members
+                    .filter((m) => m.accessRole === 'OWNER' || (m.designation?.title || '').toLowerCase().includes('ceo') || (m.designation?.title || '').toLowerCase().includes('founder') || (m.designation?.title || '').toLowerCase().includes('director'))
+                    .map((m) => (
+                      <div
+                        key={m.id}
+                        onClick={() => {
+                          setShowOrgChartModal(false);
+                          handleOpenEmployeeProfile(m);
+                        }}
+                        className="p-3 rounded-xl border border-primary/20 bg-primary/5 flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-colors"
+                      >
+                        <UserAvatar
+                          avatarUrl={m.user?.avatarUrl}
+                          firstName={m.user?.firstName}
+                          lastName={m.user?.lastName}
+                          seed={m.user?.id || m.user?.email}
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-xs text-foreground truncate">
+                            {m.user?.firstName} {m.user?.lastName}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground truncate font-medium">
+                            {m.designation?.title || m.accessRole}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* By Department */}
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                  Departments & Teams
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                  {departments.map((dept) => {
+                    const deptMembers = members.filter((m) => m.departmentId === dept.id || m.department?.name === dept.name);
+                    return (
+                      <div key={dept.id} className="p-3 rounded-xl border border-border bg-surface-secondary/40 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-bold text-foreground">{dept.name}</span>
+                          <Badge variant="secondary" className="text-[10px]">{deptMembers.length}</Badge>
+                        </div>
+                        <div className="space-y-1">
+                          {deptMembers.slice(0, 4).map((m) => (
+                            <div
+                              key={m.id}
+                              onClick={() => {
+                                setShowOrgChartModal(false);
+                                handleOpenEmployeeProfile(m);
+                              }}
+                              className="text-[11px] text-muted-foreground hover:text-primary cursor-pointer truncate flex items-center gap-1.5"
+                            >
+                              <span>•</span>
+                              <span className="font-medium text-foreground">{m.user?.firstName} {m.user?.lastName}</span>
+                              <span className="text-[10px] text-muted-foreground">({m.designation?.title || 'Member'})</span>
+                            </div>
+                          ))}
+                          {deptMembers.length > 4 && (
+                            <div className="text-[10px] text-primary font-medium pt-0.5">
+                              +{deptMembers.length - 4} more
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       {/* MODAL 1: Invite Member Modal */}
