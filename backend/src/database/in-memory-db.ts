@@ -15,6 +15,8 @@ export class InMemoryDatabase {
   designations: any[] = [];
   notifications: any[] = [];
   tickets: any[] = [];
+  projects: any[] = [];
+  tasks: any[] = [];
 
   constructor() {
     this.seed();

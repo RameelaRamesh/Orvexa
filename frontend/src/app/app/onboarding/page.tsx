@@ -34,26 +34,28 @@ export default function OnboardingJourneyPage() {
   // Step 1: Profile
   const [orgName, setOrgName] = useState('');
   const [businessType, setBusinessType] = useState('GENERAL');
-  const [country, setCountry] = useState('United States');
-  const [timezone, setTimezone] = useState('UTC-05:00 (Eastern Time)');
+  const [country, setCountry] = useState('India');
+  const [timezone, setTimezone] = useState('UTC+05:30 (India Standard Time)');
   const [orgSize, setOrgSize] = useState('10-50');
 
   // Step 2: Schedule
   const [workingDays, setWorkingDays] = useState<string[]>(['MON', 'TUE', 'WED', 'THU', 'FRI']);
   const [startTime, setStartTime] = useState('09:00');
-  const [endTime, setEndTime] = useState('17:00');
+  const [endTime, setEndTime] = useState('18:00');
   const [workHoursPerDay, setWorkHoursPerDay] = useState(8);
 
   // Step 3: Holidays
   const [holidays, setHolidays] = useState<Array<{ name: string; date: string; type: string }>>([]);
   const [newHolidayName, setNewHolidayName] = useState('');
   const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayType, setNewHolidayType] = useState('NATIONAL');
 
   // Step 4: Locations
   const [locations, setLocations] = useState<Array<{ name: string; city: string; country: string; isPrimary: boolean }>>([]);
   const [newLocName, setNewLocName] = useState('');
   const [newLocCity, setNewLocCity] = useState('');
-  const [newLocCountry, setNewLocCountry] = useState('United States');
+  const [newLocCountry, setNewLocCountry] = useState('India');
+  const [newLocIsPrimary, setNewLocIsPrimary] = useState(false);
 
   // Step 5: Departments
   const [departments, setDepartments] = useState<Array<{ name: string; code: string }>>([]);
@@ -89,29 +91,149 @@ export default function OnboardingJourneyPage() {
       const payload = data.data !== undefined ? data.data : data;
       setStatus(payload);
 
-      // Hydrate forms with saved data
-      const setup = payload.setupData || {};
-      if (setup.profile) {
-        setOrgName(setup.profile.name || '');
-        setBusinessType(setup.profile.businessType || 'GENERAL');
-        setCountry(setup.profile.country || 'United States');
-        setTimezone(setup.profile.timezone || 'UTC-05:00 (Eastern Time)');
-        setOrgSize(setup.profile.orgSize || '10-50');
+      // Hydrate forms with saved data or earlier entered registration & personal details
+      let regOrgName = '';
+      let regBusinessType = 'GENERAL';
+      let regOrgSize = '10-50';
+      let userLocation = '';
+
+      const normalizeOrgSize = (val: string) => {
+        if (!val) return '10-50';
+        if (['1-10', '10-50', '50-200', '200+'].includes(val)) return val;
+        if (val === '5' || val === '10') return '1-10';
+        if (val === '20' || val === '50') return '10-50';
+        if (val === '100') return '50-200';
+        if (val === '100+') return '200+';
+        return '10-50';
+      };
+
+      const normalizeBusinessType = (val: string) => {
+        if (!val) return 'GENERAL';
+        const upper = val.toUpperCase();
+        if (['GENERAL', 'TECHNOLOGY', 'HEALTHCARE', 'FINANCE', 'RETAIL', 'OPERATIONS', 'AGENCY', 'PROFESSIONAL_SERVICES'].includes(upper)) {
+          return upper;
+        }
+        if (upper.includes('TECH') || upper.includes('SOFTWARE')) return 'TECHNOLOGY';
+        if (upper.includes('CONSULT') || upper.includes('PROFESSIONAL')) return 'PROFESSIONAL_SERVICES';
+        if (upper.includes('LOGIST') || upper.includes('OPERAT')) return 'OPERATIONS';
+        if (upper.includes('HEALTH') || upper.includes('MEDIC')) return 'HEALTHCARE';
+        if (upper.includes('FINAN') || upper.includes('BANK')) return 'FINANCE';
+        if (upper.includes('RETAIL') || upper.includes('COMMERCE')) return 'RETAIL';
+        if (upper.includes('AGENCY') || upper.includes('MARKET')) return 'AGENCY';
+        return 'GENERAL';
+      };
+
+      if (typeof window !== 'undefined') {
+        try {
+          const wsCache = localStorage.getItem('orvexa_cached_workspace');
+          if (wsCache) {
+            const parsedWs = JSON.parse(wsCache);
+            regOrgName = parsedWs?.workspace?.name || '';
+            regBusinessType = parsedWs?.workspace?.businessType || 'GENERAL';
+          }
+          const userCache = localStorage.getItem('user');
+          if (userCache) {
+            const parsedUser = JSON.parse(userCache);
+            if (!regOrgName && parsedUser.workspaceName) regOrgName = parsedUser.workspaceName;
+            if (parsedUser.businessType) regBusinessType = parsedUser.businessType;
+            if (parsedUser.orgSize) regOrgSize = parsedUser.orgSize;
+            if (parsedUser.location) userLocation = parsedUser.location;
+          }
+          const profileCache = localStorage.getItem('orvexa_cached_profile');
+          if (profileCache) {
+            const parsedProf = JSON.parse(profileCache);
+            if (!userLocation && parsedProf.location) userLocation = parsedProf.location;
+          }
+          const savedLoc = localStorage.getItem('orvexa_user_location');
+          if (!userLocation && savedLoc) userLocation = savedLoc;
+        } catch {}
       }
+
+      const setup = payload.setupData || {};
+      const profileData = setup.profile || {};
+      setOrgName(profileData.name || regOrgName || '');
+      setBusinessType(normalizeBusinessType(profileData.businessType || regBusinessType || 'GENERAL'));
+      setCountry(profileData.country || 'India');
+      setTimezone(profileData.timezone || 'UTC+05:30 (India Standard Time)');
+      setOrgSize(normalizeOrgSize(profileData.orgSize || regOrgSize || '10-50'));
 
       if (setup.schedule) {
         setWorkingDays(setup.schedule.workingDays || ['MON', 'TUE', 'WED', 'THU', 'FRI']);
         setStartTime(setup.schedule.startTime || '09:00');
-        setEndTime(setup.schedule.endTime || '17:00');
+        setEndTime(setup.schedule.endTime || '18:00');
         setWorkHoursPerDay(setup.schedule.workHoursPerDay || 8);
       }
 
-      if (Array.isArray(setup.holidays)) setHolidays(setup.holidays);
-      if (Array.isArray(setup.locations)) setLocations(setup.locations);
-      if (Array.isArray(setup.departments)) setDepartments(setup.departments);
+      // Holidays: Hydrate from setup or seed with standard Indian holidays
+      if (Array.isArray(setup.holidays) && setup.holidays.length > 0) {
+        setHolidays(setup.holidays);
+      } else {
+        const curYear = new Date().getFullYear();
+        setHolidays([
+          { name: 'Republic Day', date: `${curYear}-01-26`, type: 'NATIONAL' },
+          { name: 'Independence Day', date: `${curYear}-08-15`, type: 'NATIONAL' },
+          { name: 'Gandhi Jayanti', date: `${curYear}-10-02`, type: 'NATIONAL' },
+          { name: 'Diwali', date: `${curYear}-11-01`, type: 'COMPANY' },
+        ]);
+      }
 
-      if (payload.currentStep && payload.currentStep !== 'completed') {
-        setActiveStep(payload.currentStep);
+      // Locations: Hydrate from setup or seed with Headquarters from user location
+      const fallbackCity = (userLocation || 'Mumbai').replace(/,\s*India/i, '').trim() || 'Mumbai';
+      if (Array.isArray(setup.locations) && setup.locations.length > 0) {
+        setLocations(setup.locations);
+        setNewLocName(setup.locations[0].name || 'Headquarters');
+        setNewLocCity(setup.locations[0].city || fallbackCity);
+        setNewLocIsPrimary(true);
+      } else {
+        const initialLoc = {
+          name: 'Headquarters',
+          city: fallbackCity,
+          country: 'India',
+          isPrimary: true,
+        };
+        setLocations([initialLoc]);
+        setNewLocName('Headquarters');
+        setNewLocCity(fallbackCity);
+        setNewLocCountry('India');
+        setNewLocIsPrimary(true);
+      }
+
+      // Departments: Hydrate from setup, or cached registered departments, or sensible defaults
+      let deptData = Array.isArray(setup.departments) && setup.departments.length > 0 ? setup.departments : [];
+      if (deptData.length === 0 && typeof window !== 'undefined') {
+        try {
+          const cachedDepts = localStorage.getItem('orvexa_registered_departments');
+          if (cachedDepts) {
+            deptData = JSON.parse(cachedDepts);
+          }
+        } catch {}
+      }
+      if (deptData.length === 0) {
+        deptData = [
+          { name: 'Engineering', code: 'ENG' },
+          { name: 'Human Resources', code: 'HR' },
+          { name: 'Operations', code: 'OPS' },
+          { name: 'Finance', code: 'FIN' },
+        ];
+      }
+      setDepartments(deptData);
+
+      // Intelligently position the active step based on actual step completion
+      const completedSteps: string[] = payload.completedSteps || (profileData.name || regOrgName ? ['profile'] : []);
+      if (!completedSteps.includes('profile') && !regOrgName) {
+        setActiveStep('profile');
+      } else if (!completedSteps.includes('schedule')) {
+        setActiveStep('schedule');
+      } else if (!completedSteps.includes('holidays')) {
+        setActiveStep('holidays');
+      } else if (!completedSteps.includes('locations')) {
+        setActiveStep('locations');
+      } else if (!completedSteps.includes('departments')) {
+        setActiveStep('departments');
+      } else if (!completedSteps.includes('team_invite')) {
+        setActiveStep('team_invite');
+      } else {
+        setActiveStep('schedule');
       }
     } catch (err: any) {
       toast.error('Unable to load onboarding status');
@@ -147,19 +269,19 @@ export default function OnboardingJourneyPage() {
   };
 
   const stepsList = [
-    { id: 'profile', name: 'Organisation Profile', icon: Building2, mandatory: true },
-    { id: 'schedule', name: 'Working Schedule', icon: Clock, mandatory: true },
-    { id: 'holidays', name: 'Company Holidays', icon: Calendar, mandatory: false },
-    { id: 'locations', name: 'Operating Locations', icon: MapPin, mandatory: false },
-    { id: 'departments', name: 'Department Units', icon: Building2, mandatory: false },
-    { id: 'team_invite', name: 'Team Invitations', icon: Users, mandatory: false },
+    { id: 'profile', name: 'Organization Profile', icon: Building2, mandatory: true },
+    { id: 'schedule', name: 'Work Schedule', icon: Clock, mandatory: true },
+    { id: 'holidays', name: 'Public Holidays', icon: Calendar, mandatory: false },
+    { id: 'locations', name: 'Office Locations', icon: MapPin, mandatory: false },
+    { id: 'departments', name: 'Departments', icon: Building2, mandatory: false },
+    { id: 'team_invite', name: 'Team Invites', icon: Users, mandatory: false },
   ];
 
   const handleNext = async () => {
     try {
       if (activeStep === 'profile') {
         if (!orgName.trim()) {
-          toast.error('Organisation name is required.');
+          toast.error('Organization name is required.');
           return;
         }
         await saveStepData('profile', { name: orgName, businessType, country, timezone, orgSize });
@@ -181,11 +303,19 @@ export default function OnboardingJourneyPage() {
         await saveStepData('departments', { departments });
         setActiveStep('team_invite');
       } else if (activeStep === 'team_invite') {
-        toast.success('Onboarding complete!');
+        await saveStepData('team_invite', { completed: true });
+        toast.success('Onboarding complete! Welcome to ORVEXA.');
         router.push('/app/home');
       }
     } catch {
-      // toast shown in saveStepData
+      // toast handled in saveStepData
+    }
+  };
+
+  const handleBack = () => {
+    const currentIdx = stepsList.findIndex((s) => s.id === activeStep);
+    if (currentIdx > 0) {
+      setActiveStep(stepsList[currentIdx - 1].id);
     }
   };
 
@@ -216,7 +346,7 @@ export default function OnboardingJourneyPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Invitation failed');
 
-      toast.success('Invitation sent to ' + inviteEmail);
+      toast.success('Invitation dispatched to ' + inviteEmail);
       setSentInvites([...sentInvites, inviteEmail]);
       setInviteEmail('');
       setInviteFirstName('');
@@ -247,7 +377,7 @@ export default function OnboardingJourneyPage() {
           <div>
             <div className="flex items-center gap-2">
               <span className="text-xs uppercase font-mono tracking-widest text-primary font-semibold">
-                Setup Journey
+                Setup Wizard
               </span>
               <Badge variant="outline" className="text-[10px]">
                 {status?.isCompleted ? 'Mandatory Setup Completed' : 'Setup In Progress'}
@@ -257,7 +387,7 @@ export default function OnboardingJourneyPage() {
               Configure Your Organization
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Set up core schedules, locations, and teams. Optional steps can be configured or updated anytime.
+              Set up core schedules, locations, departments, and team members. You can revisit anytime.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -345,19 +475,19 @@ export default function OnboardingJourneyPage() {
                   )}
                 </CardTitle>
                 <CardDescription className="text-xs mt-1">
-                  {activeStep === 'profile' && 'Organization legal name, default country, and operating timezone.'}
-                  {activeStep === 'schedule' && 'Working days, business hours, and standard shift times.'}
-                  {activeStep === 'holidays' && 'Annual company holidays and statutory non-working days.'}
-                  {activeStep === 'locations' && 'Primary office headquarters, operational hubs, and branch offices.'}
-                  {activeStep === 'departments' && 'Core business divisions and functional operational units.'}
-                  {activeStep === 'team_invite' && 'Invite colleagues and team leaders into your workspace.'}
+                  {activeStep === 'profile' && 'Set core org identity: organization legal name, business type, country, and timezone.'}
+                  {activeStep === 'schedule' && 'Define standard working hours, days, and shifts for attendance.'}
+                  {activeStep === 'holidays' && 'Add national or company public holidays to the workspace calendar.'}
+                  {activeStep === 'locations' && 'Register office locations (head office, branches, hubs).'}
+                  {activeStep === 'departments' && 'Create the organizational structure by defining departments.'}
+                  {activeStep === 'team_invite' && 'Invite initial team members with pre-assigned roles to the workspace.'}
                 </CardDescription>
               </div>
             </div>
           </CardHeader>
 
           <CardContent className="pt-6 space-y-4">
-            {/* STEP 1: Profile */}
+            {/* STEP 1: Organization Profile */}
             {activeStep === 'profile' && (
               <div className="space-y-4 max-w-xl">
                 <div className="space-y-1.5">
@@ -367,10 +497,29 @@ export default function OnboardingJourneyPage() {
                     required
                     value={orgName}
                     onChange={(e) => setOrgName(e.target.value)}
-                    placeholder="e.g. Acme Operations Ltd"
+                    placeholder="Legal or brand name of the company"
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-1 focus:ring-primary focus:outline-none"
                   />
                 </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-foreground">Business Type *</label>
+                  <select
+                    value={businessType}
+                    onChange={(e) => setBusinessType(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="GENERAL">GENERAL</option>
+                    <option value="TECHNOLOGY">TECHNOLOGY</option>
+                    <option value="HEALTHCARE">HEALTHCARE</option>
+                    <option value="FINANCE">FINANCE</option>
+                    <option value="RETAIL">RETAIL</option>
+                    <option value="OPERATIONS">OPERATIONS & SUPPORT</option>
+                    <option value="AGENCY">AGENCY</option>
+                    <option value="PROFESSIONAL_SERVICES">PROFESSIONAL SERVICES</option>
+                  </select>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-foreground">Country *</label>
@@ -379,9 +528,9 @@ export default function OnboardingJourneyPage() {
                       onChange={(e) => setCountry(e.target.value)}
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-1 focus:ring-primary focus:outline-none"
                     >
+                      <option value="India">India</option>
                       <option value="United States">United States</option>
                       <option value="United Kingdom">United Kingdom</option>
-                      <option value="India">India</option>
                       <option value="Canada">Canada</option>
                       <option value="Australia">Australia</option>
                       <option value="Germany">Germany</option>
@@ -390,23 +539,24 @@ export default function OnboardingJourneyPage() {
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Operating Timezone *</label>
+                    <label className="text-xs font-semibold text-foreground">Timezone *</label>
                     <select
                       value={timezone}
                       onChange={(e) => setTimezone(e.target.value)}
                       className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-1 focus:ring-primary focus:outline-none"
                     >
+                      <option value="UTC+05:30 (India Standard Time)">UTC+05:30 IST</option>
                       <option value="UTC-05:00 (Eastern Time)">UTC-05:00 (Eastern Time)</option>
                       <option value="UTC-08:00 (Pacific Time)">UTC-08:00 (Pacific Time)</option>
                       <option value="UTC+00:00 (London)">UTC+00:00 (London)</option>
-                      <option value="UTC+01:00 (Central European Time)">UTC+01:00 (Central European Time)</option>
-                      <option value="UTC+05:30 (India Standard Time)">UTC+05:30 (India Standard Time)</option>
-                      <option value="UTC+08:00 (Singapore / HK)">UTC+08:00 (Singapore / HK)</option>
+                      <option value="UTC+01:00 (Central European Time)">UTC+01:00 (CET)</option>
+                      <option value="UTC+08:00 (Singapore / HK)">UTC+08:00 (SGT / HK)</option>
                     </select>
                   </div>
                 </div>
+
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground">Organization Size</label>
+                  <label className="text-xs font-semibold text-foreground">Organization Size *</label>
                   <select
                     value={orgSize}
                     onChange={(e) => setOrgSize(e.target.value)}
@@ -414,18 +564,18 @@ export default function OnboardingJourneyPage() {
                   >
                     <option value="1-10">1-10 employees</option>
                     <option value="10-50">10-50 employees</option>
-                    <option value="50-250">50-250 employees</option>
-                    <option value="250+">250+ employees</option>
+                    <option value="50-200">50-200 employees</option>
+                    <option value="200+">200+ employees</option>
                   </select>
                 </div>
               </div>
             )}
 
-            {/* STEP 2: Schedule */}
+            {/* STEP 2: Work Schedule */}
             {activeStep === 'schedule' && (
               <div className="space-y-5 max-w-xl">
                 <div className="space-y-2">
-                  <label className="text-xs font-semibold text-foreground">Standard Working Days *</label>
+                  <label className="text-xs font-semibold text-foreground">Working Days *</label>
                   <div className="flex flex-wrap gap-2">
                     {['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'].map((day) => {
                       const isSelected = workingDays.includes(day);
@@ -442,7 +592,7 @@ export default function OnboardingJourneyPage() {
                           }}
                           className={`px-3 py-1.5 rounded-md text-xs font-semibold border transition-all ${
                             isSelected
-                              ? 'bg-primary text-primary-foreground border-primary'
+                              ? 'bg-primary text-primary-foreground border-primary shadow-xs'
                               : 'bg-background text-muted-foreground border-input hover:border-foreground'
                           }`}
                         >
@@ -473,7 +623,7 @@ export default function OnboardingJourneyPage() {
                     />
                   </div>
                   <div className="space-y-1.5">
-                    <label className="text-xs font-semibold text-foreground">Hours / Day</label>
+                    <label className="text-xs font-semibold text-foreground">Work Hours Per Day</label>
                     <input
                       type="number"
                       min={1}
@@ -487,52 +637,63 @@ export default function OnboardingJourneyPage() {
               </div>
             )}
 
-            {/* STEP 3: Holidays */}
+            {/* STEP 3: Public Holidays */}
             {activeStep === 'holidays' && (
               <div className="space-y-4 max-w-xl">
-                <div className="flex gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <input
                     type="text"
-                    placeholder="Holiday Name (e.g. New Year)"
+                    placeholder="Holiday Name (e.g. Republic Day)"
                     value={newHolidayName}
                     onChange={(e) => setNewHolidayName(e.target.value)}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-5 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
                   <input
                     type="date"
                     value={newHolidayDate}
                     onChange={(e) => setNewHolidayDate(e.target.value)}
-                    className="w-36 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-3 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
+                  <select
+                    value={newHolidayType}
+                    onChange={(e) => setNewHolidayType(e.target.value)}
+                    className="sm:col-span-2 rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="NATIONAL">NATIONAL</option>
+                    <option value="COMPANY">COMPANY</option>
+                    <option value="OPTIONAL">OPTIONAL</option>
+                  </select>
                   <Button
                     type="button"
                     size="sm"
-                    className="text-xs h-8"
+                    className="sm:col-span-2 text-xs h-8 font-semibold"
                     onClick={() => {
                       if (!newHolidayName.trim() || !newHolidayDate) return;
-                      setHolidays([...holidays, { name: newHolidayName.trim(), date: newHolidayDate, type: 'PUBLIC' }]);
+                      setHolidays([...holidays, { name: newHolidayName.trim(), date: newHolidayDate, type: newHolidayType }]);
                       setNewHolidayName('');
                       setNewHolidayDate('');
                     }}
                   >
-                    Add
+                    + Add Holiday
                   </Button>
                 </div>
 
                 <div className="space-y-1.5 max-h-48 overflow-y-auto border border-border rounded-md p-2 bg-muted/20">
                   {holidays.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No company holidays added yet. You can add them now or skip.</p>
+                    <p className="text-xs text-muted-foreground text-center py-4">No holidays added yet. Add national/company holidays or click Save & Continue.</p>
                   ) : (
                     holidays.map((h, i) => (
                       <div key={i} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                        <div>
+                        <div className="flex items-center gap-2">
                           <span className="font-semibold text-foreground">{h.name}</span>
-                          <span className="text-[10px] text-muted-foreground ml-2">({h.date})</span>
+                          <span className="text-[10px] text-muted-foreground font-mono">({h.date})</span>
+                          <Badge variant="outline" className="text-[9px] py-0">{h.type}</Badge>
                         </div>
                         <button
                           type="button"
                           onClick={() => setHolidays(holidays.filter((_, idx) => idx !== i))}
-                          className="text-destructive hover:opacity-80"
+                          className="text-destructive hover:opacity-80 p-1"
+                          title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -543,71 +704,88 @@ export default function OnboardingJourneyPage() {
               </div>
             )}
 
-            {/* STEP 4: Locations */}
+            {/* STEP 4: Office Locations */}
             {activeStep === 'locations' && (
               <div className="space-y-4 max-w-xl">
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <input
                     type="text"
-                    placeholder="Location Name (e.g. HQ)"
+                    placeholder="Location Name (e.g. Head Office)"
                     value={newLocName}
                     onChange={(e) => setNewLocName(e.target.value)}
-                    className="rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-4 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
                   <input
                     type="text"
-                    placeholder="City (e.g. New York)"
+                    placeholder="City (e.g. Mumbai)"
                     value={newLocCity}
                     onChange={(e) => setNewLocCity(e.target.value)}
-                    className="rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-3 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      placeholder="Country"
-                      value={newLocCountry}
-                      onChange={(e) => setNewLocCountry(e.target.value)}
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    />
-                    <Button
-                      type="button"
-                      size="sm"
-                      className="text-xs h-8"
-                      onClick={() => {
-                        if (!newLocName.trim() || !newLocCity.trim()) return;
-                        setLocations([
-                          ...locations,
-                          {
-                            name: newLocName.trim(),
-                            city: newLocCity.trim(),
-                            country: newLocCountry.trim(),
-                            isPrimary: locations.length === 0,
-                          },
-                        ]);
-                        setNewLocName('');
-                        setNewLocCity('');
-                      }}
-                    >
-                      Add
-                    </Button>
-                  </div>
+                  <select
+                    value={newLocCountry}
+                    onChange={(e) => setNewLocCountry(e.target.value)}
+                    className="sm:col-span-3 rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="India">India</option>
+                    <option value="United States">United States</option>
+                    <option value="United Kingdom">United Kingdom</option>
+                    <option value="Singapore">Singapore</option>
+                    <option value="United Arab Emirates">UAE</option>
+                  </select>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="sm:col-span-2 text-xs h-8 font-semibold"
+                    onClick={() => {
+                      if (!newLocName.trim() || !newLocCity.trim()) return;
+                      setLocations([
+                        ...locations,
+                        {
+                          name: newLocName.trim(),
+                          city: newLocCity.trim(),
+                          country: newLocCountry.trim(),
+                          isPrimary: newLocIsPrimary || locations.length === 0,
+                        },
+                      ]);
+                      setNewLocName('');
+                      setNewLocCity('');
+                      setNewLocIsPrimary(false);
+                    }}
+                  >
+                    + Add Location
+                  </Button>
+                </div>
+
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    id="setAsPrimary"
+                    checked={newLocIsPrimary}
+                    onChange={(e) => setNewLocIsPrimary(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-input text-primary focus:ring-primary"
+                  />
+                  <label htmlFor="setAsPrimary" className="cursor-pointer">
+                    Set as Primary location
+                  </label>
                 </div>
 
                 <div className="space-y-1.5 max-h-48 overflow-y-auto border border-border rounded-md p-2 bg-muted/20">
                   {locations.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No operating locations configured. Add your office hubs or skip.</p>
+                    <p className="text-xs text-muted-foreground text-center py-4">No office locations added yet. Add headquarters/branches or continue.</p>
                   ) : (
                     locations.map((loc, i) => (
                       <div key={i} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                        <div>
+                        <div className="flex items-center gap-2">
                           <span className="font-semibold text-foreground">{loc.name}</span>
-                          <span className="text-[10px] text-muted-foreground ml-2">({loc.city}, {loc.country})</span>
-                          {loc.isPrimary && <Badge variant="outline" className="ml-2 text-[9px]">Primary</Badge>}
+                          <span className="text-[10px] text-muted-foreground">({loc.city}, {loc.country})</span>
+                          {loc.isPrimary && <Badge variant="default" className="text-[9px] py-0">Primary</Badge>}
                         </div>
                         <button
                           type="button"
                           onClick={() => setLocations(locations.filter((_, idx) => idx !== i))}
-                          className="text-destructive hover:opacity-80"
+                          className="text-destructive hover:opacity-80 p-1"
+                          title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -621,25 +799,25 @@ export default function OnboardingJourneyPage() {
             {/* STEP 5: Departments */}
             {activeStep === 'departments' && (
               <div className="space-y-4 max-w-xl">
-                <div className="flex gap-2">
+                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <input
                     type="text"
-                    placeholder="Department Name (e.g. Operations)"
+                    placeholder="Department Name (e.g. Engineering)"
                     value={newDeptName}
                     onChange={(e) => setNewDeptName(e.target.value)}
-                    className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-6 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
                   <input
                     type="text"
-                    placeholder="Code (e.g. OPS)"
+                    placeholder="Short Code (e.g. ENG)"
                     value={newDeptCode}
                     onChange={(e) => setNewDeptCode(e.target.value)}
-                    className="w-24 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="sm:col-span-3 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
                   <Button
                     type="button"
                     size="sm"
-                    className="text-xs h-8"
+                    className="sm:col-span-3 text-xs h-8 font-semibold"
                     onClick={() => {
                       if (!newDeptName.trim()) return;
                       setDepartments([...departments, { name: newDeptName.trim(), code: newDeptCode.trim() }]);
@@ -647,24 +825,25 @@ export default function OnboardingJourneyPage() {
                       setNewDeptCode('');
                     }}
                   >
-                    Add
+                    + Add Department
                   </Button>
                 </div>
 
                 <div className="space-y-1.5 max-h-48 overflow-y-auto border border-border rounded-md p-2 bg-muted/20">
                   {departments.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No custom departments added yet. You can create them now or later in Settings.</p>
+                    <p className="text-xs text-muted-foreground text-center py-4">No departments created yet. Add initial units or continue.</p>
                   ) : (
                     departments.map((d, i) => (
                       <div key={i} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                        <div>
+                        <div className="flex items-center gap-2">
                           <span className="font-semibold text-foreground">{d.name}</span>
-                          {d.code && <span className="text-[10px] text-muted-foreground ml-2 font-mono">({d.code})</span>}
+                          {d.code && <span className="text-[10px] text-muted-foreground font-mono">({d.code})</span>}
                         </div>
                         <button
                           type="button"
                           onClick={() => setDepartments(departments.filter((_, idx) => idx !== i))}
-                          className="text-destructive hover:opacity-80"
+                          className="text-destructive hover:opacity-80 p-1"
+                          title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -680,54 +859,70 @@ export default function OnboardingJourneyPage() {
               <div className="space-y-4 max-w-xl">
                 <form onSubmit={handleSendInvite} className="space-y-3 border-b border-border pb-4">
                   <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="text"
-                      placeholder="First Name"
-                      value={inviteFirstName}
-                      onChange={(e) => setInviteFirstName(e.target.value)}
-                      className="rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    />
-                    <input
-                      type="text"
-                      placeholder="Last Name"
-                      value={inviteLastName}
-                      onChange={(e) => setInviteLastName(e.target.value)}
-                      className="rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    />
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-foreground">First Name</label>
+                      <input
+                        type="text"
+                        placeholder="Invitee's first name"
+                        value={inviteFirstName}
+                        onChange={(e) => setInviteFirstName(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-foreground">Last Name</label>
+                      <input
+                        type="text"
+                        placeholder="Invitee's last name"
+                        value={inviteLastName}
+                        onChange={(e) => setInviteLastName(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <input
-                      type="email"
-                      required
-                      placeholder="work.email@company.com *"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                      className="flex-1 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    />
-                    <select
-                      value={inviteRole}
-                      onChange={(e) => setInviteRole(e.target.value)}
-                      className="w-28 rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                    >
-                      <option value="MEMBER">Member</option>
-                      <option value="MANAGER">Manager</option>
-                      <option value="ADMIN">Admin</option>
-                    </select>
-                    <Button type="submit" size="sm" disabled={sendingInvite} className="text-xs h-8">
-                      {sendingInvite ? 'Sending...' : 'Invite'}
-                    </Button>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <div className="sm:col-span-6 space-y-1">
+                      <label className="text-xs font-semibold text-foreground">Email *</label>
+                      <input
+                        type="email"
+                        required
+                        placeholder="Invitee's email address"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      />
+                    </div>
+                    <div className="sm:col-span-3 space-y-1">
+                      <label className="text-xs font-semibold text-foreground">Role *</label>
+                      <select
+                        value={inviteRole}
+                        onChange={(e) => setInviteRole(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                      >
+                        <option value="MEMBER">MEMBER</option>
+                        <option value="MANAGER">MANAGER</option>
+                        <option value="ADMIN">ADMIN</option>
+                        <option value="OWNER">OWNER</option>
+                      </select>
+                    </div>
+                    <div className="sm:col-span-3 flex items-end">
+                      <Button type="submit" size="sm" disabled={sendingInvite} className="w-full text-xs h-8 font-semibold">
+                        {sendingInvite ? 'Sending...' : 'Send Invite'}
+                      </Button>
+                    </div>
                   </div>
                 </form>
 
                 <div className="space-y-1.5">
-                  <div className="text-xs font-semibold text-foreground">Sent During Onboarding:</div>
+                  <div className="text-xs font-semibold text-foreground">✓ Sent invite list:</div>
                   {sentInvites.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No invites sent yet. You can invite your team now or later.</p>
+                    <p className="text-xs text-muted-foreground py-2">No team invites sent yet. You can invite colleagues now or click Finish Setup.</p>
                   ) : (
                     sentInvites.map((em, idx) => (
                       <div key={idx} className="flex items-center gap-2 text-xs text-emerald-500 bg-emerald-500/10 p-2 rounded">
                         <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span>Invitation dispatched to {em}</span>
+                        <span>Invitation sent to {em}</span>
                       </div>
                     ))
                   )}
@@ -737,7 +932,19 @@ export default function OnboardingJourneyPage() {
           </CardContent>
 
           <CardFooter className="border-t border-border/60 pt-4 flex items-center justify-between">
-            <div>
+            <div className="flex items-center gap-2">
+              {activeStep !== 'profile' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleBack}
+                  className="text-xs gap-1.5"
+                >
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Back
+                </Button>
+              )}
               {!isMandatory && (
                 <Button
                   type="button"
@@ -750,13 +957,14 @@ export default function OnboardingJourneyPage() {
                 </Button>
               )}
             </div>
+
             <div className="flex items-center gap-2">
               <Button
                 type="button"
                 size="sm"
                 disabled={saving}
                 onClick={handleNext}
-                className="text-xs gap-1.5"
+                className="text-xs gap-1.5 font-semibold"
               >
                 {saving
                   ? 'Saving Progress...'

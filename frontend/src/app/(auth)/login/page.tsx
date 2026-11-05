@@ -63,7 +63,12 @@ export default function LoginPage() {
       }
 
       const token = payload.accessToken;
-      const memberships = payload.memberships;
+      const rawMemberships = payload.memberships || [];
+      const memberships = rawMemberships.filter((m: any) => {
+        const name = (m.workspace?.name || '').trim().toLowerCase();
+        const slug = (m.workspace?.slug || '').trim().toLowerCase();
+        return !name.includes('kb construction') && !slug.includes('kb-construction');
+      });
 
       if (token) {
         localStorage.setItem('accessToken', token);
@@ -111,7 +116,12 @@ export default function LoginPage() {
 
       const payload = data.data !== undefined ? data.data : data;
       const token = payload.accessToken;
-      const memberships = payload.memberships;
+      const rawMemberships = payload.memberships || [];
+      const memberships = rawMemberships.filter((m: any) => {
+        const name = (m.workspace?.name || '').trim().toLowerCase();
+        const slug = (m.workspace?.slug || '').trim().toLowerCase();
+        return !name.includes('kb construction') && !slug.includes('kb-construction');
+      });
 
       if (token) {
         localStorage.setItem('accessToken', token);

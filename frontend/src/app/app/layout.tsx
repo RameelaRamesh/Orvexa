@@ -42,12 +42,73 @@ import { CommonSearchBar } from '@/components/common-search-bar';
 import { UserAvatar } from '@/components/ui/user-avatar';
 import { ProfileSetupModal } from '@/components/profile-setup-modal';
 
+const cleanWorkspaceMemberships = (raw: any[]) => {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((m: any) => {
+    const wsName = (m.workspace?.name || '').trim().toLowerCase();
+    const wsSlug = (m.workspace?.slug || '').trim().toLowerCase();
+    return !wsName.includes('kb construction') && !wsSlug.includes('kb-construction');
+  });
+};
+
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [profile, setProfile] = useState<any>(null);
-  const [activeWorkspace, setActiveWorkspace] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_profile');
+      let p = cached ? JSON.parse(cached) : null;
+      if (!p) {
+        const userCached = localStorage.getItem('user');
+        p = userCached ? JSON.parse(userCached) : null;
+      }
+      if (p && p.memberships) {
+        p.memberships = cleanWorkspaceMemberships(p.memberships);
+      }
+      return p;
+    } catch {
+      return null;
+    }
+  });
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const stored = localStorage.getItem('orvexa_user_avatar');
+      if (stored) return stored;
+      const cached = localStorage.getItem('orvexa_cached_profile');
+      if (cached) {
+        const p = JSON.parse(cached);
+        return p.avatarUrl || p.avatar || null;
+      }
+      const u = localStorage.getItem('user');
+      if (u) {
+        const parsed = JSON.parse(u);
+        return parsed.avatar || null;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  });
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      const ws = cached ? JSON.parse(cached) : null;
+      if (ws) {
+        const name = (ws.workspace?.name || '').trim().toLowerCase();
+        const slug = (ws.workspace?.slug || '').trim().toLowerCase();
+        if (name.includes('kb construction') || slug.includes('kb-construction')) {
+          return null;
+        }
+      }
+      return ws;
+    } catch {
+      return null;
+    }
+  });
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -72,6 +133,16 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     } catch {}
 
     let isMounted = true;
+
+    const handleAvatarUpdate = (e: any) => {
+      const newAvatar = e.detail || (typeof window !== 'undefined' ? localStorage.getItem('orvexa_user_avatar') : null);
+      if (newAvatar) {
+        setAvatarUrl(newAvatar);
+      }
+    };
+
+    window.addEventListener('orvexa_avatar_updated', handleAvatarUpdate);
+    window.addEventListener('storage', handleAvatarUpdate);
 
     const fetchProfile = async (retryCount = 0) => {
       try {
@@ -131,12 +202,34 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         if (!isMounted) return;
 
         const profileData = data.data !== undefined ? data.data : data;
+        const validMemberships = cleanWorkspaceMemberships(profileData.memberships);
+        profileData.memberships = validMemberships;
         setProfile(profileData);
         try {
           localStorage.setItem('orvexa_cached_profile', JSON.stringify(profileData));
         } catch {}
 
-        const memberships = profileData.memberships || [];
+        // Ensure avatar is strictly kept and synced
+        const storedAvatar = typeof window !== 'undefined' ? localStorage.getItem('orvexa_user_avatar') : null;
+        if (profileData.avatarUrl) {
+          setAvatarUrl(profileData.avatarUrl);
+          try {
+            localStorage.setItem('orvexa_user_avatar', profileData.avatarUrl);
+          } catch {}
+        } else if (storedAvatar) {
+          setAvatarUrl(storedAvatar);
+          // If backend didn't have it yet, quietly sync it
+          fetch(`${BRANDING.apiUrl}/auth/me`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ avatarUrl: storedAvatar }),
+          }).catch(() => {});
+        }
+
+        const memberships = validMemberships;
         const savedWsId = localStorage.getItem('activeWorkspaceId');
 
         let activeMem = memberships.find((m: any) => m.workspaceId === savedWsId);
@@ -204,6 +297,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       isMounted = false;
       clearInterval(heartbeatInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('orvexa_avatar_updated', handleAvatarUpdate);
+      window.removeEventListener('storage', handleAvatarUpdate);
     };
   }, [router]);
 
@@ -566,26 +661,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         {/* Bottom User Profile Section */}
         <div className="border-t border-border p-3">
           <div className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => setProfileModalOpen(true)}
-              className="flex items-center gap-2.5 overflow-hidden text-left hover:opacity-80 transition-opacity flex-1 min-w-0"
-              title="Click to edit profile"
+<Link
+              href="/app/settings?tab=personal"
+              className="flex items-center gap-2.5 overflow-hidden text-left hover:opacity-85 transition-opacity flex-1 min-w-0 group"
+              title="View & Edit Personal Details"
             >
               <UserAvatar
-                avatarUrl={profile?.avatarUrl}
+                avatarUrl={avatarUrl || profile?.avatarUrl || profile?.avatar}
                 firstName={profile?.firstName}
                 lastName={profile?.lastName}
                 seed={profile?.id || profile?.email}
                 size="sm"
               />
               <div className="flex flex-col truncate">
-                <span className="truncate text-xs font-semibold text-foreground">
-                  {profile?.firstName} {profile?.lastName}
+                <span className="truncate text-xs font-semibold text-foreground group-hover:text-primary transition-colors">
+                  {profile?.firstName ? `${profile.firstName} ${profile?.lastName || ''}`.trim() : 'User'}
                 </span>
-                <span className="truncate text-[10px] text-muted-foreground">{profile?.email}</span>
+                <span className="truncate text-[10px] text-muted-foreground">{profile?.email || ''}</span>
               </div>
-            </button>
+            </Link>
             <Button
               variant="ghost"
               size="icon"
@@ -614,7 +708,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <Menu className="h-5 w-5" />
             </Button>
 
-            {/* Common Search Bar */}
+{/* Common Search Bar */}
             <CommonSearchBar className="w-full" />
           </div>
 

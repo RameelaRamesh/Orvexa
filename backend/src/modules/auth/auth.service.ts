@@ -41,6 +41,15 @@ export class AuthService {
     }
   }
 
+  private filterCleanMemberships(memberships: any[]) {
+    if (!Array.isArray(memberships)) return [];
+    return memberships.filter((m: any) => {
+      const name = (m.workspace?.name || '').toLowerCase();
+      const slug = (m.workspace?.slug || '').toLowerCase();
+      return !name.includes('kb construction') && !slug.includes('kb-construction');
+    });
+  }
+
   async register(dto: RegisterDto) {
     this.validatePasswordPolicy(dto.password);
 
@@ -284,7 +293,7 @@ export class AuthService {
         mfaEnabled: user.mfaEnabled,
         lastLoginAt: user.lastLoginAt,
       },
-      memberships: user.memberships,
+      memberships: this.filterCleanMemberships(user.memberships),
       accessToken: token,
     };
   }
@@ -442,7 +451,7 @@ export class AuthService {
         mfaEnabled: user.mfaEnabled,
         lastLoginAt: user.lastLoginAt,
       },
-      memberships: user.memberships,
+      memberships: this.filterCleanMemberships(user.memberships),
       accessToken,
     };
   }
@@ -665,6 +674,10 @@ export class AuthService {
 
     if (!user) {
       throw new NotFoundException('User profile not found');
+    }
+
+    if (user && user.memberships) {
+      (user as any).memberships = this.filterCleanMemberships(user.memberships);
     }
 
     return user;

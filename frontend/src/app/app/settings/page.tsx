@@ -7,6 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   Building2,
+  User,
+  Upload,
+  Camera,
+  Phone,
+  MapPin,
   Sliders,
   Shield,
   Users,
@@ -44,9 +49,6 @@ import {
   ChevronDown,
   Package,
   Search,
-  User,
-  Camera,
-  Upload,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
@@ -272,7 +274,7 @@ const MODULE_DISPLAY_NAMES: Record<string, string> = {
 };
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<'details' | 'modules' | 'roles' | 'structure' | 'billing' | 'security' | 'profile'>('details');
+const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
   const [permissionSearch, setPermissionSearch] = useState('');
 
   // Loading states
@@ -280,6 +282,211 @@ export default function SettingsPage() {
   const [savingDetails, setSavingDetails] = useState(false);
   const [savingModules, setSavingModules] = useState(false);
   const [upgradingPlanId, setUpgradingPlanId] = useState<string | null>(null);
+
+  // Personal Details states
+  const [personalFirstName, setPersonalFirstName] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.firstName || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalLastName, setPersonalLastName] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.lastName || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalEmail, setPersonalEmail] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.email || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalDesignation, setPersonalDesignation] = useState(() => {
+    if (typeof window === 'undefined') return 'Founder & CEO';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.jobTitle || p.designation || 'Founder & CEO';
+    } catch {
+      return 'Founder & CEO';
+    }
+  });
+  const [personalPhone, setPersonalPhone] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.phone || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalLocation, setPersonalLocation] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.location || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalBio, setPersonalBio] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    try {
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
+      return p.bio || '';
+    } catch {
+      return '';
+    }
+  });
+  const [personalAvatar, setPersonalAvatar] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return localStorage.getItem('orvexa_user_avatar') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [savingPersonal, setSavingPersonal] = useState(false);
+  const personalFileInputRef = React.useRef<HTMLInputElement>(null);
+
+  const compressPersonalImage = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        URL.revokeObjectURL(objectUrl);
+        const maxDim = 256;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > maxDim) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          }
+        } else {
+          if (height > maxDim) {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(objectUrl);
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.85);
+        resolve(compressed);
+      };
+      img.onerror = (err) => reject(err);
+      img.src = objectUrl;
+    });
+  };
+
+  const handlePersonalImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      toast.error('Please upload a valid image file (PNG, JPG, or WEBP).');
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      toast.error('Image size must be less than 8MB.');
+      return;
+    }
+
+    try {
+      const compressedDataUrl = await compressPersonalImage(file);
+      setPersonalAvatar(compressedDataUrl);
+      try {
+        localStorage.setItem('orvexa_user_avatar', compressedDataUrl);
+      } catch {}
+      window.dispatchEvent(new CustomEvent('orvexa_avatar_updated', { detail: compressedDataUrl }));
+      toast.success('Profile photo selected. Click Save Changes to apply.');
+    } catch {
+      toast.error('Could not process photo. Please try a different image.');
+    }
+  };
+
+  const handleRemovePersonalImage = () => {
+    setPersonalAvatar(null);
+    if (personalFileInputRef.current) {
+      personalFileInputRef.current.value = '';
+    }
+    try {
+      localStorage.removeItem('orvexa_user_avatar');
+    } catch {}
+    window.dispatchEvent(new CustomEvent('orvexa_avatar_updated', { detail: null }));
+    toast.info('Profile photo removed. Click Save Changes to apply.');
+  };
+
+  const handleSavePersonalDetails = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setSavingPersonal(true);
+    try {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+      if (token) {
+        await fetch(`${BRANDING.apiUrl}/auth/me`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            firstName: personalFirstName.trim() || undefined,
+            lastName: personalLastName.trim() || undefined,
+            phone: personalPhone.trim() || undefined,
+            avatarUrl: personalAvatar || undefined,
+          }),
+        });
+      }
+
+      if (personalAvatar) {
+        localStorage.setItem('orvexa_user_avatar', personalAvatar);
+        window.dispatchEvent(new CustomEvent('orvexa_avatar_updated', { detail: personalAvatar }));
+      } else {
+        localStorage.removeItem('orvexa_user_avatar');
+        window.dispatchEvent(new CustomEvent('orvexa_avatar_updated', { detail: null }));
+      }
+
+      const rawCached = localStorage.getItem('orvexa_cached_profile');
+      const prev = rawCached ? JSON.parse(rawCached) : {};
+      const merged = {
+        ...prev,
+        firstName: personalFirstName.trim() || prev.firstName || 'User',
+        lastName: personalLastName.trim() || prev.lastName || '',
+        avatarUrl: personalAvatar || null,
+        avatar: personalAvatar || null,
+        phone: personalPhone.trim(),
+        location: personalLocation.trim(),
+        bio: personalBio.trim(),
+        jobTitle: personalDesignation.trim(),
+      };
+      localStorage.setItem('orvexa_cached_profile', JSON.stringify(merged));
+      localStorage.setItem('user', JSON.stringify(merged));
+
+      toast.success('Personal details and profile photo updated successfully!');
+      loadAllData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error updating personal details');
+    } finally {
+      setSavingPersonal(false);
+    }
+  };
 
   // Security & 2FA states
   const [userProfile, setUserProfile] = useState<any>(null);
@@ -432,10 +639,17 @@ export default function SettingsPage() {
         const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
         if (meData && meData.id) {
           setUserProfile(meData);
-          setProfileFirstName(meData.firstName || '');
-          setProfileLastName(meData.lastName || '');
-          setProfilePhone(meData.phone || '');
-          setProfileAvatarUrl(meData.avatarUrl || null);
+if (meData.firstName) setPersonalFirstName(meData.firstName);
+          if (meData.lastName) setPersonalLastName(meData.lastName);
+          if (meData.email) setPersonalEmail(meData.email);
+          if (meData.phone) setPersonalPhone(meData.phone);
+          if (meData.avatarUrl || meData.avatar) setPersonalAvatar(meData.avatarUrl || meData.avatar);
+          const activeMem = meData.memberships?.find((m: any) => m.workspaceId === wsId) || meData.memberships?.[0];
+          if (activeMem?.designation?.title) {
+            setPersonalDesignation(activeMem.designation.title);
+          } else if (activeMem?.role?.name) {
+            setPersonalDesignation(activeMem.role.name);
+          }
         }
       }
 
@@ -517,8 +731,12 @@ export default function SettingsPage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const tabParam = new URLSearchParams(window.location.search).get('tab');
-      if (tabParam && ['details', 'modules', 'roles', 'structure', 'billing', 'security', 'profile'].includes(tabParam)) {
-        setActiveTab(tabParam as any);
+      if (tabParam) {
+        if (tabParam === 'personal' || tabParam === 'profile') {
+          setActiveTab('personal');
+        } else if (['details', 'modules', 'roles', 'structure', 'billing', 'security'].includes(tabParam)) {
+          setActiveTab(tabParam as any);
+        }
       }
     }
     loadAllData();
@@ -1411,15 +1629,7 @@ export default function SettingsPage() {
     { key: 'assets', name: 'Assets, Inventory & Docs', icon: Package, desc: 'Company hardware and asset tracking, stock inventory, movements ledger, and document vault.' },
   ];
 
-  // Operational Profile Presets
-  const templatePresets = [
-    { id: 'GENERAL', name: 'Comprehensive Suite', icon: Sparkles, desc: 'Universal operations workspace with all modules and engines enabled.' },
-    { id: 'CORE_OPS', name: 'Core Operations', icon: LayoutGrid, desc: 'Optimized for high-throughput processing queues, QA audits, SLAs, and attendance.' },
-    { id: 'PROJECTS_DELIVERY', name: 'Projects & Delivery', icon: Briefcase, desc: 'Optimized for projects, tasks, milestones, approvals, and client delivery.' },
-    { id: 'LEAN_SERVICES', name: 'Lean Professional Services', icon: DollarSign, desc: 'Optimized for client deliverables, approval chains, time logging, and billing.' },
-  ];
-
-  const selectedRoleObj =
+const selectedRoleObj =
     roles.find((r) => r.id === selectedRoleId) ||
     roles.find((r) => r.name === 'ADMIN') ||
     roles[0];
@@ -1450,6 +1660,16 @@ export default function SettingsPage() {
           }`}
         >
           <Building2 className="h-4 w-4" /> Organization Details
+        </button>
+        <button
+          onClick={() => setActiveTab('personal')}
+          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+            activeTab === 'personal'
+              ? 'border-primary text-primary'
+              : 'border-transparent text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <User className="h-4 w-4" /> Personal Details
         </button>
         <button
           onClick={() => setActiveTab('modules')}
@@ -1500,16 +1720,6 @@ export default function SettingsPage() {
           }`}
         >
           <KeyRound className="h-4 w-4" /> Security & 2FA
-        </button>
-        <button
-          onClick={() => setActiveTab('profile')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'profile'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <User className="h-4 w-4" /> My Profile
         </button>
       </div>
 
@@ -1580,59 +1790,187 @@ export default function SettingsPage() {
               </Button>
             </CardFooter>
           </Card>
+        </div>
+      )}
 
-          {/* Operational Profile Customization */}
-          <Card className="border-border">
-            <CardHeader>
-              <div className="flex items-center justify-between">
+      {/* TAB: Personal Details */}
+      {(activeTab === 'personal' || activeTab === 'profile') && (
+        <div className="space-y-6 max-w-4xl">
+          <Card className="border-border shadow-xs">
+            <CardHeader className="border-b border-border/60 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary">
+                  <User className="h-4 w-4" />
+                </div>
                 <div>
-                  <CardTitle className="text-lg">Operational Profile Layouts (Optional)</CardTitle>
-                  <CardDescription>
-                    Apply a recommended operational module profile anytime. Profiles set starting module layouts and can be customized at any time.
+                  <CardTitle className="text-base font-bold text-foreground">Personal Details</CardTitle>
+                  <CardDescription className="text-xs">
+                    Add your personal information and photo so your team recognizes you in the directory.
                   </CardDescription>
                 </div>
-                <Badge variant="outline" className="uppercase font-mono text-[10px]">
-                  Current: {businessType}
-                </Badge>
               </div>
             </CardHeader>
-            <CardContent>
-              <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
-                {templatePresets.map((tmpl) => {
-                  const Icon = tmpl.icon;
-                  const isCurrent = businessType === tmpl.id;
-                  return (
-                    <div
-                      key={tmpl.id}
-                      className={`p-4 rounded-lg border text-left transition-all ${
-                        isCurrent
-                          ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                          : 'border-border bg-card hover:border-primary/50'
-                      }`}
+            <CardContent className="p-6 space-y-6">
+              {/* Profile Photo Section */}
+              <div className="rounded-xl border border-border bg-surface-secondary/40 p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">
+                      Profile Photo
+                    </span>
+                    <Badge variant="secondary" className="text-[10px] font-normal">
+                      Not mandatory
+                    </Badge>
+                  </div>
+                  {personalAvatar && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleRemovePersonalImage}
+                      className="text-destructive hover:bg-destructive/10 h-7 text-xs gap-1.5"
                     >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="h-8 w-8 rounded-md bg-primary/10 text-primary flex items-center justify-center">
-                          <Icon className="h-4 w-4" />
+                      <Trash2 className="h-3.5 w-3.5" /> Remove
+                    </Button>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center sm:items-start gap-4">
+                  <div className="relative group shrink-0">
+                    <div className="h-20 w-20 rounded-full overflow-hidden border-2 border-primary/20 bg-surface-secondary flex items-center justify-center shadow-inner">
+                      {personalAvatar ? (
+                        <img
+                          src={personalAvatar}
+                          alt="Profile Preview"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="text-2xl font-bold text-muted-foreground flex items-center justify-center h-full w-full bg-primary/10 text-primary">
+                          {personalFirstName ? personalFirstName.charAt(0).toUpperCase() : 'U'}
                         </div>
-                        {isCurrent ? (
-                          <Badge variant="default" className="text-[10px]">Active</Badge>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-[11px] px-2"
-                            onClick={() => handleApplyPreset(tmpl.id)}
-                          >
-                            Apply Preset
-                          </Button>
-                        )}
-                      </div>
-                      <h4 className="text-xs font-bold text-foreground">{tmpl.name}</h4>
-                      <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">{tmpl.desc}</p>
+                      )}
                     </div>
-                  );
-                })}
+                  </div>
+
+                  <div className="space-y-2 flex-1 text-center sm:text-left">
+                    <input
+                      ref={personalFileInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      className="hidden"
+                      onChange={handlePersonalImageSelect}
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => personalFileInputRef.current?.click()}
+                      className="gap-2 text-xs font-semibold h-9"
+                    >
+                      <Upload className="h-3.5 w-3.5" /> Change Photo
+                    </Button>
+                    <p className="text-[11px] text-muted-foreground">
+                      Optional. PNG, JPG or WEBP up to 5MB. You can always update or upload this later.
+                    </p>
+                  </div>
+                </div>
               </div>
+
+              {/* Form Fields */}
+              <form onSubmit={handleSavePersonalDetails} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground">
+                      First Name <span className="text-destructive">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. Alex"
+                      value={personalFirstName}
+                      onChange={(e) => setPersonalFirstName(e.target.value)}
+                      className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground">Last Name</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Mercer"
+                      value={personalLastName}
+                      onChange={(e) => setPersonalLastName(e.target.value)}
+                      className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Briefcase className="h-3.5 w-3.5 text-muted-foreground" />
+                      Designation / Role
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. Founder & CEO, Senior Engineer"
+                      value={personalDesignation}
+                      onChange={(e) => setPersonalDesignation(e.target.value)}
+                      className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                      <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                      Phone Number
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="+91 98765 43210"
+                      value={personalPhone}
+                      onChange={(e) => setPersonalPhone(e.target.value)}
+                      className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                    <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                    Operating City / Location
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Bengaluru, India"
+                    value={personalLocation}
+                    onChange={(e) => setPersonalLocation(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-foreground">About / Short Bio</label>
+                    <span className="text-[10px] text-muted-foreground">Optional</span>
+                  </div>
+                  <textarea
+                    rows={3}
+                    placeholder="A brief intro about your role in the organization..."
+                    value={personalBio}
+                    onChange={(e) => setPersonalBio(e.target.value)}
+                    className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground"
+                  />
+                </div>
+
+                <div className="pt-2 flex justify-end">
+                  <Button
+                    type="submit"
+                    disabled={savingPersonal}
+                    className="gap-2 text-xs font-semibold"
+                  >
+                    {savingPersonal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                    Save Changes
+                  </Button>
+                </div>
+              </form>
             </CardContent>
           </Card>
         </div>
@@ -3294,174 +3632,6 @@ export default function SettingsPage() {
               </CardContent>
             </Card>
           )}
-        </div>
-      )}
-
-      {/* TAB 7: My Profile Setup */}
-      {activeTab === 'profile' && (
-        <div className="space-y-6 max-w-2xl">
-          <Card className="border-border">
-            <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <User className="h-5 w-5 text-primary" />
-                <span>My Profile & Avatar Setup</span>
-              </CardTitle>
-              <CardDescription>
-                Update your personal information and profile picture. Uploading a photo is optional.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              {/* Avatar Section */}
-              <div className="rounded-xl border border-border bg-muted/30 p-4">
-                <div className="flex flex-col sm:flex-row items-center gap-5">
-                  <div className="relative group">
-                    <UserAvatar
-                      avatarUrl={profileAvatarUrl}
-                      firstName={profileFirstName}
-                      lastName={profileLastName}
-                      seed={userProfile?.id || userProfile?.email}
-                      size="xl"
-                      className="ring-4 ring-background shadow-md"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => profileFileInputRef.current?.click()}
-                      className="absolute bottom-0 right-0 p-2 rounded-full bg-primary text-primary-foreground shadow-md hover:opacity-90 transition-transform active:scale-95"
-                      title="Upload photo"
-                    >
-                      <Camera className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <div className="flex-1 space-y-2 text-center sm:text-left">
-                    <div>
-                      <h4 className="text-sm font-semibold text-foreground">
-                        Profile Image <span className="text-muted-foreground text-xs font-normal">(Optional)</span>
-                      </h4>
-                      <p className="text-xs text-muted-foreground mt-0.5 leading-relaxed">
-                        PNG, JPG, or WebP up to 5MB. If no image is uploaded, your 2-letter initials with random pastel colors will be shown across the platform.
-                      </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 pt-1">
-                      <input
-                        ref={profileFileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleProfileImageChange}
-                        className="hidden"
-                      />
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        onClick={() => profileFileInputRef.current?.click()}
-                        disabled={uploadingProfileImage}
-                        className="h-8 text-xs gap-1.5"
-                      >
-                        {uploadingProfileImage ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Upload className="h-3.5 w-3.5 text-primary" />
-                        )}
-                        <span>{profileAvatarUrl ? 'Change Photo' : 'Upload Image'}</span>
-                      </Button>
-
-                      {profileAvatarUrl && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setProfileAvatarUrl(null);
-                            if (profileFileInputRef.current) profileFileInputRef.current.value = '';
-                            toast.info('Image removed. Initials with pastel background will be used.');
-                          }}
-                          className="h-8 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 gap-1"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          <span>Remove</span>
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Form Fields */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-foreground">
-                    First Name <span className="text-destructive font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={profileFirstName}
-                    onChange={(e) => setProfileFirstName(e.target.value)}
-                    placeholder="e.g. John"
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary focus:outline-hidden"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-foreground">
-                    Last Name <span className="text-destructive font-bold">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    value={profileLastName}
-                    onChange={(e) => setProfileLastName(e.target.value)}
-                    placeholder="e.g. Daniel"
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary focus:outline-hidden"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">
-                  Work Email <span className="text-xs text-muted-foreground font-normal">(Read Only)</span>
-                </label>
-                <input
-                  type="email"
-                  disabled
-                  value={userProfile?.email || ''}
-                  className="w-full rounded-md border border-input bg-muted px-3 py-2 text-sm text-muted-foreground cursor-not-allowed"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-foreground">
-                  Phone Number
-                </label>
-                <input
-                  type="tel"
-                  value={profilePhone}
-                  onChange={(e) => setProfilePhone(e.target.value)}
-                  placeholder="+1 (555) 000-0000"
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:ring-2 focus:ring-primary focus:outline-hidden"
-                />
-              </div>
-
-              <div className="pt-2">
-                <Button
-                  onClick={handleSaveProfile}
-                  disabled={savingProfile}
-                  className="text-xs h-9"
-                >
-                  {savingProfile ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
-                      Saving Profile...
-                    </>
-                  ) : (
-                    'Save Profile Changes'
-                  )}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       )}
     </div>

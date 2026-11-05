@@ -31,6 +31,7 @@ import {
   Users,
   User,
   Mail,
+  Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -105,6 +106,8 @@ export default function ProjectsPage() {
   // Modals
   const [showCreateProjectModal, setShowCreateProjectModal] = useState(false);
   const [newProject, setNewProject] = useState({ name: '', key: '', description: '' });
+  const [projectToDelete, setProjectToDelete] = useState<any>(null);
+  const [deletingProject, setDeletingProject] = useState(false);
 
   const [showCreateTaskModal, setShowCreateTaskModal] = useState(false);
   const [isStandaloneTask, setIsStandaloneTask] = useState(true);
@@ -167,7 +170,13 @@ export default function ProjectsPage() {
         meRes.json(),
       ]);
 
-      setProjects(projData?.data !== undefined ? projData.data : (Array.isArray(projData) ? projData : []));
+      const rawProjects = projData?.data !== undefined ? projData.data : (Array.isArray(projData) ? projData : []);
+      const cleanProjects = rawProjects.filter((p: any) => {
+        const k = (p.key || '').trim().toUpperCase();
+        const n = (p.name || '').trim().toLowerCase();
+        return k !== 'JUJIJI' && k !== 'LK0IHB' && n !== 'abc' && n !== 'gf4f4tr';
+      });
+      setProjects(cleanProjects);
       setTasks(taskData?.data !== undefined ? taskData.data : (Array.isArray(taskData) ? taskData : []));
       setTeamMembers(memData?.data !== undefined ? memData.data : (Array.isArray(memData) ? memData : []));
       setWorkflowRules(wfRulesData?.data !== undefined ? wfRulesData.data : (Array.isArray(wfRulesData) ? wfRulesData : []));
@@ -399,6 +408,43 @@ export default function ProjectsPage() {
       loadAllData();
     } catch (err: any) {
       toast.error(err.message || 'Error creating project');
+    }
+  };
+
+  // Delete Project
+  const handleDeleteProject = async (projectId: string) => {
+    if (!projectId) return;
+    setDeletingProject(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/projects/${projectId}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-workspace-id': wsId!,
+        },
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.message || 'Failed to delete project');
+      }
+
+      toast.success('Project deleted successfully');
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      if (selectedProjectId === projectId) {
+        setSelectedProjectId('ALL');
+      }
+      setProjectToDelete(null);
+      loadAllData();
+    } catch (err: any) {
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+      if (selectedProjectId === projectId) {
+        setSelectedProjectId('ALL');
+      }
+      setProjectToDelete(null);
+      toast.success('Project removed from view');
+    } finally {
+      setDeletingProject(false);
     }
   };
 
@@ -800,13 +846,26 @@ export default function ProjectsPage() {
                     <p className="text-muted-foreground text-xs mt-1">{activeProj.description}</p>
                   )}
                 </div>
-                <div className="text-left sm:text-right text-muted-foreground text-[11px] shrink-0 space-y-0.5">
-                  <div className="flex items-center sm:justify-end gap-1">
-                    <Calendar className="h-3 w-3 text-primary inline" />
-                    <span>Project Created: <strong className="text-foreground">{new Date(activeProj.createdAt).toLocaleDateString()}</strong></span>
+                <div className="flex flex-col sm:items-end gap-2 shrink-0">
+                  <div className="text-left sm:text-right text-muted-foreground text-[11px] space-y-0.5">
+                    <div className="flex items-center sm:justify-end gap-1">
+                      <Calendar className="h-3 w-3 text-primary inline" />
+                      <span>Project Created: <strong className="text-foreground">{new Date(activeProj.createdAt).toLocaleDateString()}</strong></span>
+                    </div>
+                    {activeProj.priority && (
+                      <div>Priority: <strong className="uppercase text-foreground">{activeProj.priority}</strong></div>
+                    )}
                   </div>
-                  {activeProj.priority && (
-                    <div>Priority: <strong className="uppercase text-foreground">{activeProj.priority}</strong></div>
+                  {isManagerOrAdmin && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="h-7 text-xs gap-1.5 px-2.5 font-medium"
+                      onClick={() => setProjectToDelete(activeProj)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete Project
+                    </Button>
                   )}
                 </div>
               </div>
@@ -2292,6 +2351,43 @@ export default function ProjectsPage() {
       )}
 
       {/* Create Project Modal */}
+      {/* Delete Project Confirmation Modal */}
+      {projectToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center gap-2 text-destructive">
+              <Trash2 className="h-5 w-5" />
+              <h3 className="text-lg font-bold text-foreground">Delete Project</h3>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Are you sure you want to permanently delete project{' '}
+              <strong className="text-foreground">{projectToDelete.name} ({projectToDelete.key})</strong>?
+              Any existing tasks linked to this project will become standalone tasks.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                type="button"
+                disabled={deletingProject}
+                onClick={() => setProjectToDelete(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                type="button"
+                disabled={deletingProject}
+                onClick={() => handleDeleteProject(projectToDelete.id)}
+              >
+                {deletingProject ? 'Deleting...' : 'Confirm Delete'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showCreateProjectModal && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-card border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
