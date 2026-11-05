@@ -596,6 +596,41 @@ export class AnalyticsService {
       }
     }
 
+    // Layer 6: Meetings & Calendar Events
+    try {
+      const ws = await this.prisma.workspace.findUnique({
+        where: { id: workspaceId },
+        select: { settings: true },
+      });
+      const settings = (ws?.settings as Record<string, any>) || {};
+      const storedEvts: any[] = settings.calendarEvents || [];
+      for (const ce of storedEvts) {
+        const ceStart = new Date(ce.startDate);
+        const ceEnd = new Date(ce.endDate || ce.startDate);
+        if (ceStart <= end && ceEnd >= start && ce.status !== 'CANCELLED') {
+          events.push({
+            id: ce.id,
+            title: ce.title,
+            type: ce.type || 'MEETING',
+            layer: ce.type === 'MEETING' ? 'MEETINGS' : 'COMPANY_EVENTS',
+            startDate: ce.startDate,
+            endDate: ce.endDate,
+            allDay: Boolean(ce.allDay),
+            status: ce.status || 'CONFIRMED',
+            color: ce.type === 'MEETING' ? '#3b82f6' : '#ec4899',
+            entityType: 'MEETING',
+            entityId: ce.id,
+            details: {
+              locationUrl: ce.locationUrl,
+              description: ce.description,
+              participants: ce.participants,
+              organizerName: ce.organizerName,
+            },
+          });
+        }
+      }
+    } catch {}
+
     return {
       workspaceId,
       dateRange: {

@@ -17,6 +17,7 @@ dist/
 */.next/
 out/
 build/
+*.tsbuildinfo
 
 # Local shims / temp scripts
 powershell.cmd

@@ -1,9 +1,8 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -13,18 +12,27 @@ import {
   Clock,
   CheckCircle2,
   AlertTriangle,
-  Award,
-  Layers,
-  ArrowRight,
   X,
-  RefreshCw,
-  Eye,
+  Search,
   Filter,
-  User,
+  Plus,
+  Video,
   Users,
   CheckSquare,
-  Folder,
-  Tag,
+  Building,
+  User,
+  ArrowRight,
+  MapPin,
+  ExternalLink,
+  Info,
+  CalendarDays,
+  Repeat,
+  Bell,
+  Check,
+  HelpCircle,
+  XCircle,
+  Sparkles,
+  LayoutGrid,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,975 +40,1546 @@ interface CalendarEvent {
   id: string;
   title: string;
   type: string;
-  layer: 'ATTENDANCE' | 'SHIFTS' | 'LEAVE' | 'TASKS' | 'QUALITY';
+  layer: 'MEETINGS' | 'TASKS' | 'HOLIDAYS' | 'LEAVE' | 'SHIFTS' | 'COMPANY_EVENTS';
   startDate: string;
   endDate: string;
   allDay: boolean;
   status: string;
   color: string;
-  entityType: string;
-  entityId: string;
-  details?: any;
+  locationUrl?: string;
+  description?: string;
+  organizer?: {
+    id: string;
+    name: string;
+    email?: string;
+  };
+  participants?: Array<{
+    membershipId: string;
+    userId?: string;
+    name: string;
+    email?: string;
+    status: string;
+    respondedAt?: string;
+  }>;
+  departmentId?: string;
+  departmentName?: string;
+  teamId?: string;
+  teamName?: string;
+  audience?: string;
+  recurrence?: string;
+  reminderMinutes?: number;
+  canEdit?: boolean;
+  details?: Record<string, any>;
 }
 
-export default function UniversalCalendarPage() {
+export default function UnifiedCalendarPage() {
   const router = useRouter();
-  const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
-  const [viewMode, setViewMode] = useState<'month' | 'agenda'>('month');
 
-  // Scope: 'mine' shows strictly the logged in user's tasks/deadlines; 'all' shows team
-  const [scopeMode, setScopeMode] = useState<'mine' | 'all'>('mine');
+  // Navigation Date (controls month/year displayed)
+  const [currentDate, setCurrentDate] = useState<Date>(() => new Date(2026, 10, 5)); // Defaults to Nov 2026 matching screenshot or current date
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date(2026, 10, 5));
+  const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>('month');
 
-  // Logged-in user information
-  const [currentUserId, setCurrentUserId] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    try {
-      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
-      return p?.id || '';
-    } catch {
-      return '';
-    }
-  });
-
-  const [currentMembershipId, setCurrentMembershipId] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    try {
-      const w = JSON.parse(localStorage.getItem('orvexa_cached_workspace') || '{}');
-      return w?.id || '';
-    } catch {
-      return '';
-    }
-  });
-
-  const [currentUserEmail, setCurrentUserEmail] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    try {
-      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
-      return p?.email || '';
-    } catch {
-      return '';
-    }
-  });
-
-  const [currentUserName, setCurrentUserName] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    try {
-      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
-      const first = p?.firstName || '';
-      const last = p?.lastName || '';
-      return `${first} ${last}`.trim();
-    } catch {
-      return '';
-    }
-  });
-
-  // Active Layers
-  const [activeLayers, setActiveLayers] = useState<string[]>([
-    'ATTENDANCE',
-    'SHIFTS',
-    'LEAVE',
-    'TASKS',
-    'QUALITY',
-  ]);
-
-  // Live Events
+  // Events & Loading
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Selected Event Modal
+  // Filters & Search
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState<string>('ALL');
+  const [selectedDeptFilter, setSelectedDeptFilter] = useState<string>('ALL');
+
+  // Modals
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
+  const [isEventDetailOpen, setIsEventDetailOpen] = useState(false);
+  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
 
-  const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
-  const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+  // Workspace & Auth Context
+  const [token, setToken] = useState<string | null>(null);
+  const [wsId, setWsId] = useState<string | null>(null);
+  const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
+  const [departments, setDepartments] = useState<any[]>([]);
+  const [teams, setTeams] = useState<any[]>([]);
+  const [members, setMembers] = useState<any[]>([]);
 
-  const today = new Date();
+  // Create Event Form State
+  const [formTitle, setFormTitle] = useState('');
+  const [formType, setFormType] = useState<'MEETING' | 'COMPANY_EVENT' | 'TASK' | 'SHIFT'>('MEETING');
+  const [formDescription, setFormDescription] = useState('');
+  const [formStartDate, setFormStartDate] = useState('');
+  const [formEndDate, setFormEndDate] = useState('');
+  const [formStartTime, setFormStartTime] = useState('10:00');
+  const [formEndTime, setFormEndTime] = useState('10:30');
+  const [formAllDay, setFormAllDay] = useState(false);
+  const [formLocationUrl, setFormLocationUrl] = useState('https://meet.google.com/orv-sync');
+  const [formAudience, setFormAudience] = useState<'INDIVIDUALS' | 'TEAM' | 'DEPARTMENT' | 'ALL'>('TEAM');
+  const [formDeptId, setFormDeptId] = useState('');
+  const [formTeamId, setFormTeamId] = useState('');
+  const [formSelectedMembers, setFormSelectedMembers] = useState<string[]>([]);
+  const [formRecurrence, setFormRecurrence] = useState('NONE');
+  const [formReminder, setFormReminder] = useState(15);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Helper to format date to YYYY-MM-DD for date input
-  const toDateInputValue = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
+  // Initialize Auth & Workspace from localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const t = localStorage.getItem('orvexa_token');
+    const w = localStorage.getItem('orvexa_cached_workspace');
+    const p = localStorage.getItem('orvexa_cached_profile');
 
-  // Helper to check if a task belongs to current logged-in user
-  const checkIsMyTask = (
-    task: any,
-    memId: string,
-    usrId: string,
-    email: string,
-    fullName: string,
-  ) => {
-    const emailLower = (email || '').toLowerCase().trim();
-    const nameLower = (fullName || '').toLowerCase().trim();
-
-    // 1. Direct assignee membership ID
-    if (memId && (task.assigneeMembershipId === memId || task.assignee?.id === memId)) {
-      return true;
+    if (t) setToken(t);
+    if (w) {
+      try {
+        const wsObj = JSON.parse(w);
+        if (wsObj?.id) setWsId(wsObj.id);
+        if (wsObj?.membershipId) setCurrentMembershipId(wsObj.membershipId);
+        if (wsObj?.accessRole || wsObj?.role) setCurrentUserRole(wsObj.accessRole || wsObj.role);
+      } catch {}
     }
-
-    // 2. User ID
-    if (usrId && (task.assignee?.userId === usrId || task.assignee?.user?.id === usrId)) {
-      return true;
+    if (p) {
+      try {
+        const prof = JSON.parse(p);
+        if (prof?.memberships && prof.memberships[0]?.id) {
+          setCurrentMembershipId(prof.memberships[0].id);
+          if (prof.memberships[0].accessRole) setCurrentUserRole(prof.memberships[0].accessRole);
+        }
+      } catch {}
     }
+  }, []);
 
-    // 3. User Email
-    if (emailLower && task.assignee?.user?.email?.toLowerCase().trim() === emailLower) {
-      return true;
-    }
-
-    // 4. Name match
-    if (nameLower && task.assignee?.user) {
-      const aName = `${task.assignee.user.firstName || ''} ${task.assignee.user.lastName || ''}`
-        .toLowerCase()
-        .trim();
-      if (aName && (aName === nameLower || aName.includes(nameLower) || nameLower.includes(aName))) {
-        return true;
-      }
-    }
-
-    // 5. Multi-assignee list
-    const assigneeIds = Array.isArray(task.assigneeMembershipIds)
-      ? task.assigneeMembershipIds
-      : Array.isArray(task.sla?.assigneeMembershipIds)
-      ? task.sla.assigneeMembershipIds
-      : [];
-    if (memId && assigneeIds.includes(memId)) return true;
-
-    // 6. Collaborators
-    const collabIds = Array.isArray(task.collaboratorIds) ? task.collaboratorIds : [];
-    if (memId && collabIds.includes(memId)) return true;
-
-    return false;
-  };
-
-  // Calculate Start & End of Month / Range
-  const year = currentDate.getFullYear();
-  const month = currentDate.getMonth();
-
-  const loadCalendarEvents = async () => {
+  // Fetch Calendar Events
+  const fetchEvents = async () => {
     if (!token || !wsId) return;
     setLoading(true);
     setError(null);
+
     try {
-      const firstDay = new Date(year, month, 1);
-      firstDay.setHours(0, 0, 0, 0);
-      const lastDay = new Date(year, month + 1, 0);
-      lastDay.setHours(23, 59, 59, 999);
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+
+      // Range for query: whole month +/- 15 days buffer
+      const rangeStart = new Date(year, month - 1, 15);
+      const rangeEnd = new Date(year, month + 2, 15);
 
       const params = new URLSearchParams({
-        startDate: firstDay.toISOString(),
-        endDate: lastDay.toISOString(),
-        layers: activeLayers.join(','),
+        startDate: rangeStart.toISOString(),
+        endDate: rangeEnd.toISOString(),
       });
+
+      if (searchQuery.trim()) params.append('search', searchQuery.trim());
+      if (selectedTypeFilter !== 'ALL') params.append('type', selectedTypeFilter);
+      if (selectedDeptFilter !== 'ALL') params.append('departmentId', selectedDeptFilter);
 
       const headers = {
         Authorization: `Bearer ${token}`,
         'x-workspace-id': wsId,
       };
 
-      // Query both the analytics calendar and raw modules concurrently for guaranteed coverage
-      const [calRes, tasksRes, leavesRes, meRes] = await Promise.all([
-        fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null),
-        fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null),
-        fetch(`${BRANDING.apiUrl}/leave`, { headers }).catch(() => null),
-        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }).catch(() => null),
-      ]);
+      // Query the unified calendar API with automatic permission scoping
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/events?${params.toString()}`, { headers });
 
-      // Resolve live user identity
-      let myUserId = currentUserId;
-      let myMemId = currentMembershipId;
-      let myEmail = currentUserEmail;
-      let myName = currentUserName;
-
-      if (meRes && meRes.ok) {
-        const meJson = await meRes.json().catch(() => ({}));
-        const userObj = meJson?.data?.user || meJson?.data || meJson?.user || {};
-        const memberships = meJson?.data?.memberships || userObj?.memberships || meJson?.memberships || [];
-        const activeMem = memberships.find((m: any) => m.workspaceId === wsId) || memberships[0];
-
-        if (userObj.id) {
-          myUserId = userObj.id;
-          setCurrentUserId(userObj.id);
-        }
-        if (userObj.email) {
-          myEmail = userObj.email;
-          setCurrentUserEmail(userObj.email);
-        }
-        const fName = userObj.firstName || '';
-        const lName = userObj.lastName || '';
-        if (fName || lName) {
-          myName = `${fName} ${lName}`.trim();
-          setCurrentUserName(myName);
-        }
-        if (activeMem?.id) {
-          myMemId = activeMem.id;
-          setCurrentMembershipId(activeMem.id);
+      if (res.ok) {
+        const data = await res.json();
+        setEvents(data.events || []);
+      } else {
+        // Fallback to analytics calendar if needed
+        const fallbackRes = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers });
+        if (fallbackRes.ok) {
+          const fallbackData = await fallbackRes.json();
+          setEvents(fallbackData.events || []);
+        } else {
+          setError('Could not load calendar events.');
         }
       }
-
-      const mergedEventsMap = new Map<string, CalendarEvent>();
-
-      // 1. Ingest analytics calendar events if returned
-      if (calRes && calRes.ok) {
-        const calJson = await calRes.json().catch(() => ({}));
-        if (Array.isArray(calJson.events)) {
-          for (const ev of calJson.events) {
-            const assignee = ev.details?.assigneeName || '';
-            const member = ev.details?.memberName || '';
-            const isForMe =
-              (myName && (assignee.toLowerCase().includes(myName.toLowerCase()) || member.toLowerCase().includes(myName.toLowerCase()))) ||
-              (myEmail && (assignee.toLowerCase().includes(myEmail.toLowerCase()) || member.toLowerCase().includes(myEmail.toLowerCase())));
-
-            mergedEventsMap.set(ev.id || `${ev.entityType}-${ev.entityId}`, {
-              ...ev,
-              details: {
-                ...ev.details,
-                isAssignedToMe: isForMe,
-              },
-            });
-          }
-        }
-      }
-
-      // 2. Ingest tasks directly from /tasks (same endpoint used by Projects & Tasks)
-      if (tasksRes && tasksRes.ok) {
-        const taskData = await tasksRes.json().catch(() => []);
-        const rawTasks: any[] = Array.isArray(taskData) ? taskData : (taskData?.data || []);
-
-        for (const t of rawTasks) {
-          const key = `task-${t.id}`;
-          const isForMe = checkIsMyTask(t, myMemId, myUserId, myEmail, myName);
-          const taskDate = t.dueDate || t.startDate || t.createdAt || new Date().toISOString();
-          const dateIso = new Date(taskDate).toISOString();
-          const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
-          const assigneeName = t.assignee?.user
-            ? `${t.assignee.user.firstName || ''} ${t.assignee.user.lastName || ''}`.trim()
-            : (t.assigneeMembershipId ? 'Assigned Member' : 'Unassigned');
-
-          mergedEventsMap.set(key, {
-            id: key,
-            title: `${t.dueDate ? 'Due' : 'Task'}: ${t.title} [${t.priority || 'MEDIUM'}]`,
-            type: 'TASK_DEADLINE',
-            layer: 'TASKS',
-            startDate: dateIso,
-            endDate: t.dueDate ? new Date(t.dueDate).toISOString() : dateIso,
-            allDay: true,
-            status: t.status || 'TODO',
-            color: isUrgent ? '#ef4444' : '#8b5cf6',
-            entityType: 'TASK',
-            entityId: t.id,
-            details: {
-              title: t.title,
-              description: t.description || null,
-              projectName: t.project?.name || 'General',
-              assigneeName,
-              priority: t.priority || 'MEDIUM',
-              dueDate: t.dueDate || null,
-              isAssignedToMe: isForMe,
-            },
-          });
-        }
-      }
-
-      // 3. Ingest leaves directly from /leave if available
-      if (leavesRes && leavesRes.ok) {
-        const leaveData = await leavesRes.json().catch(() => []);
-        const rawLeaves: any[] = Array.isArray(leaveData) ? leaveData : (leaveData?.data || []);
-
-        for (const l of rawLeaves) {
-          const key = `leave-${l.id}`;
-          if (l.startDate) {
-            const memberName = l.membership?.user
-              ? `${l.membership.user.firstName || ''} ${l.membership.user.lastName || ''}`.trim()
-              : 'Team Member';
-            const isForMe =
-              (myMemId && l.membershipId === myMemId) ||
-              (myName && memberName.toLowerCase().includes(myName.toLowerCase()));
-
-            mergedEventsMap.set(key, {
-              id: key,
-              title: `${memberName} — ${l.leaveType || 'Leave'} (${l.totalDays || 1}d)`,
-              type: 'LEAVE_REQUEST',
-              layer: 'LEAVE',
-              startDate: new Date(l.startDate).toISOString(),
-              endDate: new Date(l.endDate || l.startDate).toISOString(),
-              allDay: true,
-              status: l.status || 'APPROVED',
-              color: l.status === 'APPROVED' ? '#f59e0b' : '#9ca3af',
-              entityType: 'LEAVE',
-              entityId: l.id,
-              details: {
-                memberName,
-                reason: l.reason || 'Leave request',
-                days: l.totalDays || 1,
-                isAssignedToMe: isForMe,
-              },
-            });
-          }
-        }
-      }
-
-      setEvents(Array.from(mergedEventsMap.values()));
     } catch (err: any) {
-      console.error(err);
-      setError(err.message);
-      toast.error(err.message);
+      setError(err?.message || 'Error connecting to calendar service.');
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadCalendarEvents();
-  }, [currentDate, activeLayers]);
+  // Fetch Auxiliary Workspace Data (Departments, Teams, Members) for Event Creation
+  const fetchWorkspaceMeta = async () => {
+    if (!token || !wsId) return;
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      'x-workspace-id': wsId,
+    };
 
-  // Layer Toggle
-  const toggleLayer = (layer: string) => {
-    if (activeLayers.includes(layer)) {
-      if (activeLayers.length === 1) {
-        toast.info('At least one calendar layer must remain active');
-        return;
-      }
-      setActiveLayers(activeLayers.filter((l) => l !== layer));
-    } else {
-      setActiveLayers([...activeLayers, layer]);
-    }
-  };
-
-  // Date Navigation Handlers
-  const handleDatePick = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    if (!val) return;
-    const parts = val.split('-').map(Number);
-    if (parts.length === 3) {
-      const newDate = new Date(parts[0], parts[1] - 1, parts[2]);
-      setSelectedDate(newDate);
-      setCurrentDate(newDate);
-    }
-  };
-
-  const prevMonth = () => {
-    const newMonthDate = new Date(year, month - 1, 1);
-    setCurrentDate(newMonthDate);
-    setSelectedDate(new Date(year, month - 1, Math.min(selectedDate.getDate(), 28)));
-  };
-
-  const nextMonth = () => {
-    const newMonthDate = new Date(year, month + 1, 1);
-    setCurrentDate(newMonthDate);
-    setSelectedDate(new Date(year, month + 1, Math.min(selectedDate.getDate(), 28)));
-  };
-
-  const goToToday = () => {
-    const now = new Date();
-    setSelectedDate(now);
-    setCurrentDate(now);
-  };
-
-  // Month Grid Calculation
-  const firstDayOfMonth = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const monthName = currentDate.toLocaleString('default', { month: 'long', year: 'numeric' });
-
-  // Filter events based on active layers AND logged-in user scope
-  const activeEvents = events.filter((ev) => {
-    // 1. Layer filter
-    if (!activeLayers.includes(ev.layer)) return false;
-
-    // 2. Personal scope filter: when 'mine', show strictly current user's tasks & records
-    if (scopeMode === 'mine') {
-      if (ev.layer === 'TASKS') {
-        return ev.details?.isAssignedToMe === true;
-      }
-      if (ev.layer === 'ATTENDANCE' || ev.layer === 'LEAVE') {
-        return ev.details?.isAssignedToMe === true;
-      }
-    }
-
-    return true;
-  });
-
-  // Map events by Day of Month (Timezone-resilient)
-  const getEventsForDay = (day: number) => {
-    return activeEvents.filter((ev) => {
-      if (!ev.startDate) return false;
-      const d = new Date(ev.startDate);
-      if (d.getFullYear() === year && d.getMonth() === month && d.getDate() === day) {
-        return true;
-      }
-      const datePart = typeof ev.startDate === 'string' ? ev.startDate.split('T')[0] : '';
-      if (datePart) {
-        const parts = datePart.split('-');
-        if (parts.length === 3) {
-          const y = Number(parts[0]);
-          const m = Number(parts[1]) - 1;
-          const dt = Number(parts[2]);
-          if (y === year && m === month && dt === day) {
-            return true;
-          }
-        }
-      }
-      return false;
-    });
-  };
-
-  const navigateToEntity = (event: CalendarEvent) => {
-    switch (event.entityType) {
-      case 'TASK':
-        router.push('/app/projects');
-        break;
-      case 'ATTENDANCE':
-      case 'LEAVE':
-        router.push('/app/time');
-        break;
-      case 'QUALITY':
-        router.push('/app/quality');
-        break;
-      default:
-        break;
-    }
-    setSelectedEvent(null);
-  };
-
-  const formatScheduleDate = (isoStr: string) => {
     try {
-      const d = new Date(isoStr);
-      return d.toLocaleDateString(undefined, {
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
+      const [deptRes, teamRes, peopleRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/departments`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/people`, { headers }).catch(() => null),
+      ]);
+
+      if (deptRes && deptRes.ok) {
+        const dJson = await deptRes.json();
+        const deptList = Array.isArray(dJson) ? dJson : dJson.departments || dJson.data || [];
+        setDepartments(deptList);
+        if (deptList.length > 0 && !formDeptId) setFormDeptId(deptList[0].id);
+      }
+
+      if (teamRes && teamRes.ok) {
+        const tJson = await teamRes.json();
+        const teamList = Array.isArray(tJson) ? tJson : tJson.teams || tJson.data || [];
+        setTeams(teamList);
+        if (teamList.length > 0 && !formTeamId) setFormTeamId(teamList[0].id);
+      }
+
+      if (peopleRes && peopleRes.ok) {
+        const pJson = await peopleRes.json();
+        const peopleList = Array.isArray(pJson) ? pJson : pJson.members || pJson.data || [];
+        setMembers(peopleList);
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (token && wsId) {
+      fetchEvents();
+      fetchWorkspaceMeta();
+    }
+  }, [token, wsId, currentDate.getFullYear(), currentDate.getMonth(), selectedTypeFilter, selectedDeptFilter]);
+
+  // Navigate Months
+  const handlePrevMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  };
+
+  const handleGoToToday = () => {
+    const today = new Date();
+    setCurrentDate(today);
+    setSelectedDate(today);
+  };
+
+  // Date Math Helpers
+  const year = currentDate.getFullYear();
+  const month = currentDate.getMonth();
+
+  const monthName = currentDate.toLocaleString('default', { month: 'long' });
+
+  // Grid Calculation
+  const firstDayOfMonth = new Date(year, month, 1).getDay(); // 0 for Sun, 1 for Mon, etc.
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const daysInPrevMonth = new Date(year, month, 0).getDate();
+
+  const isSameDay = (d1: Date, d2: Date) => {
+    return (
+      d1.getFullYear() === d2.getFullYear() &&
+      d1.getMonth() === d2.getMonth() &&
+      d1.getDate() === d2.getDate()
+    );
+  };
+
+  // Group events by day string (YYYY-MM-DD)
+  const eventsByDay = useMemo(() => {
+    const map: Record<string, CalendarEvent[]> = {};
+
+    for (const evt of events) {
+      if (!evt.startDate) continue;
+      const d = new Date(evt.startDate);
+      // Format YYYY-MM-DD
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(evt);
+    }
+
+    return map;
+  }, [events]);
+
+  // Events for Selected Date (for the Right Panel)
+  const selectedDayKey = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`;
+  const selectedDayEvents = eventsByDay[selectedDayKey] || [];
+
+  const selectedMeetings = selectedDayEvents.filter((e) => e.layer === 'MEETINGS' || e.type === 'MEETING');
+  const selectedTasks = selectedDayEvents.filter((e) => e.layer === 'TASKS' || e.type === 'TASK');
+  const selectedHolidays = selectedDayEvents.filter((e) => e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY');
+  const selectedLeaves = selectedDayEvents.filter((e) => e.layer === 'LEAVE' || e.type === 'LEAVE');
+  const selectedShifts = selectedDayEvents.filter((e) => e.layer === 'SHIFTS' || e.type === 'SHIFT');
+
+  // Handle Event Creation
+  const handleOpenCreateModal = (dateToUse?: Date) => {
+    const baseDate = dateToUse || selectedDate || new Date();
+    const dateStr = `${baseDate.getFullYear()}-${String(baseDate.getMonth() + 1).padStart(2, '0')}-${String(baseDate.getDate()).padStart(2, '0')}`;
+    setFormStartDate(dateStr);
+    setFormEndDate(dateStr);
+    setFormTitle('');
+    setFormDescription('');
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCreateEventSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formTitle.trim() || !formStartDate || !token || !wsId) {
+      toast.error('Please enter an event title and start date');
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const startIso = formAllDay
+        ? new Date(`${formStartDate}T00:00:00.000Z`).toISOString()
+        : new Date(`${formStartDate}T${formStartTime}:00.000Z`).toISOString();
+
+      const endIso = formAllDay
+        ? new Date(`${formEndDate || formStartDate}T23:59:59.999Z`).toISOString()
+        : new Date(`${formEndDate || formStartDate}T${formEndTime}:00.000Z`).toISOString();
+
+      const payload = {
+        title: formTitle.trim(),
+        type: formType,
+        description: formDescription.trim(),
+        startDate: startIso,
+        endDate: endIso,
+        allDay: formAllDay,
+        locationUrl: formLocationUrl.trim(),
+        audience: formAudience,
+        departmentId: formAudience === 'DEPARTMENT' ? formDeptId : undefined,
+        teamId: formAudience === 'TEAM' ? formTeamId : undefined,
+        participantIds: formAudience === 'INDIVIDUALS' ? formSelectedMembers : [],
+        recurrence: formRecurrence,
+        reminderMinutes: Number(formReminder),
+      };
+
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/events`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-workspace-id': wsId,
+        },
+        body: JSON.stringify(payload),
       });
+
+      if (res.ok) {
+        toast.success('Event scheduled successfully');
+        setIsCreateModalOpen(false);
+        fetchEvents();
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        toast.error(errJson?.message || 'Failed to create event');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Error creating event');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // RSVP Handlers
+  const handleRsvp = async (eventId: string, status: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE') => {
+    if (!token || !wsId) return;
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/events/${eventId}/rsvp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-workspace-id': wsId,
+        },
+        body: JSON.stringify({ status }),
+      });
+
+      if (res.ok) {
+        toast.success(`Invitation ${status.toLowerCase()}`);
+        fetchEvents();
+        if (selectedEvent && selectedEvent.id === eventId) {
+          setSelectedEvent({
+            ...selectedEvent,
+            participants: selectedEvent.participants?.map((p) =>
+              p.membershipId === currentMembershipId ? { ...p, status } : p,
+            ),
+          });
+        }
+      } else {
+        toast.error('Failed to submit response');
+      }
     } catch {
-      return isoStr;
+      toast.error('Error recording RSVP');
+    }
+  };
+
+  // Format Helper for Card Display
+  const formatTimeRange = (startIso: string, endIso: string) => {
+    try {
+      const s = new Date(startIso);
+      const e = new Date(endIso);
+      const sStr = s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      const eStr = e.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      return `${sStr} – ${eStr}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const formatShortTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+    } catch {
+      return '';
     }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header & Controls */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Universal Operations Calendar</h1>
-            <Badge variant="outline" className="text-xs font-mono">Multi-Layer Scheduling</Badge>
-          </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {scopeMode === 'mine'
-              ? `Personal schedule for ${currentUserName || currentUserEmail || 'you'} — only your assigned tasks & deadlines are displayed.`
-              : 'Workspace operations schedule — viewing all team attendance, shifts, leave requests, and task deadlines.'}
-          </p>
-        </div>
+    <div className="min-h-screen bg-[#fafbfc] text-slate-800 flex flex-col font-sans">
+      {/* =========================================================================
+          TOP HEADER SECTION (Clean, Minimal, SaaS design matching screenshot)
+         ========================================================================= */}
+      <div className="bg-white border-b border-slate-200/80 px-6 py-4 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          {/* Title & Legend Pills */}
+          <div>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Calendar</h1>
+            </div>
+            <p className="text-xs text-slate-500 mt-0.5">
+              One shared calendar with automatic permission-based visibility.
+            </p>
 
-        {/* View Switcher, Scope Mode & Date Nav */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* User Scope Toggle (My Tasks vs All Team) */}
-          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
-            <button
-              type="button"
-              onClick={() => setScopeMode('mine')}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded transition-colors ${
-                scopeMode === 'mine'
-                  ? 'bg-primary text-primary-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              title="Show only tasks assigned to you"
-            >
-              <User className="h-3.5 w-3.5" />
-              My Tasks
-            </button>
-            <button
-              type="button"
-              onClick={() => setScopeMode('all')}
-              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded transition-colors ${
-                scopeMode === 'all'
-                  ? 'bg-primary text-primary-foreground shadow-xs'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-              title="Show all workspace tasks"
-            >
-              <Users className="h-3.5 w-3.5" />
-              All Team
-            </button>
+            {/* Category Legend Pills (Matching screenshot) */}
+            <div className="flex flex-wrap items-center gap-2 mt-3 text-xs font-medium text-slate-600">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50/70 text-blue-700 border border-blue-100">
+                <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />
+                Meetings
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-50/70 text-emerald-700 border border-emerald-100">
+                <span className="w-2 h-2 rounded-full bg-emerald-600 inline-block" />
+                Holidays
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-50/70 text-amber-700 border border-amber-100">
+                <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" />
+                Leave
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-50/70 text-purple-700 border border-purple-100">
+                <span className="w-2 h-2 rounded-full bg-purple-600 inline-block" />
+                Tasks
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
+                <span className="w-2 h-2 rounded-full bg-slate-500 inline-block" />
+                Shifts
+              </div>
+            </div>
           </div>
 
-          {/* Date Navigator with Calendar Icon Date Picker */}
-          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
-            <Button variant="ghost" size="icon" onClick={prevMonth} className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Previous Month">
-              <ChevronLeft className="h-4 w-4" />
-            </Button>
-
-            {/* Interactive Calendar Icon Date Picker */}
-            <div className="relative flex items-center gap-1.5 px-2 py-0.5 border-x border-border mx-1">
-              <CalendarIcon className="h-4 w-4 text-primary shrink-0 pointer-events-none" />
-              <input
-                type="date"
-                title="Select date to jump to"
-                value={toDateInputValue(selectedDate)}
-                onChange={handleDatePick}
-                className="bg-transparent text-xs font-semibold text-foreground border-none outline-none cursor-pointer focus:ring-0"
-              />
+          {/* Header Controls: Search, Filter, View Selector */}
+          <div className="flex items-center gap-2.5 self-start md:self-auto">
+            {/* Search Button / Input */}
+            <div className="relative">
+              {isSearchOpen ? (
+                <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+                  <Search className="w-4 h-4 text-slate-400" />
+                  <input
+                    type="text"
+                    placeholder="Search events, tasks..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && fetchEvents()}
+                    className="w-44 text-xs bg-transparent focus:outline-none text-slate-800"
+                    autoFocus
+                  />
+                  <button onClick={() => { setSearchQuery(''); setIsSearchOpen(false); fetchEvents(); }} className="text-slate-400 hover:text-slate-600">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsSearchOpen(true)}
+                  className="p-2 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg border border-slate-200 transition-colors"
+                  title="Search Events"
+                >
+                  <Search className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
+            {/* Filter Button */}
+            <div className="relative">
+              <button
+                onClick={() => setIsFilterOpen(!isFilterOpen)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                  selectedTypeFilter !== 'ALL' || selectedDeptFilter !== 'ALL'
+                    ? 'bg-blue-50 border-blue-200 text-blue-700'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                <Filter className="w-3.5 h-3.5" />
+                Filter
+                {(selectedTypeFilter !== 'ALL' || selectedDeptFilter !== 'ALL') && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600" />
+                )}
+              </button>
+
+              {/* Filter Dropdown Popover */}
+              {isFilterOpen && (
+                <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-xl shadow-lg p-3 z-30">
+                  <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+                    <span className="text-xs font-semibold text-slate-700">Filter Calendar</span>
+                    <button onClick={() => setIsFilterOpen(false)} className="text-slate-400 hover:text-slate-600">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[11px] font-medium text-slate-500 block mb-1">Event Category</label>
+                      <select
+                        value={selectedTypeFilter}
+                        onChange={(e) => setSelectedTypeFilter(e.target.value)}
+                        className="w-full text-xs border border-slate-200 rounded-lg p-1.5 bg-slate-50"
+                      >
+                        <option value="ALL">All Categories</option>
+                        <option value="MEETING">Meetings</option>
+                        <option value="TASK">Tasks & Deadlines</option>
+                        <option value="HOLIDAY">Holidays</option>
+                        <option value="LEAVE">Leave</option>
+                        <option value="SHIFT">Work Shifts</option>
+                      </select>
+                    </div>
+
+                    {departments.length > 0 && (
+                      <div>
+                        <label className="text-[11px] font-medium text-slate-500 block mb-1">Department</label>
+                        <select
+                          value={selectedDeptFilter}
+                          onChange={(e) => setSelectedDeptFilter(e.target.value)}
+                          className="w-full text-xs border border-slate-200 rounded-lg p-1.5 bg-slate-50"
+                        >
+                          <option value="ALL">All Departments</option>
+                          {departments.map((d) => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    <div className="pt-2 flex justify-between">
+                      <button
+                        onClick={() => { setSelectedTypeFilter('ALL'); setSelectedDeptFilter('ALL'); setIsFilterOpen(false); }}
+                        className="text-[11px] text-slate-500 hover:underline"
+                      >
+                        Reset filters
+                      </button>
+                      <button
+                        onClick={() => setIsFilterOpen(false)}
+                        className="text-xs bg-blue-600 text-white px-2.5 py-1 rounded-md"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* View Mode Segmented Selector (Month, Week, Day) */}
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-medium">
+              <button
+                onClick={() => setViewMode('month')}
+                className={`px-3 py-1 rounded-md transition-all ${
+                  viewMode === 'month'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Month
+              </button>
+              <button
+                onClick={() => setViewMode('week')}
+                className={`px-3 py-1 rounded-md transition-all ${
+                  viewMode === 'week'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Week
+              </button>
+              <button
+                onClick={() => setViewMode('day')}
+                className={`px-3 py-1 rounded-md transition-all ${
+                  viewMode === 'day'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Day
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Sub-bar: Navigation (< > Month Year) + Today + Create Event */}
+        <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 text-slate-600">
+              <button
+                onClick={handlePrevMonth}
+                className="p-1 hover:bg-slate-100 rounded-md transition-colors"
+                title="Previous Month"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <button
+                onClick={handleNextMonth}
+                className="p-1 hover:bg-slate-100 rounded-md transition-colors"
+                title="Next Month"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+            <h2 className="text-lg font-semibold text-slate-800 tracking-tight">
+              {monthName} {year}
+            </h2>
+          </div>
+
+          <div className="flex items-center gap-2">
             <button
-              type="button"
-              onClick={goToToday}
-              className="px-2.5 py-1 text-xs font-semibold text-primary hover:bg-surface-secondary rounded transition-colors"
-              title="Jump to Today"
+              onClick={handleGoToToday}
+              className="px-3.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 transition-colors shadow-2xs"
             >
               Today
             </button>
-            <Button variant="ghost" size="icon" onClick={nextMonth} className="h-7 w-7 text-muted-foreground hover:text-foreground" title="Next Month">
-              <ChevronRight className="h-4 w-4" />
-            </Button>
-          </div>
-
-          {/* Month / Agenda View Mode */}
-          <div className="flex items-center rounded-lg border border-border bg-card p-1 shadow-xs">
             <button
-              type="button"
-              onClick={() => setViewMode('month')}
-              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-                viewMode === 'month' ? 'bg-primary text-primary-foreground font-semibold shadow-xs' : 'text-muted-foreground hover:text-foreground'
-              }`}
+              onClick={() => handleOpenCreateModal()}
+              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-2xs"
             >
-              Month
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('agenda')}
-              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-                viewMode === 'agenda' ? 'bg-primary text-primary-foreground font-semibold shadow-xs' : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Agenda
+              <Plus className="w-3.5 h-3.5" />
+              Create Event
             </button>
           </div>
-
-          <Button variant="outline" size="sm" onClick={loadCalendarEvents} disabled={loading} className="h-8 gap-1.5 shadow-xs">
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </Button>
         </div>
       </div>
 
-      {/* Interactive Layer Filter Badges */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs font-semibold text-muted-foreground mr-1 flex items-center gap-1">
-          <Filter className="h-3 w-3" /> Layers:
-        </span>
+      {/* =========================================================================
+          MAIN CALENDAR BODY (Split View: Calendar Grid + Right Detail Panel)
+         ========================================================================= */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Side: Calendar Views (Month, Week, Day) */}
+        <div className="flex-1 flex flex-col p-6 overflow-y-auto">
+          {/* MONTH VIEW */}
+          {viewMode === 'month' && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col flex-1">
+              {/* Day Headers (Sun, Mon, Tue, Wed, Thu, Fri, Sat) */}
+              <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50/70 text-center py-2.5 text-xs font-medium text-slate-500">
+                <div>Sun</div>
+                <div>Mon</div>
+                <div>Tue</div>
+                <div>Wed</div>
+                <div>Thu</div>
+                <div>Fri</div>
+                <div>Sat</div>
+              </div>
 
-        <button
-          type="button"
-          onClick={() => toggleLayer('ATTENDANCE')}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-            activeLayers.includes('ATTENDANCE')
-              ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-600 dark:text-emerald-400 font-semibold shadow-2xs'
-              : 'border-border text-muted-foreground/50 opacity-60'
-          }`}
-        >
-          <span className="h-2 w-2 rounded-full bg-emerald-500" />
-          Attendance Sessions
-        </button>
+              {/* Month Grid Cells */}
+              <div className="grid grid-cols-7 flex-1 auto-rows-fr divide-x divide-y divide-slate-100">
+                {/* Empty cells before month starts */}
+                {Array.from({ length: firstDayOfMonth }).map((_, i) => {
+                  const prevDayNum = daysInPrevMonth - firstDayOfMonth + i + 1;
+                  return (
+                    <div key={`prev-${i}`} className="min-h-[110px] p-2 bg-slate-50/30 text-slate-300">
+                      <span className="text-xs font-normal">{prevDayNum}</span>
+                    </div>
+                  );
+                })}
 
-        <button
-          type="button"
-          onClick={() => toggleLayer('SHIFTS')}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-            activeLayers.includes('SHIFTS')
-              ? 'bg-sky-500/10 border-sky-500/40 text-sky-600 dark:text-sky-400 font-semibold shadow-2xs'
-              : 'border-border text-muted-foreground/50 opacity-60'
-          }`}
-        >
-          <span className="h-2 w-2 rounded-full bg-sky-500" />
-          Work Shifts
-        </button>
+                {/* Days of current month */}
+                {Array.from({ length: daysInMonth }).map((_, i) => {
+                  const dayNum = i + 1;
+                  const cellDate = new Date(year, month, dayNum);
+                  const isSelected = isSameDay(cellDate, selectedDate);
+                  const isToday = isSameDay(cellDate, new Date());
+                  const dayKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                  const dayEvents = eventsByDay[dayKey] || [];
 
-        <button
-          type="button"
-          onClick={() => toggleLayer('LEAVE')}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-            activeLayers.includes('LEAVE')
-              ? 'bg-amber-500/10 border-amber-500/40 text-amber-600 dark:text-amber-400 font-semibold shadow-2xs'
-              : 'border-border text-muted-foreground/50 opacity-60'
-          }`}
-        >
-          <span className="h-2 w-2 rounded-full bg-amber-500" />
-          Leave Requests
-        </button>
-
-        <button
-          type="button"
-          onClick={() => toggleLayer('TASKS')}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-            activeLayers.includes('TASKS')
-              ? 'bg-purple-500/10 border-purple-500/40 text-purple-600 dark:text-purple-400 font-semibold shadow-2xs'
-              : 'border-border text-muted-foreground/50 opacity-60'
-          }`}
-        >
-          <span className="h-2 w-2 rounded-full bg-purple-500" />
-          Task Deadlines
-        </button>
-
-        <button
-          type="button"
-          onClick={() => toggleLayer('QUALITY')}
-          className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border transition-all ${
-            activeLayers.includes('QUALITY')
-              ? 'bg-rose-500/10 border-rose-500/40 text-rose-600 dark:text-rose-400 font-semibold shadow-2xs'
-              : 'border-border text-muted-foreground/50 opacity-60'
-          }`}
-        >
-          <span className="h-2 w-2 rounded-full bg-rose-500" />
-          Quality Audits
-        </button>
-      </div>
-
-      {/* Month Label & Scope Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between bg-card border border-border px-4 py-3 rounded-xl shadow-xs gap-3">
-        <div className="flex flex-wrap items-center gap-2.5">
-          <span className="text-lg font-bold text-foreground">{monthName}</span>
-          <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20 flex items-center gap-1.5 font-medium py-1">
-            <CalendarIcon className="h-3.5 w-3.5" />
-            Today: {today.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
-          </Badge>
-          <Badge variant="secondary" className="text-xs flex items-center gap-1.5 font-medium py-1">
-            <User className="h-3.5 w-3.5 text-primary" />
-            {scopeMode === 'mine' ? (
-              <span>My Tasks: <strong className="text-foreground">{currentUserName || currentUserEmail || 'Logged In User'}</strong></span>
-            ) : (
-              <span>Scope: <strong className="text-foreground">All Team Members</strong></span>
-            )}
-          </Badge>
-          {selectedDate.toDateString() !== today.toDateString() && (
-            <Badge variant="outline" className="text-xs flex items-center gap-1 font-medium py-1">
-              Focus: {selectedDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted-foreground font-mono bg-muted/50 px-2.5 py-1 rounded-md border border-border">
-            {activeEvents.length} {activeEvents.length === 1 ? 'event' : 'events'} in scope
-          </span>
-        </div>
-      </div>
-
-      {/* MONTH VIEW GRID */}
-      {viewMode === 'month' && (
-        <Card className="overflow-hidden border border-border shadow-xs">
-          <div className="grid grid-cols-7 border-b border-border bg-surface-secondary/50 text-center text-xs font-semibold uppercase text-muted-foreground py-2.5">
-            <div>Sun</div>
-            <div>Mon</div>
-            <div>Tue</div>
-            <div>Wed</div>
-            <div>Thu</div>
-            <div>Fri</div>
-            <div>Sat</div>
-          </div>
-
-          <div className="grid grid-cols-7 divide-x divide-y divide-border bg-card">
-            {/* Blank leading slots */}
-            {Array.from({ length: firstDayOfMonth }).map((_, idx) => (
-              <div key={`blank-${idx}`} className="min-h-28 bg-surface-secondary/20 p-2 text-muted-foreground/20 text-xs" />
-            ))}
-
-            {/* Days in Month */}
-            {Array.from({ length: daysInMonth }).map((_, idx) => {
-              const day = idx + 1;
-              const dayEvents = getEventsForDay(day);
-              const isToday =
-                today.getDate() === day &&
-                today.getMonth() === month &&
-                today.getFullYear() === year;
-              const isSelected =
-                selectedDate.getDate() === day &&
-                selectedDate.getMonth() === month &&
-                selectedDate.getFullYear() === year;
-
-              return (
-                <div
-                  key={`day-${day}`}
-                  onClick={() => setSelectedDate(new Date(year, month, day))}
-                  className={`min-h-28 p-1.5 sm:p-2 transition-all flex flex-col justify-between cursor-pointer rounded-xs ${
-                    isSelected
-                      ? 'ring-2 ring-primary ring-inset bg-primary/10 font-semibold shadow-2xs'
-                      : isToday
-                      ? 'bg-primary/5 font-semibold'
-                      : 'hover:bg-surface-secondary/40'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span
-                      className={`text-xs rounded-full h-6 w-6 flex items-center justify-center transition-all ${
-                        isToday
-                          ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                          : isSelected
-                          ? 'bg-foreground text-background font-bold'
-                          : 'text-foreground font-medium'
+                  return (
+                    <div
+                      key={`day-${dayNum}`}
+                      onClick={() => {
+                        setSelectedDate(cellDate);
+                        if (!isRightPanelOpen) setIsRightPanelOpen(true);
+                      }}
+                      className={`min-h-[110px] p-2 transition-colors cursor-pointer flex flex-col ${
+                        isSelected
+                          ? 'bg-blue-50/40 ring-2 ring-blue-500 ring-inset z-10'
+                          : 'hover:bg-slate-50/80 bg-white'
                       }`}
                     >
-                      {day}
-                    </span>
-                    {isToday && (
-                      <span className="text-[10px] font-semibold text-primary uppercase tracking-tight">Today</span>
-                    )}
-                    {dayEvents.length > 2 && (
-                      <span className="text-[10px] text-muted-foreground font-mono bg-muted/60 px-1 rounded">
-                        +{dayEvents.length - 2}
-                      </span>
-                    )}
-                  </div>
+                      {/* Day Number Header */}
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span
+                          className={`text-xs font-semibold inline-flex items-center justify-center ${
+                            isSelected
+                              ? 'w-6 h-6 rounded-full bg-blue-600 text-white shadow-2xs'
+                              : isToday
+                              ? 'w-6 h-6 rounded-full bg-slate-200 text-slate-800'
+                              : 'text-slate-700'
+                          }`}
+                        >
+                          {dayNum}
+                        </span>
 
-                  {/* Day Events Stack */}
-                  <div className="space-y-1 mt-1 flex-1 overflow-hidden">
-                    {dayEvents.slice(0, 3).map((ev) => (
-                      <button
-                        key={ev.id}
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedEvent(ev);
-                        }}
-                        className="w-full text-left truncate text-[11px] px-2 py-1 rounded-md shadow-2xs font-medium transition-all hover:scale-[1.02] hover:shadow-xs flex items-center justify-between gap-1 border border-border/40"
-                        style={{
-                          backgroundColor: `${ev.color}15`,
-                          borderLeft: `3px solid ${ev.color}`,
-                          color: ev.color,
-                        }}
-                        title={`${ev.title} — ${ev.details?.assigneeName || ''}`}
-                      >
-                        <span className="truncate flex-1 font-semibold">{ev.title}</span>
-                        {ev.details?.isAssignedToMe && (
-                          <span className="text-[9px] px-1 rounded bg-primary/20 text-primary font-bold shrink-0">You</span>
+                        {dayEvents.length > 3 && (
+                          <span className="text-[10px] font-medium text-slate-400">
+                            +{dayEvents.length - 2}
+                          </span>
                         )}
-                      </button>
+                      </div>
+
+                      {/* Event Chips (Compact representation matching screenshot) */}
+                      <div className="space-y-1 flex-1 overflow-hidden">
+                        {dayEvents.slice(0, 3).map((evt) => {
+                          const isMeeting = evt.layer === 'MEETINGS' || evt.type === 'MEETING';
+                          const isHoliday = evt.layer === 'HOLIDAYS' || evt.type === 'HOLIDAY';
+                          const isLeave = evt.layer === 'LEAVE' || evt.type === 'LEAVE';
+                          const isTask = evt.layer === 'TASKS' || evt.type === 'TASK';
+                          const isUrgent = evt.details?.priority === 'HIGH' || evt.details?.priority === 'URGENT';
+
+                          let badgeClasses = 'bg-slate-100 text-slate-800 border-slate-200';
+                          if (isMeeting) {
+                            badgeClasses = 'bg-blue-50/90 text-blue-800 border-blue-200/80 hover:bg-blue-100/90';
+                          } else if (isHoliday) {
+                            badgeClasses = 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100';
+                          } else if (isLeave) {
+                            badgeClasses = 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100';
+                          } else if (isTask) {
+                            badgeClasses = isUrgent
+                              ? 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
+                              : 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100';
+                          }
+
+                          return (
+                            <div
+                              key={evt.id}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedEvent(evt);
+                                setIsEventDetailOpen(true);
+                              }}
+                              className={`px-2 py-1 rounded-md text-[11px] leading-tight border transition-shadow truncate shadow-2xs ${badgeClasses}`}
+                              title={`${evt.title} (${evt.startDate ? formatShortTime(evt.startDate) : ''})`}
+                            >
+                              <div className="flex items-center gap-1 truncate">
+                                {isMeeting && <Video className="w-3 h-3 text-blue-600 shrink-0" />}
+                                {isTask && (
+                                  <span
+                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                      isUrgent ? 'bg-rose-500' : 'bg-purple-500'
+                                    }`}
+                                  />
+                                )}
+                                {isHoliday && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />}
+                                {isLeave && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
+
+                                <span className="font-semibold truncate">{evt.title}</span>
+                              </div>
+
+                              {/* Time or Subtitle */}
+                              {!evt.allDay && evt.startDate && (
+                                <div className="text-[10px] opacity-80 mt-0.5 truncate">
+                                  {evt.endDate ? formatTimeRange(evt.startDate, evt.endDate) : formatShortTime(evt.startDate)}
+                                </div>
+                              )}
+                              {isLeave && evt.details?.memberName && (
+                                <div className="text-[10px] opacity-80 mt-0.5 truncate">
+                                  {evt.details.memberName}
+                                </div>
+                              )}
+                              {isHoliday && (
+                                <div className="text-[10px] opacity-80 mt-0.5 truncate">
+                                  Workspace Holiday
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+
+                        {dayEvents.length > 3 && (
+                          <div className="text-[10px] text-blue-600 font-medium pl-1 hover:underline">
+                            + {dayEvents.length - 3} more
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Trailing empty cells to fill the 35 or 42 grid */}
+                {Array.from({
+                  length: (7 - ((firstDayOfMonth + daysInMonth) % 7)) % 7,
+                }).map((_, i) => (
+                  <div key={`next-${i}`} className="min-h-[110px] p-2 bg-slate-50/30 text-slate-300">
+                    <span className="text-xs font-normal">{i + 1}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* WEEK VIEW */}
+          {viewMode === 'week' && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col flex-1 p-4">
+              <div className="grid grid-cols-7 gap-2 pb-3 border-b border-slate-200 text-center font-medium text-xs text-slate-600">
+                {Array.from({ length: 7 }).map((_, i) => {
+                  const weekDay = new Date(selectedDate);
+                  weekDay.setDate(selectedDate.getDate() - selectedDate.getDay() + i);
+                  const isSel = isSameDay(weekDay, selectedDate);
+                  return (
+                    <div
+                      key={i}
+                      onClick={() => setSelectedDate(weekDay)}
+                      className={`p-2 rounded-lg cursor-pointer ${isSel ? 'bg-blue-50 text-blue-700 font-semibold border border-blue-200' : 'hover:bg-slate-50'}`}
+                    >
+                      <div className="text-[11px] text-slate-400">
+                        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][i]}
+                      </div>
+                      <div className="text-sm mt-0.5">{weekDay.getDate()}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Hourly Schedule Timeline */}
+              <div className="space-y-3 mt-4 flex-1 overflow-y-auto">
+                {['09:00 AM', '10:00 AM', '11:00 AM', '12:00 PM', '02:00 PM', '03:00 PM', '04:00 PM', '05:00 PM'].map((slot, idx) => (
+                  <div key={idx} className="flex gap-4 items-start border-b border-slate-100 pb-3">
+                    <div className="w-16 text-xs text-slate-400 shrink-0 font-medium">{slot}</div>
+                    <div className="flex-1 grid grid-cols-7 gap-2">
+                      {Array.from({ length: 7 }).map((_, dayIdx) => {
+                        const cellDay = new Date(selectedDate);
+                        cellDay.setDate(selectedDate.getDate() - selectedDate.getDay() + dayIdx);
+                        const k = `${cellDay.getFullYear()}-${String(cellDay.getMonth() + 1).padStart(2, '0')}-${String(cellDay.getDate()).padStart(2, '0')}`;
+                        const dayEvts = (eventsByDay[k] || []).filter((e) => {
+                          if (e.allDay) return idx === 0;
+                          const hour = new Date(e.startDate).getHours();
+                          const slotHour = idx < 3 ? 9 + idx : idx === 3 ? 12 : 14 + (idx - 4);
+                          return hour === slotHour;
+                        });
+
+                        return (
+                          <div key={dayIdx} className="min-h-[44px] bg-slate-50/50 rounded-lg p-1 text-[11px]">
+                            {dayEvts.map((e) => (
+                              <div
+                                key={e.id}
+                                onClick={() => { setSelectedEvent(e); setIsEventDetailOpen(true); }}
+                                className="bg-blue-100 text-blue-900 border border-blue-200 p-1 rounded-sm cursor-pointer truncate mb-1"
+                              >
+                                {e.title}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* DAY VIEW */}
+          {viewMode === 'day' && (
+            <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col flex-1 p-6">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-800">
+                    {selectedDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                  </h3>
+                  <p className="text-xs text-slate-500">Day timeline and scheduled activities</p>
+                </div>
+                <Button size="sm" onClick={() => handleOpenCreateModal(selectedDate)} className="bg-blue-600 hover:bg-blue-700">
+                  <Plus className="w-4 h-4 mr-1" /> Add Event
+                </Button>
+              </div>
+
+              <div className="space-y-4 mt-6 flex-1 overflow-y-auto">
+                {selectedDayEvents.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400">
+                    <CalendarDays className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p className="text-sm font-medium">No events scheduled on this day</p>
+                    <p className="text-xs text-slate-400 mt-1">Enjoy a clear schedule or plan a meeting</p>
+                  </div>
+                ) : (
+                  selectedDayEvents.map((evt) => (
+                    <div
+                      key={evt.id}
+                      onClick={() => { setSelectedEvent(evt); setIsEventDetailOpen(true); }}
+                      className="p-4 rounded-xl border border-slate-200 hover:border-blue-300 hover:shadow-xs transition-all cursor-pointer bg-white flex items-start justify-between"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline" className="text-[10px] font-semibold">{evt.type}</Badge>
+                          <h4 className="font-semibold text-slate-900">{evt.title}</h4>
+                        </div>
+                        {evt.description && <p className="text-xs text-slate-500">{evt.description}</p>}
+                        <div className="flex items-center gap-3 text-xs text-slate-400 pt-1">
+                          <span className="flex items-center gap-1">
+                            <Clock className="w-3.5 h-3.5" />
+                            {evt.allDay ? 'All Day' : formatTimeRange(evt.startDate, evt.endDate)}
+                          </span>
+                          {evt.locationUrl && (
+                            <span className="flex items-center gap-1 text-blue-600">
+                              <Video className="w-3.5 h-3.5" />
+                              Video Call
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <ChevronRight className="w-5 h-5 text-slate-300" />
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Bottom Disclaimer Banner (Matching screenshot) */}
+          <div className="mt-4 flex items-center justify-between text-xs text-slate-500 bg-white border border-slate-200/80 rounded-xl px-4 py-2.5 shadow-2xs">
+            <div className="flex items-center gap-2">
+              <Info className="w-4 h-4 text-blue-500 shrink-0" />
+              <span>Holidays are shown automatically based on your workspace location (Tamil Nadu).</span>
+            </div>
+            <button
+              onClick={() => setIsHolidayModalOpen(true)}
+              className="text-blue-600 font-semibold hover:underline flex items-center gap-1"
+            >
+              View Holiday Calendar <ChevronRight className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+
+        {/* =========================================================================
+            RIGHT-SIDE DATE DETAIL PANEL (Matches screenshot with selected date cards)
+           ========================================================================= */}
+        {isRightPanelOpen && (
+          <div className="w-80 md:w-96 bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto shrink-0 shadow-xs">
+            {/* Panel Header: Selected Date & Close Button */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="text-base font-bold text-slate-900">
+                {selectedDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric' })}
+              </h3>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => handleOpenCreateModal(selectedDate)}
+                  className="px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-2xs"
+                >
+                  + Add
+                </button>
+                <button
+                  onClick={() => setIsRightPanelOpen(false)}
+                  className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+                  title="Close side panel"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Event Groups */}
+            <div className="space-y-5 mt-4 flex-1">
+              {/* Group 1: Meetings */}
+              <div>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-2.5">
+                  <span className="w-2 h-2 rounded-full bg-blue-600" />
+                  Meetings
+                </div>
+
+                {selectedMeetings.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedMeetings.map((m) => (
+                      <div
+                        key={m.id}
+                        onClick={() => { setSelectedEvent(m); setIsEventDetailOpen(true); }}
+                        className="p-3 rounded-xl border border-slate-200/90 hover:border-blue-300 hover:shadow-xs transition-all cursor-pointer bg-white group flex items-center justify-between"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                            <Users className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                              {m.title}
+                            </h4>
+                            <p className="text-[11px] text-slate-500 font-medium mt-0.5">
+                              {formatTimeRange(m.startDate, m.endDate)}
+                            </p>
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              {m.teamName || 'Operations Team'} • {m.participants?.length || 5} participants
+                            </p>
+                          </div>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 group-hover:translate-x-0.5 transition-all" />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
+                    No meetings scheduled
+                  </div>
+                )}
+              </div>
+
+              {/* Group 2: Tasks */}
+              <div>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-2.5">
+                  <span className="w-2 h-2 rounded-full bg-purple-600" />
+                  Tasks
+                </div>
+
+                {selectedTasks.length > 0 ? (
+                  <div className="space-y-2">
+                    {selectedTasks.map((t) => (
+                      <div
+                        key={t.id}
+                        onClick={() => { setSelectedEvent(t); setIsEventDetailOpen(true); }}
+                        className="p-3 rounded-xl border border-slate-200/90 hover:border-purple-300 hover:shadow-xs transition-all cursor-pointer bg-white group flex items-center justify-between"
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 mt-0.5">
+                            <CheckSquare className="w-4 h-4" />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-bold text-slate-900 group-hover:text-purple-600 transition-colors">
+                              {t.title}
+                            </h4>
+                            <p className="text-[11px] text-slate-500 mt-0.5 truncate max-w-[190px]">
+                              {t.description || 'Complete assigned deliverables'}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
+                              <span className="text-purple-700 font-medium">Assigned to you</span>
+                              <span>•</span>
+                              <span>{formatShortTime(t.startDate)}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-0.5 transition-all" />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
+                    No task deadlines on this date
+                  </div>
+                )}
+              </div>
+
+              {/* Group 3: Holidays or Leave (if present) */}
+              {(selectedHolidays.length > 0 || selectedLeaves.length > 0) && (
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-2.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-600" />
+                    Holidays & Leave
+                  </div>
+                  <div className="space-y-2">
+                    {selectedHolidays.map((h) => (
+                      <div key={h.id} className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50 flex items-center gap-3">
+                        <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <div>
+                          <h4 className="text-xs font-bold text-emerald-900">{h.title}</h4>
+                          <p className="text-[10px] text-emerald-700">Official Tamil Nadu Public Holiday</p>
+                        </div>
+                      </div>
+                    ))}
+                    {selectedLeaves.map((l) => (
+                      <div key={l.id} className="p-3 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center gap-3">
+                        <User className="w-4 h-4 text-amber-600 shrink-0" />
+                        <div>
+                          <h4 className="text-xs font-bold text-amber-900">{l.title}</h4>
+                          <p className="text-[10px] text-amber-700">{l.description || 'Approved Leave'}</p>
+                        </div>
+                      </div>
                     ))}
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </Card>
-      )}
+              )}
 
-      {/* AGENDA VIEW LIST */}
-      {viewMode === 'agenda' && (
-        <Card className="border border-border shadow-xs">
-          <CardHeader className="pb-3 border-b border-border/60">
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-base font-semibold text-foreground">Chronological Activity Agenda</CardTitle>
-                <CardDescription>
-                  {scopeMode === 'mine' ? 'Your upcoming task deadlines and personal events' : 'All upcoming workspace operations ordered by date'}
-                </CardDescription>
-              </div>
-              <Badge variant="outline" className="text-xs font-mono">
-                {activeEvents.length} {activeEvents.length === 1 ? 'Event' : 'Events'}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="pt-4">
-            {activeEvents.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-center">
-                <CheckCircle2 className="h-10 w-10 text-muted-foreground/40 mb-3" />
-                <h4 className="text-sm font-semibold text-foreground">No events found for this filter</h4>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {scopeMode === 'mine'
-                    ? 'You have no assigned tasks scheduled for this period. Switch to "All Team" to view workspace activities.'
-                    : 'Adjust layer filters or navigate to a different month to view scheduled events.'}
-                </p>
-              </div>
-            ) : (
-              <div className="divide-y divide-border">
-                {[...activeEvents]
-                  .sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime())
-                  .map((ev) => (
-                    <div
-                      key={ev.id}
-                      className="flex flex-col sm:flex-row sm:items-center justify-between py-3.5 gap-3 hover:bg-surface-secondary/40 px-3 rounded-xl transition-colors"
-                    >
-                      <div className="flex items-start gap-3">
-                        <div
-                          className="h-3 w-3 rounded-full mt-1 shrink-0"
-                          style={{ backgroundColor: ev.color }}
-                        />
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-foreground">{ev.title}</span>
-                            {ev.details?.isAssignedToMe && (
-                              <Badge variant="secondary" className="text-[10px] py-0 px-1.5 h-4 bg-primary/10 text-primary border-primary/20">
-                                Assigned to You
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="text-xs text-muted-foreground flex flex-wrap items-center gap-2">
-                            <span>{formatScheduleDate(ev.startDate)}</span>
-                            <span>•</span>
-                            <span>Layer: <strong className="text-foreground">{ev.layer}</strong></span>
-                            <span>•</span>
-                            <span>Status: <strong className="text-foreground">{ev.status}</strong></span>
-                            {ev.details?.assigneeName && (
-                              <>
-                                <span>•</span>
-                                <span>Assignee: <strong className="text-foreground">{ev.details.assigneeName}</strong></span>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
+              {/* Group 4: Placeholder when empty */}
+              {selectedDayEvents.length === 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-slate-400 mb-2">
+                    <span className="w-2 h-2 rounded-full bg-slate-300" />
+                    No other events
+                  </div>
+                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 text-center">
+                    <CalendarIcon className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
+                    <p className="text-xs font-semibold text-slate-700">No other scheduled events</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">Your day at a glance</p>
+                  </div>
+                </div>
+              )}
 
-                      <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setSelectedEvent(ev)}
-                          className="h-8 text-xs gap-1.5 text-muted-foreground hover:text-foreground"
-                        >
-                          <Eye className="h-3.5 w-3.5" /> Details
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => navigateToEntity(ev)}
-                          className="h-8 text-xs gap-1.5 font-medium"
-                        >
-                          Open <ArrowRight className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+              {/* Quick Actions (Matching screenshot) */}
+              <div className="pt-2">
+                <h4 className="text-xs font-bold text-slate-700 mb-2">Quick Actions</h4>
+                <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 shadow-2xs">
+                  <button
+                    onClick={() => handleOpenCreateModal(selectedDate)}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <CalendarIcon className="w-4 h-4 text-slate-400" />
+                      <span>Create Event</span>
                     </div>
-                  ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
 
-      {/* Modern Event Details Inspector Modal */}
-      {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-xs p-4 animate-in fade-in duration-150">
-          <div className="bg-card border border-border rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in zoom-in-95 duration-150">
+                  <button
+                    onClick={handleGoToToday}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <CalendarDays className="w-4 h-4 text-slate-400" />
+                      <span>Go to Today</span>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+
+                  <button
+                    onClick={() => setViewMode(viewMode === 'month' ? 'week' : viewMode === 'week' ? 'day' : 'month')}
+                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <LayoutGrid className="w-4 h-4 text-slate-400" />
+                      <span>Change View ({viewMode === 'month' ? 'Month' : viewMode === 'week' ? 'Week' : 'Day'})</span>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* =========================================================================
+          CREATE EVENT MODAL (Unified Modal for Meetings & Company Events)
+         ========================================================================= */}
+      {isCreateModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
             {/* Modal Header */}
-            <div className="flex items-start justify-between border-b border-border pb-4 gap-3">
-              <div className="flex items-start gap-3">
-                <div
-                  className="h-9 w-9 rounded-xl flex items-center justify-center shrink-0 mt-0.5"
-                  style={{
-                    backgroundColor: `${selectedEvent.color}20`,
-                    color: selectedEvent.color,
-                  }}
-                >
-                  {selectedEvent.layer === 'TASKS' ? (
-                    <CheckSquare className="h-5 w-5" />
-                  ) : selectedEvent.layer === 'LEAVE' ? (
-                    <CalendarIcon className="h-5 w-5" />
-                  ) : (
-                    <Clock className="h-5 w-5" />
-                  )}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 bg-slate-50/50">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Schedule Event or Meeting</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Shared with participants with permission-controlled visibility</p>
+              </div>
+              <button
+                onClick={() => setIsCreateModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Modal Body Form */}
+            <form onSubmit={handleCreateEventSubmit} className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
+              {/* Title */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Event Title <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Weekly Team Sync, Design Review"
+                  value={formTitle}
+                  onChange={(e) => setFormTitle(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
+              </div>
+
+              {/* Event Type & Audience */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Event Type</label>
+                  <select
+                    value={formType}
+                    onChange={(e: any) => setFormType(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 bg-white"
+                  >
+                    <option value="MEETING">Meeting</option>
+                    <option value="COMPANY_EVENT">Company Event</option>
+                    <option value="TASK">Task Deadline</option>
+                    <option value="SHIFT">Work Shift</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Audience Scope</label>
+                  <select
+                    value={formAudience}
+                    onChange={(e: any) => setFormAudience(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 bg-white"
+                  >
+                    <option value="TEAM">My Team</option>
+                    <option value="DEPARTMENT">My Department</option>
+                    <option value="INDIVIDUALS">Selected Individuals</option>
+                    <option value="ALL">Company-wide</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Department / Team Dropdowns */}
+              {formAudience === 'DEPARTMENT' && departments.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Select Department</label>
+                  <select
+                    value={formDeptId}
+                    onChange={(e) => setFormDeptId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
+                  >
+                    {departments.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {formAudience === 'TEAM' && teams.length > 0 && (
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Select Team</label>
+                  <select
+                    value={formTeamId}
+                    onChange={(e) => setFormTeamId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
+                  >
+                    {teams.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {/* Date & Time Selectors */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={formStartDate}
+                    onChange={(e) => {
+                      setFormStartDate(e.target.value);
+                      if (!formEndDate) setFormEndDate(e.target.value);
+                    }}
+                    className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 pt-6">
+                  <input
+                    type="checkbox"
+                    id="allDayCheckbox"
+                    checked={formAllDay}
+                    onChange={(e) => setFormAllDay(e.target.checked)}
+                    className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 border-slate-300"
+                  />
+                  <label htmlFor="allDayCheckbox" className="text-xs font-medium text-slate-700 cursor-pointer">
+                    All-Day Event
+                  </label>
+                </div>
+              </div>
+
+              {!formAllDay && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Start Time</label>
+                    <input
+                      type="time"
+                      value={formStartTime}
+                      onChange={(e) => setFormStartTime(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">End Time</label>
+                    <input
+                      type="time"
+                      value={formEndTime}
+                      onChange={(e) => setFormEndTime(e.target.value)}
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Meeting Link / Location */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Meeting Link or Location</label>
+                <div className="relative">
+                  <Video className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                  <input
+                    type="text"
+                    placeholder="https://meet.google.com/xxx or Conference Room 1"
+                    value={formLocationUrl}
+                    onChange={(e) => setFormLocationUrl(e.target.value)}
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              </div>
+
+              {/* Description */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Description (Optional)</label>
+                <textarea
+                  rows={2}
+                  placeholder="Key agenda points, deliverables, or objectives..."
+                  value={formDescription}
+                  onChange={(e) => setFormDescription(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
+
+              {/* Recurrence & Reminder */}
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Recurrence</label>
+                  <select
+                    value={formRecurrence}
+                    onChange={(e) => setFormRecurrence(e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value="NONE">Does not repeat</option>
+                    <option value="DAILY">Repeats Daily</option>
+                    <option value="WEEKLY">Repeats Weekly</option>
+                    <option value="MONTHLY">Repeats Monthly</option>
+                  </select>
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-foreground leading-snug">
-                    {selectedEvent.title}
-                  </h3>
-                  <div className="flex flex-wrap items-center gap-2 mt-1.5">
-                    <Badge variant="outline" className="font-mono text-[11px]">
-                      {selectedEvent.type}
-                    </Badge>
-                    <Badge
-                      variant={
-                        selectedEvent.status === 'COMPLETED' || selectedEvent.status === 'APPROVED' || selectedEvent.status === 'PASSED'
-                          ? 'success'
-                          : 'secondary'
-                      }
-                      className="text-[11px]"
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Reminder</label>
+                  <select
+                    value={formReminder}
+                    onChange={(e) => setFormReminder(Number(e.target.value))}
+                    className="w-full px-2.5 py-1.5 text-xs border border-slate-200 rounded-lg bg-white"
+                  >
+                    <option value={15}>15 minutes before</option>
+                    <option value={30}>30 minutes before</option>
+                    <option value={60}>1 hour before</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex items-center justify-end gap-2.5 pt-4 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setIsCreateModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50 shadow-2xs"
+                >
+                  {isSubmitting ? 'Scheduling...' : 'Create Event'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          EVENT DETAILS & RSVP MODAL
+         ========================================================================= */}
+      {isEventDetailOpen && selectedEvent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="p-6 border-b border-slate-100 bg-slate-50/50">
+              <div className="flex items-start justify-between">
+                <div>
+                  <Badge variant="outline" className="text-[10px] font-bold tracking-wider uppercase mb-1">
+                    {selectedEvent.type}
+                  </Badge>
+                  <h3 className="text-base font-bold text-slate-900">{selectedEvent.title}</h3>
+                </div>
+                <button onClick={() => setIsEventDetailOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* Details Content */}
+            <div className="p-6 space-y-4 text-xs">
+              {/* Date & Time */}
+              <div className="flex items-center gap-2.5 text-slate-700">
+                <Clock className="w-4 h-4 text-blue-600 shrink-0" />
+                <div>
+                  <span className="font-semibold">
+                    {new Date(selectedEvent.startDate).toLocaleDateString('default', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </span>
+                  {!selectedEvent.allDay && (
+                    <span className="text-slate-500 ml-1.5">
+                      ({formatTimeRange(selectedEvent.startDate, selectedEvent.endDate)})
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Location or Meeting Link */}
+              {selectedEvent.locationUrl && (
+                <div className="flex items-center justify-between p-3 rounded-xl bg-blue-50 border border-blue-100">
+                  <div className="flex items-center gap-2 truncate pr-2">
+                    <Video className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span className="text-blue-900 font-medium truncate">{selectedEvent.locationUrl}</span>
+                  </div>
+                  <a
+                    href={selectedEvent.locationUrl.startsWith('http') ? selectedEvent.locationUrl : `https://${selectedEvent.locationUrl}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shrink-0 shadow-2xs"
+                  >
+                    Join <ExternalLink className="w-3 h-3 ml-0.5" />
+                  </a>
+                </div>
+              )}
+
+              {/* Description */}
+              {selectedEvent.description && (
+                <div className="text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                  {selectedEvent.description}
+                </div>
+              )}
+
+              {/* Organizer */}
+              {selectedEvent.organizer && (
+                <div className="flex items-center gap-2 text-slate-600">
+                  <User className="w-4 h-4 text-slate-400" />
+                  <span>Organized by <strong className="text-slate-800">{selectedEvent.organizer.name}</strong></span>
+                </div>
+              )}
+
+              {/* Participants & RSVPs */}
+              {selectedEvent.participants && selectedEvent.participants.length > 0 && (
+                <div className="pt-2">
+                  <div className="text-xs font-semibold text-slate-700 mb-2 flex items-center justify-between">
+                    <span>Participants ({selectedEvent.participants.length})</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                    {selectedEvent.participants.map((p, idx) => (
+                      <div key={idx} className="flex items-center justify-between py-1 border-b border-slate-50 text-[11px]">
+                        <span className="font-medium text-slate-700">{p.name}</span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                            p.status === 'ACCEPTED'
+                              ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                              : p.status === 'DECLINED'
+                              ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                              : p.status === 'TENTATIVE'
+                              ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                              : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {p.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* RSVP Actions for invited members */}
+              {selectedEvent.participants && (
+                <div className="pt-3 border-t border-slate-100">
+                  <div className="text-xs font-semibold text-slate-700 mb-2">Your Response:</div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      onClick={() => handleRsvp(selectedEvent.id, 'ACCEPTED')}
+                      className="py-1.5 px-2 rounded-lg text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 flex items-center justify-center gap-1"
                     >
-                      {selectedEvent.status}
-                    </Badge>
-                    {selectedEvent.details?.isAssignedToMe && (
-                      <Badge variant="default" className="text-[10px] bg-primary text-primary-foreground">
-                        Assigned to You
-                      </Badge>
-                    )}
+                      <Check className="w-3.5 h-3.5" /> Accept
+                    </button>
+                    <button
+                      onClick={() => handleRsvp(selectedEvent.id, 'TENTATIVE')}
+                      className="py-1.5 px-2 rounded-lg text-xs font-semibold bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 flex items-center justify-center gap-1"
+                    >
+                      <HelpCircle className="w-3.5 h-3.5" /> Maybe
+                    </button>
+                    <button
+                      onClick={() => handleRsvp(selectedEvent.id, 'DECLINED')}
+                      className="py-1.5 px-2 rounded-lg text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center justify-center gap-1"
+                    >
+                      <XCircle className="w-3.5 h-3.5" /> Decline
+                    </button>
                   </div>
                 </div>
-              </div>
+              )}
+            </div>
 
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setSelectedEvent(null)}
-                className="h-8 w-8 rounded-full text-muted-foreground hover:bg-muted shrink-0"
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setIsEventDetailOpen(false)}
+                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
               >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-
-            {/* Modal Body - Clean Structured Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
-                <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
-                  <CalendarIcon className="h-3.5 w-3.5 text-primary" />
-                  <span>Schedule Date</span>
-                </div>
-                <div className="text-foreground font-medium text-sm">
-                  {formatScheduleDate(selectedEvent.startDate)}
-                </div>
-              </div>
-
-              <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
-                <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
-                  <User className="h-3.5 w-3.5 text-primary" />
-                  <span>Assigned Member</span>
-                </div>
-                <div className="text-foreground font-medium text-sm truncate">
-                  {selectedEvent.details?.assigneeName || selectedEvent.details?.memberName || 'Unassigned'}
-                </div>
-              </div>
-
-              {selectedEvent.details?.projectName && (
-                <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
-                  <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
-                    <Folder className="h-3.5 w-3.5 text-primary" />
-                    <span>Project</span>
-                  </div>
-                  <div className="text-foreground font-medium text-sm truncate">
-                    {selectedEvent.details.projectName}
-                  </div>
-                </div>
-              )}
-
-              {selectedEvent.details?.priority && (
-                <div className="p-3 bg-muted/40 border border-border/60 rounded-xl space-y-1">
-                  <div className="flex items-center gap-1.5 text-muted-foreground font-semibold">
-                    <AlertTriangle className="h-3.5 w-3.5 text-primary" />
-                    <span>Priority</span>
-                  </div>
-                  <div className="text-foreground font-medium text-sm">
-                    {selectedEvent.details.priority}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Task Description if available */}
-            {selectedEvent.details?.description && (
-              <div className="p-3 bg-muted/30 border border-border/60 rounded-xl text-xs space-y-1">
-                <span className="font-semibold text-muted-foreground">Description</span>
-                <p className="text-foreground leading-relaxed">{selectedEvent.details.description}</p>
-              </div>
-            )}
-
-            {/* Modal Actions */}
-            <div className="flex items-center justify-between border-t border-border pt-4">
-              <Button variant="ghost" size="sm" onClick={() => setSelectedEvent(null)}>
                 Close
-              </Button>
-              <Button size="sm" onClick={() => navigateToEntity(selectedEvent)} className="gap-2 font-medium shadow-xs">
-                Open in Projects & Tasks
-                <ArrowRight className="h-4 w-4" />
-              </Button>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          TAMIL NADU & WORKSPACE HOLIDAY CALENDAR MODAL
+         ========================================================================= */}
+      {isHolidayModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Tamil Nadu Public & Company Holidays</h3>
+                <p className="text-xs text-slate-500">Official recognized regional calendar for {year}</p>
+              </div>
+              <button onClick={() => setIsHolidayModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-3 divide-y divide-slate-100 text-xs">
+              {events
+                .filter((e) => e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY')
+                .map((h) => (
+                  <div key={h.id} className="pt-2.5 flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-slate-800">{h.title}</div>
+                      <div className="text-[11px] text-slate-400 mt-0.5">{h.description}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="font-semibold text-slate-700">
+                        {new Date(h.startDate).toLocaleDateString('default', { month: 'short', day: 'numeric' })}
+                      </div>
+                      <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
+                        {h.status === 'COMPANY' ? 'Company Holiday' : 'Public Holiday'}
+                      </Badge>
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <button
+                onClick={() => setIsHolidayModalOpen(false)}
+                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+              >
+                Done
+              </button>
             </div>
           </div>
         </div>
