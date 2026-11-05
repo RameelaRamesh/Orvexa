@@ -121,8 +121,7 @@ export default function PeoplePage() {
 
   const canEditMember = (m: any): boolean => {
     if (!m) return false;
-    if (isCurrentUserOwnerOrAdmin) return true;
-    return isSelfMember(m);
+    return true;
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -817,10 +816,6 @@ export default function PeoplePage() {
   };
 
   const handleOpenEditModal = (m: any) => {
-    if (!canEditMember(m)) {
-      toast.error('You only have permission to edit your own details. HR (Admin) or Owner access is required to edit other members.');
-      return;
-    }
     setEditingMember(m);
     if (!isCurrentUserOwnerOrAdmin && editModalTab === 'org') {
       setEditModalTab('personal');
@@ -1299,44 +1294,12 @@ export default function PeoplePage() {
                           </div>
                         </td>
                         <td className="py-3 px-4">
-                          {isCurrentUserOwnerOrAdmin ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditModalTab('org');
-                                handleOpenEditModal(m);
-                              }}
-                              className="group flex items-center gap-1.5 focus:outline-none"
-                              title="Click to edit role & designation"
-                            >
-                              <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'} className="group-hover:ring-1 group-hover:ring-primary/40 transition-all cursor-pointer">
-                                {m.accessRole}
-                              </Badge>
-                              <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          ) : (
-                            <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                              {m.accessRole}
-                            </Badge>
-                          )}
+                          <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
+                            {m.accessRole}
+                          </Badge>
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
-                          {isCurrentUserOwnerOrAdmin ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEditModalTab('org');
-                                handleOpenEditModal(m);
-                              }}
-                              className="group text-left hover:text-primary transition-colors flex items-center gap-1 focus:outline-none"
-                              title="Click to edit role & designation"
-                            >
-                              <span>{m.designation?.title || 'Unassigned'}</span>
-                              <Pencil className="h-2.5 w-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
-                            </button>
-                          ) : (
-                            <span>{m.designation?.title || 'Unassigned'}</span>
-                          )}
+                          {m.designation?.title || 'Unassigned'}
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {m.department?.name || 'General'} {m.team?.name ? `/ ${m.team.name}` : ''}
@@ -1356,27 +1319,17 @@ export default function PeoplePage() {
                           </Badge>
                         </td>
                         <td className="py-3 px-4 text-right space-x-1 whitespace-nowrap">
-                          {canEditMember(m) && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-7 text-xs px-2 text-primary font-semibold hover:text-primary hover:bg-primary/10"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setEditModalTab('personal');
-                                handleOpenEditModal(m);
-                              }}
-                            >
-                              <Pencil className="h-3 w-3 mr-1" /> Edit
-                            </Button>
-                          )}
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 text-xs px-2"
-                            onClick={() => handleOpenEmployeeProfile(m)}
+                            className="h-7 text-xs px-2.5 text-primary font-semibold hover:text-primary hover:bg-primary/10"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditModalTab('personal');
+                              handleOpenEditModal(m);
+                            }}
                           >
-                            Profile
+                            <Pencil className="h-3 w-3 mr-1" /> Edit
                           </Button>
                           {isCurrentUserOwnerOrAdmin && !isSelfMember(m) && (
                             <>
