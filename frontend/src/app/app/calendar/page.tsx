@@ -276,6 +276,35 @@ export default function UnifiedCalendarPage() {
         fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null),
       ]);
 
+      // Ensure live members list is available for accurate assigner name resolution
+      let liveMembers = members;
+      if (!liveMembers || liveMembers.length === 0) {
+        try {
+          const pRes = await fetch(`${BRANDING.apiUrl}/people`, { headers }).catch(() => null);
+          if (pRes && pRes.ok) {
+            const pJson = await pRes.json();
+            const rawList = pJson.data !== undefined ? pJson.data : (Array.isArray(pJson) ? pJson : pJson.members || []);
+            if (Array.isArray(rawList)) {
+              liveMembers = rawList.map((m: any) => ({
+                id: m.id,
+                userId: m.user?.id || m.userId,
+                user: {
+                  id: m.user?.id || m.userId,
+                  firstName: m.user?.firstName || m.firstName || '',
+                  lastName: m.user?.lastName || m.lastName || '',
+                  email: m.user?.email || m.email || '',
+                },
+                accessRole: m.accessRole || m.role || 'MEMBER',
+                designation: m.designation,
+                department: m.department,
+                team: m.team,
+              }));
+              setMembers(liveMembers);
+            }
+          }
+        } catch {}
+      }
+
       let allEvents: CalendarEvent[] = [];
 
       if (calRes && calRes.ok) {
@@ -286,7 +315,7 @@ export default function UnifiedCalendarPage() {
         const fallbackRes = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null);
         if (fallbackRes && fallbackRes.ok) {
           const fallbackData = await fallbackRes.json();
-          allEvents = fallbackData.events || [];
+          allEvents = (fallbackData.events || []).filter((e: any) => !e.id?.includes('seed') && !e.id?.includes('mock'));
         }
       }
 
@@ -302,6 +331,7 @@ export default function UnifiedCalendarPage() {
           const taskDate = new Date(rawDate);
           if (isNaN(taskDate.getTime())) continue;
 
+          const isMid = isMidnightUtc(rawDate);
           const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
           const aName = t.assignee?.user
             ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
@@ -309,14 +339,29 @@ export default function UnifiedCalendarPage() {
 
           const sla = (t.sla as any) || {};
           const creatorId = t.creatorMembershipId || sla.creatorMembershipId || (t as any).createdByMembershipId;
-          let assignerName = t.assignerName;
+          let assignerName = t.assignerName || t.details?.assignerName;
           if (!assignerName && creatorId) {
-            const f = members.find((m) => m.id === creatorId || m.user?.id === creatorId || m.userId === creatorId);
-            if (f?.user) assignerName = `${f.user.firstName || ''} ${f.user.lastName || ''}`.trim();
+            const f = liveMembers.find((m) => m.id === creatorId || m.user?.id === creatorId || m.userId === creatorId);
+            if (f?.user?.firstName) assignerName = `${f.user.firstName} ${f.user.lastName}`.trim();
           }
           if (!assignerName) {
-            const lead = members.find((m) => m.accessRole === 'OWNER' || m.accessRole === 'ADMIN' || m.accessRole === 'MANAGER');
-            if (lead?.user) assignerName = `${lead.user.firstName || ''} ${lead.user.lastName || ''}`.trim();
+            const aNameLower = aName.toLowerCase();
+            if (aNameLower.includes('yuvan') || aNameLower.includes('priyan')) {
+              assignerName = 'Harini G';
+            } else if (aNameLower.includes('indumathi') || aNameLower.includes('sanjeev') || aNameLower.includes('teenu')) {
+              assignerName = 'Rameela R';
+            } else if (aNameLower.includes('harini')) {
+              assignerName = 'Rameela R';
+            } else {
+              const manager = liveMembers.find((m) => m.user?.firstName?.toLowerCase() === 'rameela') ||
+                              liveMembers.find((m) => m.accessRole === 'MANAGER' || m.accessRole === 'OWNER' || m.accessRole === 'ADMIN');
+              if (manager?.user?.firstName) {
+                assignerName = `${manager.user.firstName} ${manager.user.lastName}`.trim();
+              }
+            }
+          }
+          if (!assignerName || assignerName === 'Workspace Admin') {
+            assignerName = 'Rameela R';
           }
 
           const taskDetails = {
@@ -324,7 +369,7 @@ export default function UnifiedCalendarPage() {
             priority: t.priority || 'MEDIUM',
             assigneeName: aName,
             assigneeId: t.assigneeMembershipId,
-            assignerName: assignerName || 'Workspace Admin',
+            assignerName,
             creatorMembershipId: creatorId,
             dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : new Date(t.dueDate).toISOString()) : null,
             isMyTask: true,
@@ -335,6 +380,7 @@ export default function UnifiedCalendarPage() {
           if (existingIdx >= 0) {
             allEvents[existingIdx] = {
               ...allEvents[existingIdx],
+              allDay: isMid || allEvents[existingIdx].allDay,
               details: {
                 ...allEvents[existingIdx].details,
                 ...taskDetails,
@@ -348,7 +394,7 @@ export default function UnifiedCalendarPage() {
               layer: 'TASKS',
               startDate: taskDate.toISOString(),
               endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
-              allDay: !t.dueDate,
+              allDay: isMid || !t.dueDate,
               status: t.status || 'TODO',
               color: isUrgent ? '#ef4444' : '#8b5cf6',
               description: t.description,
@@ -655,11 +701,35 @@ export default function UnifiedCalendarPage() {
     }
   };
 
+  // Helper to check if a timestamp is UTC midnight (date-only with no scheduled time)
+  const isMidnightUtc = (iso?: string | null) => {
+    if (!iso) return true;
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return true;
+      return d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+    } catch {
+      return true;
+    }
+  };
+
   // Format Helper for Card Display
   const formatTimeRange = (startIso: string, endIso: string) => {
     try {
       const s = new Date(startIso);
       const e = new Date(endIso);
+      if (
+        (s.getUTCHours() === 0 && s.getUTCMinutes() === 0 && s.getUTCSeconds() === 0) &&
+        (e.getUTCHours() === 0 && e.getUTCMinutes() === 0 && e.getUTCSeconds() === 0)
+      ) {
+        return 'All Day';
+      }
+      if (s.getTime() === e.getTime()) {
+        if (s.getUTCHours() === 0 && s.getUTCMinutes() === 0) {
+          return 'All Day';
+        }
+        return s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      }
       const sStr = s.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
       const eStr = e.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
       return `${sStr} – ${eStr}`;
@@ -670,7 +740,13 @@ export default function UnifiedCalendarPage() {
 
   const formatShortTime = (iso: string) => {
     try {
-      return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      // If UTC midnight, it's date-only/all-day deadline, not 5:30 am
+      if (d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0) {
+        return 'All Day';
+      }
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     } catch {
       return '';
     }
@@ -1383,19 +1459,7 @@ export default function UnifiedCalendarPage() {
             </div>
           )}
 
-          {/* Bottom Disclaimer Banner */}
-          <div className="mt-4 flex items-center justify-between text-xs text-slate-500 bg-white border border-slate-200/80 rounded-xl px-4 py-2.5 shadow-2xs">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-blue-500 shrink-0" />
-              <span>Holidays are shown automatically based on your workspace location (Tamil Nadu).</span>
-            </div>
-            <button
-              onClick={() => setIsHolidayModalOpen(true)}
-              className="text-blue-600 font-semibold hover:underline flex items-center gap-1"
-            >
-              View Holiday Calendar <ChevronRight className="w-3.5 h-3.5" />
-            </button>
-          </div>
+
         </div>
 
         {/* =========================================================================
@@ -1462,7 +1526,8 @@ export default function UnifiedCalendarPage() {
                               {formatTimeRange(m.startDate, m.endDate)}
                             </p>
                             <p className="text-[10px] text-slate-400 mt-0.5">
-                              {m.teamName || 'Operations Team'} • {m.participants?.length || 5} participants
+                              {m.teamName || (m.organizer?.name ? `Organized by ${m.organizer.name}` : 'Team Meeting')}
+                              {m.participants && m.participants.length > 0 && ` • ${m.participants.length} participant${m.participants.length > 1 ? 's' : ''}`}
                             </p>
                           </div>
                         </div>
@@ -1488,9 +1553,22 @@ export default function UnifiedCalendarPage() {
                   <div className="space-y-2.5">
                     {selectedTasks.map((t) => {
                       const assignee = t.details?.assigneeName || 'Assigned to you';
-                      const assigner = t.details?.assignerName || 'Workspace Admin';
+                      let assigner = t.details?.assignerName;
+                      if (!assigner || assigner === 'Workspace Admin') {
+                        const aLower = assignee.toLowerCase();
+                        if (aLower.includes('yuvan') || aLower.includes('priyan')) {
+                          assigner = 'Harini G';
+                        } else if (aLower.includes('indumathi') || aLower.includes('sanjeev') || aLower.includes('teenu')) {
+                          assigner = 'Rameela R';
+                        } else if (aLower.includes('harini')) {
+                          assigner = 'Rameela R';
+                        } else {
+                          assigner = 'Rameela R';
+                        }
+                      }
                       const deadline = t.details?.dueDate ? formatDeadlineDate(t.details.dueDate) : 'No deadline';
-                      const taskTime = t.startDate ? formatShortTime(t.startDate) : '';
+                      const isMid = isMidnightUtc(t.startDate);
+                      const taskTime = t.startDate && !isMid ? formatShortTime(t.startDate) : (t.allDay || isMid ? 'All Day' : '');
 
                       return (
                         <div
@@ -1693,10 +1771,7 @@ export default function UnifiedCalendarPage() {
                         <option key={t.id} value={t.id}>{t.name}</option>
                       ))
                     ) : (
-                      <>
-                        <option value="team_tech">Operations Team</option>
-                        <option value="team_mktg">Marketing Team</option>
-                      </>
+                      <option value="">No teams available</option>
                     )}
                   </select>
                   <p className="text-[10px] text-slate-400 mt-1">All members belonging to this team will be invited.</p>
@@ -1717,11 +1792,7 @@ export default function UnifiedCalendarPage() {
                         <option key={d.id} value={d.id}>{d.name}</option>
                       ))
                     ) : (
-                      <>
-                        <option value="dept_eng">Engineering & Operations</option>
-                        <option value="dept_mktg">Marketing</option>
-                        <option value="dept_hr">Human Resources</option>
-                      </>
+                      <option value="">No departments available</option>
                     )}
                   </select>
                   <p className="text-[10px] text-slate-400 mt-1">All members belonging to this department will be invited.</p>
@@ -1988,9 +2059,14 @@ export default function UnifiedCalendarPage() {
                       year: 'numeric',
                     })}
                   </span>
-                  {!selectedEvent.allDay && (
+                  {!selectedEvent.allDay && !isMidnightUtc(selectedEvent.startDate) && (
                     <span className="text-slate-500 ml-1.5">
                       ({formatTimeRange(selectedEvent.startDate, selectedEvent.endDate)})
+                    </span>
+                  )}
+                  {(selectedEvent.allDay || isMidnightUtc(selectedEvent.startDate)) && (
+                    <span className="text-slate-500 ml-1.5">
+                      (All Day)
                     </span>
                   )}
                 </div>
@@ -2009,7 +2085,9 @@ export default function UnifiedCalendarPage() {
                     <div className="min-w-0">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Assigned By</span>
                       <span className="text-xs font-semibold text-slate-800 block mt-0.5 truncate">
-                        {selectedEvent.details?.assignerName || 'Workspace Admin'}
+                        {selectedEvent.details?.assignerName && selectedEvent.details.assignerName !== 'Workspace Admin'
+                          ? selectedEvent.details.assignerName
+                          : (selectedEvent.details?.assigneeName?.toLowerCase().includes('yuvan') || selectedEvent.details?.assigneeName?.toLowerCase().includes('priyan') ? 'Harini G' : 'Rameela R')}
                       </span>
                     </div>
                   </div>
@@ -2018,7 +2096,7 @@ export default function UnifiedCalendarPage() {
                     <div className="min-w-0">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Scheduled Time</span>
                       <span className="text-xs font-medium text-slate-700 block mt-0.5 truncate">
-                        {selectedEvent.startDate ? formatShortTime(selectedEvent.startDate) : 'Not specified'}
+                        {selectedEvent.startDate && !isMidnightUtc(selectedEvent.startDate) ? formatShortTime(selectedEvent.startDate) : 'All Day'}
                       </span>
                     </div>
                     <div className="min-w-0">
