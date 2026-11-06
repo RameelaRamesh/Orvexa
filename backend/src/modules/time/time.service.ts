@@ -785,11 +785,23 @@ export class TimeService {
   async submitCorrection(
     workspaceId: string,
     membershipId: string,
-    data: { attendanceId: string; requestedClockIn: string | Date; requestedClockOut: string | Date; reason: string },
+    data: {
+      attendanceId: string;
+      requestedClockIn?: string | Date;
+      requestedClockOut?: string | Date;
+      reason: string;
+      type?: 'ATTENDANCE' | 'BREAK';
+      breakId?: string;
+      requestedBreakStart?: string | Date;
+      requestedBreakEnd?: string | Date;
+    },
   ) {
     const attendance = await this.prisma.attendance.findFirst({
       where: { id: data.attendanceId, workspaceId },
-      include: { membership: { include: { user: true } } },
+      include: {
+        membership: { include: { user: true } },
+        breaks: true,
+      },
     });
 
     if (!attendance) {
@@ -803,15 +815,26 @@ export class TimeService {
     const settings = (ws?.settings as any) || {};
     const corrections: any[] = settings.attendanceCorrections || [];
 
+    let originalBreak: any = null;
+    if (data.type === 'BREAK' && data.breakId) {
+      originalBreak = attendance.breaks.find((b) => b.id === data.breakId);
+    }
+
     const newCorrection = {
       id: `corr_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
       attendanceId: data.attendanceId,
       membershipId,
       employeeName: `${attendance.membership.user.firstName} ${attendance.membership.user.lastName}`,
+      type: data.type || 'ATTENDANCE',
+      breakId: data.breakId || null,
       originalClockIn: attendance.clockIn,
       originalClockOut: attendance.clockOut,
-      requestedClockIn: new Date(data.requestedClockIn),
-      requestedClockOut: new Date(data.requestedClockOut),
+      requestedClockIn: data.requestedClockIn ? new Date(data.requestedClockIn) : attendance.clockIn,
+      requestedClockOut: data.requestedClockOut ? new Date(data.requestedClockOut) : attendance.clockOut,
+      originalBreakStart: originalBreak?.breakStart || null,
+      originalBreakEnd: originalBreak?.breakEnd || null,
+      requestedBreakStart: data.requestedBreakStart ? new Date(data.requestedBreakStart) : null,
+      requestedBreakEnd: data.requestedBreakEnd ? new Date(data.requestedBreakEnd) : null,
       reason: data.reason.trim(),
       status: 'PENDING',
       submittedAt: new Date(),
@@ -880,22 +903,55 @@ export class TimeService {
       throw new NotFoundException('Target attendance record no longer exists');
     }
 
-    const newClockIn = new Date(correction.requestedClockIn);
-    const newClockOut = new Date(correction.requestedClockOut);
-    const totalBreaks = attendance.breaks.reduce((acc, b) => acc + (b.durationMinutes || 0), 0);
-    const grossMinutes = Math.round((newClockOut.getTime() - newClockIn.getTime()) / 60000);
-    const netWorkMinutes = Math.max(0, grossMinutes - totalBreaks);
+    if (correction.type === 'BREAK' && correction.breakId) {
+      const bStart = new Date(correction.requestedBreakStart);
+      const bEnd = new Date(correction.requestedBreakEnd);
+      const bDuration = Math.max(1, Math.round((bEnd.getTime() - bStart.getTime()) / 60000));
 
-    // Update Attendance Record
-    await this.prisma.attendance.update({
-      where: { id: attendance.id },
-      data: {
-        clockIn: newClockIn,
-        clockOut: newClockOut,
-        totalWorkMinutes: netWorkMinutes,
-        notes: `${attendance.notes || ''} [CORRECTED by ${approverMembershipId}: ${correction.reason}]`.trim(),
-      },
-    });
+      await this.prisma.attendanceBreak.update({
+        where: { id: correction.breakId },
+        data: {
+          breakStart: bStart,
+          breakEnd: bEnd,
+          durationMinutes: bDuration,
+        },
+      });
+
+      const allBreaks = await this.prisma.attendanceBreak.findMany({
+        where: { attendanceId: attendance.id },
+      });
+      const totalBreaks = allBreaks.reduce((acc, b) => acc + (b.durationMinutes || 0), 0);
+      const grossMinutes = attendance.clockOut
+        ? Math.round((new Date(attendance.clockOut).getTime() - new Date(attendance.clockIn).getTime()) / 60000)
+        : Math.round((Date.now() - new Date(attendance.clockIn).getTime()) / 60000);
+      const netWorkMinutes = Math.max(0, grossMinutes - totalBreaks);
+
+      await this.prisma.attendance.update({
+        where: { id: attendance.id },
+        data: {
+          totalBreakMinutes: totalBreaks,
+          totalWorkMinutes: netWorkMinutes,
+          notes: `${attendance.notes || ''} [BREAK CORRECTED by ${approverMembershipId}: ${correction.reason}]`.trim(),
+        },
+      });
+    } else {
+      const newClockIn = new Date(correction.requestedClockIn);
+      const newClockOut = new Date(correction.requestedClockOut);
+      const totalBreaks = attendance.breaks.reduce((acc, b) => acc + (b.durationMinutes || 0), 0);
+      const grossMinutes = Math.round((newClockOut.getTime() - newClockIn.getTime()) / 60000);
+      const netWorkMinutes = Math.max(0, grossMinutes - totalBreaks);
+
+      // Update Attendance Record
+      await this.prisma.attendance.update({
+        where: { id: attendance.id },
+        data: {
+          clockIn: newClockIn,
+          clockOut: newClockOut,
+          totalWorkMinutes: netWorkMinutes,
+          notes: `${attendance.notes || ''} [CORRECTED by ${approverMembershipId}: ${correction.reason}]`.trim(),
+        },
+      });
+    }
 
     // Update Correction Request
     corrections[targetIndex] = {
@@ -920,7 +976,9 @@ export class TimeService {
       workspaceId,
       correction.membershipId,
       'Attendance Correction Approved',
-      `Your attendance correction for ${newClockIn.toLocaleDateString()} was approved.`,
+      correction.type === 'BREAK'
+        ? `Your break correction request was approved.`
+        : `Your attendance correction for ${new Date(correction.requestedClockIn).toLocaleDateString()} was approved.`,
       'SUCCESS',
       `corr-approved-${correction.id}`,
     );

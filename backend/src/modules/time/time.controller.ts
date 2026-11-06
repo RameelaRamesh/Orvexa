@@ -162,9 +162,13 @@ export class TimeController {
     @Body()
     body: {
       attendanceId: string;
-      requestedClockIn: string;
-      requestedClockOut: string;
+      requestedClockIn?: string;
+      requestedClockOut?: string;
       reason: string;
+      type?: 'ATTENDANCE' | 'BREAK';
+      breakId?: string;
+      requestedBreakStart?: string;
+      requestedBreakEnd?: string;
     },
   ) {
     return this.timeService.submitCorrection(workspaceId, req.membershipId, body);

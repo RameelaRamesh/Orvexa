@@ -26,6 +26,13 @@ import {
   Sunrise,
   Moon,
   ChevronRight,
+  Pause,
+  Timer,
+  Info,
+  HelpCircle,
+  ShieldAlert,
+  ArrowRight,
+  CornerDownRight,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -63,10 +70,23 @@ export default function TimeAttendancePage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
-  // Interactive Inputs
+  // Interactive Inputs & Break Tracking State
   const [sessionNotes, setSessionNotes] = useState('');
-  const [selectedBreakType, setSelectedBreakType] = useState('TEA_COFFEE');
+  const [selectedBreakType, setSelectedBreakType] = useState('SHORT_BREAK');
+  const [selectedBreakCategory, setSelectedBreakCategory] = useState('General Break');
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
+
+  // Clock-out Summary Modal State
+  const [showClockOutModal, setShowClockOutModal] = useState(false);
+  const [clockOutNotes, setClockOutNotes] = useState('');
+
+  // Break Correction Modal State
+  const [showBreakCorrectionModal, setShowBreakCorrectionModal] = useState(false);
+  const [breakCorrectionTarget, setBreakCorrectionTarget] = useState<any>(null);
+  const [requestedBreakStart, setRequestedBreakStart] = useState('');
+  const [requestedBreakEnd, setRequestedBreakEnd] = useState('');
+  const [breakCorrectionReason, setBreakCorrectionReason] = useState('');
+  const [submittingBreakCorrection, setSubmittingBreakCorrection] = useState(false);
 
   // Live ticking timer for real-time shift and break tracking
   useEffect(() => {
@@ -88,6 +108,128 @@ export default function TimeAttendancePage() {
 
     const pad = (n: number) => n.toString().padStart(2, '0');
     return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  const formatHMS = (totalSeconds: number) => {
+    if (isNaN(totalSeconds) || totalSeconds < 0) return '00:00:00';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = Math.floor(totalSeconds % 60);
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+  };
+
+  const formatReadableMinutes = (totalSeconds: number) => {
+    if (isNaN(totalSeconds) || totalSeconds < 0) return '0 mins';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes} mins`;
+  };
+
+  const formatTimeOnly = (dateStr: string | Date | null | undefined) => {
+    if (!dateStr) return '--:--';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '--:--';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  // Shift & Break Engine Metrics Calculation (Pauses Work Timer on Break, Separate Break Timer)
+  const calculateShiftLiveMetrics = () => {
+    if (!todayData?.clockIn) {
+      return {
+        isClockedIn: false,
+        isOnBreak: false,
+        grossShiftSeconds: 0,
+        totalBreakSeconds: 0,
+        completedBreakSeconds: 0,
+        currentBreakSeconds: 0,
+        netWorkSeconds: 0,
+        isOvernight: false,
+        breaksList: [] as any[],
+        activeBreak: null as any,
+        hoursWorkedDisplay: '00:00:00',
+        currentBreakDisplay: '00:00:00',
+        shiftSpanDisplay: '00:00:00',
+        totalBreaksDisplay: '0 mins',
+        overtimeMinutes: 0,
+        statusCheck: 'NOT_CLOCKED_IN',
+      };
+    }
+
+    const nowMs = currentTime ? currentTime.getTime() : Date.now();
+    const clockInMs = new Date(todayData.clockIn).getTime();
+    const clockOutMs = todayData.clockOut ? new Date(todayData.clockOut).getTime() : null;
+
+    const endPointMs = clockOutMs || nowMs;
+    const grossShiftSeconds = Math.max(0, Math.floor((endPointMs - clockInMs) / 1000));
+
+    // Current session breaks list
+    const breaksList: any[] = Array.isArray(todayData.breaks) ? [...todayData.breaks] : [];
+    breaksList.sort((a, b) => new Date(a.breakStart).getTime() - new Date(b.breakStart).getTime());
+
+    const activeBreak = breaksList.find((b: any) => !b.breakEnd) || todayData?.todaySummary?.activeBreak || null;
+    const isOnBreak = !!activeBreak;
+
+    let completedBreakSeconds = 0;
+    breaksList.forEach((b: any) => {
+      if (b.breakEnd) {
+        const bStartMs = new Date(b.breakStart).getTime();
+        const bEndMs = new Date(b.breakEnd).getTime();
+        if (!isNaN(bStartMs) && !isNaN(bEndMs) && bEndMs >= bStartMs) {
+          completedBreakSeconds += Math.floor((bEndMs - bStartMs) / 1000);
+        }
+      }
+    });
+
+    let currentBreakSeconds = 0;
+    if (isOnBreak && activeBreak?.breakStart) {
+      const activeStartMs = new Date(activeBreak.breakStart).getTime();
+      if (!isNaN(activeStartMs)) {
+        currentBreakSeconds = Math.max(0, Math.floor((nowMs - activeStartMs) / 1000));
+      }
+    }
+
+    const totalBreakSeconds = completedBreakSeconds + currentBreakSeconds;
+    const netWorkSeconds = Math.max(0, grossShiftSeconds - totalBreakSeconds);
+
+    const isOvernight = new Date(clockInMs).toDateString() !== new Date(endPointMs).toDateString();
+    const overtimeThresholdMins = policy?.overtimeThresholdMinutes || 480;
+    const netWorkMins = Math.floor(netWorkSeconds / 60);
+    const overtimeMinutes = Math.max(0, netWorkMins - overtimeThresholdMins);
+
+    const fullDayMins = policy?.fullDayMinutes || 480;
+    const halfDayMins = policy?.halfDayMinutes || 240;
+
+    let statusCheck = 'IN_PROGRESS';
+    if (netWorkMins >= fullDayMins) {
+      statusCheck = 'FULL_DAY_MET';
+    } else if (netWorkMins >= halfDayMins) {
+      statusCheck = 'HALF_DAY_MET';
+    } else {
+      statusCheck = 'UNDER_MINIMUM';
+    }
+
+    return {
+      isClockedIn: !todayData.clockOut,
+      isOnBreak,
+      grossShiftSeconds,
+      totalBreakSeconds,
+      completedBreakSeconds,
+      currentBreakSeconds,
+      netWorkSeconds,
+      isOvernight,
+      breaksList,
+      activeBreak,
+      hoursWorkedDisplay: formatHMS(netWorkSeconds),
+      currentBreakDisplay: formatHMS(currentBreakSeconds),
+      shiftSpanDisplay: formatHMS(grossShiftSeconds),
+      totalBreaksDisplay: `${Math.round(totalBreakSeconds / 60)} mins`,
+      overtimeMinutes,
+      statusCheck,
+    };
   };
 
   // Correction Modal State
@@ -260,11 +402,23 @@ export default function TimeAttendancePage() {
     }
     loadAllData();
 
+    // Instant cross-component sync listener (e.g. top header navbar Start Break / End Break / Clock Out)
+    const handleSyncEvent = () => {
+      loadAllData();
+    };
+    window.addEventListener('attendance-updated', handleSyncEvent);
+    window.addEventListener('time-engine-updated', handleSyncEvent);
+
     // Periodic live sync every 30s
     const syncInterval = setInterval(() => {
       loadAllData();
     }, 30000);
-    return () => clearInterval(syncInterval);
+
+    return () => {
+      clearInterval(syncInterval);
+      window.removeEventListener('attendance-updated', handleSyncEvent);
+      window.removeEventListener('time-engine-updated', handleSyncEvent);
+    };
   }, [filterDate]);
 
   // Clock Actions
@@ -297,6 +451,8 @@ export default function TimeAttendancePage() {
       );
       setSessionNotes('');
       await loadAllData();
+      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('time-engine-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Error clocking in');
     } finally {
@@ -304,7 +460,8 @@ export default function TimeAttendancePage() {
     }
   };
 
-  const handleClockOut = async () => {
+  // Open Clock-out Confirmation and Summary Modal
+  const handleOpenClockOutModal = () => {
     if (isAttendanceDisabled) {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
       return;
@@ -313,6 +470,12 @@ export default function TimeAttendancePage() {
       toast.error('You do not have permission to clock out. Please request the attendance:clock permission.');
       return;
     }
+    setClockOutNotes(sessionNotes || '');
+    setShowClockOutModal(true);
+  };
+
+  // Final Clock Out Execution
+  const executeClockOut = async () => {
     setActionLoading(true);
     try {
       const res = await fetch(`${BRANDING.apiUrl}/time/clock-out`, {
@@ -322,13 +485,17 @@ export default function TimeAttendancePage() {
           Authorization: `Bearer ${token}`,
           'x-workspace-id': wsId!,
         },
-        body: JSON.stringify({ notes: sessionNotes || undefined }),
+        body: JSON.stringify({ notes: clockOutNotes.trim() || sessionNotes.trim() || undefined }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to clock out');
-      toast.success(`Clocked out! Work Session completed: ${data.totalWorkMinutes || 0} mins worked.`);
+      toast.success(`Clocked out successfully! ${data.totalWorkMinutes || 0} net productive minutes recorded.`);
+      setShowClockOutModal(false);
+      setClockOutNotes('');
       setSessionNotes('');
       await loadAllData();
+      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('time-engine-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Error clocking out');
     } finally {
@@ -336,7 +503,8 @@ export default function TimeAttendancePage() {
     }
   };
 
-  const handleStartBreak = async () => {
+  // Neutral Break Engine: Start Break immediately without forcing category choice
+  const handleStartBreak = async (overrideCategory?: string) => {
     if (isAttendanceDisabled) {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
       return;
@@ -347,6 +515,8 @@ export default function TimeAttendancePage() {
     }
     setActionLoading(true);
     try {
+      const categoryToUse = overrideCategory || selectedBreakCategory || 'General Break';
+      const typeCode = categoryToUse.toUpperCase().replace(/[\s/]+/g, '_');
       const res = await fetch(`${BRANDING.apiUrl}/time/break/start`, {
         method: 'POST',
         headers: {
@@ -354,12 +524,18 @@ export default function TimeAttendancePage() {
           Authorization: `Bearer ${token}`,
           'x-workspace-id': wsId!,
         },
-        body: JSON.stringify({ breakType: selectedBreakType }),
+        body: JSON.stringify({
+          breakType: typeCode,
+          notes: sessionNotes.trim() || categoryToUse,
+        }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to start break');
-      toast.success(`Break started: ${selectedBreakType}`);
+      toast.success(`Break started: ${categoryToUse}. Work timer paused, break timer active.`);
+      setSessionNotes('');
       await loadAllData();
+      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('time-engine-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Error starting break');
     } finally {
@@ -367,6 +543,7 @@ export default function TimeAttendancePage() {
     }
   };
 
+  // End Break: Resume work session immediately
   const handleEndBreak = async () => {
     if (isAttendanceDisabled) {
       toast.error('Attendance & Shifts module is disabled in Workspace Settings.');
@@ -388,12 +565,65 @@ export default function TimeAttendancePage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to end break');
-      toast.success('Break ended - Welcome back to shift!');
+      toast.success('Break ended - Work session resumed!');
       await loadAllData();
+      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('time-engine-updated'));
     } catch (err: any) {
       toast.error(err.message || 'Error ending break');
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // Accidental Break Correction Handling
+  const handleOpenBreakCorrection = (breakItem: any, index: number) => {
+    setBreakCorrectionTarget({ ...breakItem, index });
+    const startStr = breakItem.breakStart
+      ? new Date(breakItem.breakStart).toISOString().slice(0, 16)
+      : new Date().toISOString().slice(0, 16);
+    const endStr = breakItem.breakEnd
+      ? new Date(breakItem.breakEnd).toISOString().slice(0, 16)
+      : new Date().toISOString().slice(0, 16);
+    setRequestedBreakStart(startStr);
+    setRequestedBreakEnd(endStr);
+    setBreakCorrectionReason('');
+    setShowBreakCorrectionModal(true);
+  };
+
+  const handleSubmitBreakCorrection = async () => {
+    if (!todayData?.id || !breakCorrectionTarget || !requestedBreakStart || !requestedBreakEnd || !breakCorrectionReason.trim()) {
+      toast.error('Please provide requested break start, end, and an explanatory reason');
+      return;
+    }
+    setSubmittingBreakCorrection(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/time/corrections`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'x-workspace-id': wsId!,
+        },
+        body: JSON.stringify({
+          attendanceId: todayData.id,
+          type: 'BREAK',
+          breakId: breakCorrectionTarget.id,
+          requestedBreakStart,
+          requestedBreakEnd,
+          reason: `[BREAK CORRECTION #${breakCorrectionTarget.index}] ${breakCorrectionReason.trim()}`,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to submit break correction');
+      toast.success('Break correction request submitted for manager approval');
+      setShowBreakCorrectionModal(false);
+      setBreakCorrectionReason('');
+      await loadAllData();
+    } catch (err: any) {
+      toast.error(err.message || 'Error submitting break correction');
+    } finally {
+      setSubmittingBreakCorrection(false);
     }
   };
 
@@ -622,12 +852,13 @@ export default function TimeAttendancePage() {
     }
   };
 
-  const isClockedIn = !!todayData?.todaySummary?.isClockedIn;
-  const isOnBreak = !!todayData?.todaySummary?.isOnBreak;
-  const activeBreak = todayData?.todaySummary?.activeBreak;
+  const liveMetrics = calculateShiftLiveMetrics();
+  const isClockedIn = liveMetrics.isClockedIn;
+  const isOnBreak = liveMetrics.isOnBreak;
+  const activeBreak = liveMetrics.activeBreak;
   const allTodaySessions = todayData?.allSessions || [];
-  const sessionsCount = todayData?.todaySummary?.sessionsCount || 0;
-  const canClockInAgain = !!todayData?.todaySummary?.canClockInAgain;
+  const sessionsCount = todayData?.todaySummary?.sessionsCount || (allTodaySessions.length > 0 ? allTodaySessions.length : (todayData?.clockIn ? 1 : 0));
+  const canClockInAgain = !isClockedIn && (todayData?.todaySummary?.canClockInAgain ?? true);
 
   // Filter logs
   const filteredLogs = attendanceList.filter((a) => {
@@ -813,227 +1044,337 @@ export default function TimeAttendancePage() {
 
           {/* Real-time Status Card - Only shown if authorized and attendance enabled */}
           {canAccessShiftTracker && (
-            <Card className="border-border bg-card shadow-sm">
-              <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <Card className="border-border bg-card shadow-sm overflow-hidden">
+              <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 gap-3 bg-surface-secondary/20 border-b border-border">
                 <div>
-                  <CardTitle className="text-lg">My Today Shift Tracker</CardTitle>
-                <CardDescription>
-                  {todayData?.todaySummary?.assignedShift
-                    ? `Assigned Shift: ${todayData.todaySummary.assignedShift.name} (${todayData.todaySummary.assignedShift.startTime} - ${todayData.todaySummary.assignedShift.endTime})`
-                    : 'Standard Organization Shift (9:00 AM - 5:00 PM)'}
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2">
-                {todayData?.todaySummary?.isOnLeave && (
-                  <Badge variant="outline" className="border-indigo-400 text-indigo-700 dark:text-indigo-300">
-                    Approved Leave
-                  </Badge>
-                )}
-                {todayData?.todaySummary?.isHoliday && (
-                  <Badge variant="outline" className="border-emerald-400 text-emerald-700 dark:text-emerald-300">
-                    Holiday: {todayData.todaySummary.holidayName}
-                  </Badge>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 p-4 rounded-xl bg-surface-secondary/40 border border-border">
-                <div className="flex items-center gap-4">
-                  <div
-                    className={`h-16 w-16 rounded-2xl flex items-center justify-center transition-colors ${
-                      isAttendanceDisabled
-                        ? 'bg-muted text-muted-foreground'
-                        : isOnBreak
-                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                        : isClockedIn
-                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                        : sessionsCount > 0
-                        ? 'bg-primary/10 text-primary'
-                        : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    {isOnBreak ? (
-                      <Coffee className="h-8 w-8 animate-pulse" />
-                    ) : isClockedIn ? (
-                      <Clock className="h-8 w-8" />
-                    ) : (
-                      <Sunrise className="h-8 w-8" />
+                  <div className="flex items-center gap-2">
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <Clock className="h-5 w-5 text-primary" />
+                      My Today Shift Tracker
+                    </CardTitle>
+                    {liveMetrics.isOvernight && (
+                      <Badge variant="outline" className="border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 gap-1 text-[11px]">
+                        <Moon className="h-3 w-3" /> Overnight Shift (Crossed Midnight)
+                      </Badge>
                     )}
                   </div>
-                  <div>
-                    <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                      Current Shift State
-                    </div>
-                    <div className="text-xl font-bold text-foreground mt-0.5">
-                      {isAttendanceDisabled ? (
-                        'Attendance Disabled'
-                      ) : isOnBreak ? (
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="text-amber-600 dark:text-amber-400">
-                            On Break ({activeBreak?.breakType === 'TEA_COFFEE' ? 'Tea Break' : (activeBreak?.breakType || 'Break').replace('_', ' ')})
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
-                            <span className="relative flex h-2 w-2">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                            </span>
-                            <span>LIVE BREAK: {formatElapsed(activeBreak?.breakStart)}</span>
-                          </span>
-                        </div>
-                      ) : isClockedIn ? (
-                        <div className="flex flex-wrap items-center gap-2.5">
-                          <span className="text-emerald-600 dark:text-emerald-400">
-                            Active On Shift (Session #{sessionsCount})
-                          </span>
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                            <span className="relative flex h-2 w-2">
-                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                            </span>
-                            <span>LIVE: {formatElapsed(todayData?.clockIn)}</span>
-                          </span>
-                        </div>
-                      ) : sessionsCount > 0 ? (
-                        <span>
-                          Shift Completed ({sessionsCount} session{sessionsCount > 1 ? 's' : ''} logged)
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">Not Clocked In Today</span>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      {isOnBreak ? (
-                        <span>
-                          Break Started at {new Date(activeBreak?.breakStart).toLocaleTimeString()} • Break Elapsed: <strong className="font-mono text-foreground">{formatElapsed(activeBreak?.breakStart)}</strong>
-                        </span>
-                      ) : isClockedIn ? (
-                        <span>
-                          Clocked In at {new Date(todayData.clockIn).toLocaleTimeString()} • Live Elapsed: <strong className="font-mono text-foreground">{formatElapsed(todayData.clockIn)}</strong> • Today&apos;s Total Work: {todayData.todaySummary?.totalWorkHours || '0'} hrs
-                        </span>
-                      ) : sessionsCount > 0 ? (
-                        <span>
-                          Total Today: {todayData.todaySummary?.totalWorkHours || '0'} hrs worked across {sessionsCount} session(s)
-                        </span>
-                      ) : (
-                        <span>Ready to start work. Multiple sessions per day permitted.</span>
-                      )}
-                    </div>
-                  </div>
+                  <CardDescription className="text-xs mt-1">
+                    {todayData?.todaySummary?.assignedShift
+                      ? `Assigned Shift: ${todayData.todaySummary.assignedShift.name} (${todayData.todaySummary.assignedShift.startTime} - ${todayData.todaySummary.assignedShift.endTime})`
+                      : 'Standard Organization Shift (9:00 AM - 5:00 PM)'}
+                  </CardDescription>
                 </div>
-
-                {/* Action Controls */}
-                <div className="flex flex-wrap items-center gap-2.5">
-                  {isAttendanceDisabled ? (
-                    <Button disabled size="lg" className="opacity-50">
-                      Module Disabled
-                    </Button>
-                  ) : isClockedIn ? (
-                    isOnBreak ? (
-                      <>
-                        <Button
-                          size="lg"
-                          onClick={handleEndBreak}
-                          disabled={actionLoading}
-                          className="bg-amber-600 hover:bg-amber-700 text-white gap-2 shadow-sm"
-                        >
-                          <Play className="h-4 w-4" /> End Break &amp; Resume
-                        </Button>
-                        <Button
-                          size="lg"
-                          variant="destructive"
-                          onClick={handleClockOut}
-                          disabled={actionLoading}
-                          className="gap-2 shadow-sm"
-                        >
-                          <Square className="h-4 w-4" /> End Shift (Clock Out)
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <div className="flex items-center gap-1.5">
-                          <select
-                            value={selectedBreakType}
-                            onChange={(e) => setSelectedBreakType(e.target.value)}
-                            className="h-10 text-xs px-2.5 rounded-lg border border-border bg-background text-foreground"
-                          >
-                            <option value="TEA_COFFEE">Tea/Coffee Break</option>
-                            <option value="SHORT_BREAK">Short Break</option>
-                            <option value="LUNCH">Lunch Break</option>
-                            <option value="PERSONAL">Personal Break</option>
-                          </select>
-                          <Button
-                            size="lg"
-                            variant="outline"
-                            onClick={handleStartBreak}
-                            disabled={actionLoading}
-                            className="gap-2 border-amber-500/50 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                          >
-                            <Coffee className="h-4 w-4" /> Take Break
-                          </Button>
-                        </div>
-                        <Button
-                          size="lg"
-                          variant="destructive"
-                          onClick={handleClockOut}
-                          disabled={actionLoading}
-                          className="gap-2 shadow-sm"
-                        >
-                          <Square className="h-4 w-4" /> End Shift (Clock Out)
-                        </Button>
-                      </>
-                    )
-                  ) : canClockInAgain ? (
-                    <Button size="lg" onClick={handleClockIn} disabled={actionLoading} className="gap-2 shadow-sm">
-                      <Play className="h-4 w-4" /> {sessionsCount > 0 ? `Clock In Session #${sessionsCount + 1}` : 'Start Shift (Clock In)'}
-                    </Button>
-                  ) : (
-                    <Badge variant="outline" className="py-2.5 px-4 text-xs font-semibold">
-                      Daily Session Limit Reached
+                <div className="flex items-center gap-2">
+                  {todayData?.todaySummary?.isOnLeave && (
+                    <Badge variant="outline" className="border-indigo-400 text-indigo-700 dark:text-indigo-300">
+                      Approved Leave
+                    </Badge>
+                  )}
+                  {todayData?.todaySummary?.isHoliday && (
+                    <Badge variant="outline" className="border-emerald-400 text-emerald-700 dark:text-emerald-300">
+                      Holiday: {todayData.todaySummary.holidayName}
                     </Badge>
                   )}
                 </div>
-              </div>
+              </CardHeader>
 
-              {/* Optional Notes Input */}
-              <div className="flex items-center gap-3">
-                <input
-                  type="text"
-                  placeholder="Optional note for current action (e.g. Remote work, field visit, project assignment)..."
-                  value={sessionNotes}
-                  onChange={(e) => setSessionNotes(e.target.value)}
-                  className="flex-1 text-xs px-3.5 py-2.5 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-              </div>
+              <CardContent className="space-y-6 pt-6">
+                {/* DUAL LIVE TIMERS DISPLAY */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Timer 1: Live Work-Session Timer (Net Productive Time) */}
+                  <div className={`p-5 rounded-2xl border transition-all ${
+                    isOnBreak
+                      ? 'bg-muted/30 border-dashed border-amber-400/60 dark:border-amber-600/60'
+                      : isClockedIn
+                      ? 'bg-emerald-500/[0.04] border-emerald-500/30 ring-1 ring-emerald-500/10'
+                      : 'bg-surface-secondary/30 border-border'
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                        <Timer className="h-4 w-4" />
+                        <span>Work Session Timer (Net)</span>
+                      </div>
+                      {isOnBreak ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
+                          <Pause className="h-3 w-3" />
+                          <span>PAUSED DURING BREAK</span>
+                        </span>
+                      ) : isClockedIn ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                          </span>
+                          <span>ACTIVE WORK SESSION</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground font-medium">Ready to Clock In</span>
+                      )}
+                    </div>
 
-              {/* Today's Metrics Bar */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
-                <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                  <div className="text-[11px] font-medium text-muted-foreground uppercase">Work Hours Today</div>
-                  <div className="text-xl font-bold text-foreground mt-1">
-                    {todayData?.todaySummary?.totalWorkHours || '0'} hrs
+                    <div className="font-mono text-3xl sm:text-4xl font-bold tracking-tight text-foreground">
+                      {liveMetrics.hoursWorkedDisplay}
+                    </div>
+
+                    <div className="text-xs text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {isClockedIn ? (
+                        <>
+                          <span>Shift Span (Gross): <strong className="font-mono text-foreground">{liveMetrics.shiftSpanDisplay}</strong></span>
+                          <span>&bull;</span>
+                          <span>Clocked In: <strong className="text-foreground">{formatTimeOnly(todayData?.clockIn)}</strong></span>
+                        </>
+                      ) : sessionsCount > 0 ? (
+                        <span>Completed {sessionsCount} session(s) today. Ready for next session.</span>
+                      ) : (
+                        <span>Tap &ldquo;Start Shift (Clock In)&rdquo; to begin tracking productive time.</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Timer 2: Current-Break Timer */}
+                  <div className={`p-5 rounded-2xl border transition-all ${
+                    isOnBreak
+                      ? 'bg-amber-500/[0.08] border-amber-500 ring-2 ring-amber-500/20 shadow-sm'
+                      : 'bg-surface-secondary/30 border-border opacity-90'
+                  }`}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                        <Coffee className="h-4 w-4" />
+                        <span>Current Break Timer</span>
+                      </div>
+                      {isOnBreak ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40">
+                          <span className="relative flex h-2 w-2">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-600"></span>
+                          </span>
+                          <span>BREAK IN PROGRESS</span>
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground font-medium">Inactive &bull; Working</span>
+                      )}
+                    </div>
+
+                    <div className={`font-mono text-3xl sm:text-4xl font-bold tracking-tight ${
+                      isOnBreak ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/60'
+                    }`}>
+                      {liveMetrics.currentBreakDisplay}
+                    </div>
+
+                    <div className="text-xs text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+                      {isOnBreak ? (
+                        <>
+                          <span>Break Category: <strong className="text-foreground">{(activeBreak?.breakType || selectedBreakCategory || 'General Break').replace(/_/g, ' ')}</strong></span>
+                          <span>&bull;</span>
+                          <span>Started at: <strong className="text-foreground">{formatTimeOnly(activeBreak?.breakStart)}</strong></span>
+                        </>
+                      ) : (
+                        <>
+                          <span>Breaks Taken: <strong className="text-foreground">{liveMetrics.breaksList.length}</strong></span>
+                          <span>&bull;</span>
+                          <span>Total Break Time: <strong className="text-foreground">{liveMetrics.totalBreaksDisplay}</strong></span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
-                <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                  <div className="text-[11px] font-medium text-muted-foreground uppercase">Breaks Taken</div>
-                  <div className="text-xl font-bold text-foreground mt-1">
-                    {todayData?.todaySummary?.totalBreakMinutes || 0} mins
+
+                {/* ACTION CONTROLS WITH NEUTRAL WORDING */}
+                <div className="p-4 rounded-xl border border-border bg-surface-secondary/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="text-xs text-muted-foreground">
+                    {isAttendanceDisabled ? (
+                      <span>Attendance module is disabled in Workspace Settings.</span>
+                    ) : isOnBreak ? (
+                      <span className="text-amber-700 dark:text-amber-300 flex items-center gap-1.5 font-medium">
+                        <Coffee className="h-4 w-4 shrink-0" />
+                        Currently on break. Tap <strong>&ldquo;End break&rdquo;</strong> to immediately resume your work session timer.
+                      </span>
+                    ) : isClockedIn ? (
+                      <span className="flex items-center gap-1.5 text-foreground">
+                        <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
+                        Work session is active. Take breaks whenever needed; tracking records actual timestamps.
+                      </span>
+                    ) : (
+                      <span>Clock in to begin your shift session. Supports multiple sessions and breaks.</span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                    {isAttendanceDisabled ? (
+                      <Button disabled size="lg" className="opacity-50">Module Disabled</Button>
+                    ) : isClockedIn ? (
+                      isOnBreak ? (
+                        <>
+                          {/* ON BREAK: Primary action is "End break" */}
+                          <Button
+                            size="lg"
+                            onClick={handleEndBreak}
+                            disabled={actionLoading}
+                            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-semibold shadow-sm"
+                          >
+                            <Play className="h-4 w-4" /> End break
+                          </Button>
+                          <Button
+                            size="lg"
+                            variant="destructive"
+                            onClick={handleOpenClockOutModal}
+                            disabled={actionLoading}
+                            className="gap-2 shadow-sm font-semibold"
+                          >
+                            <Square className="h-4 w-4" /> Clock Out
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          {/* WORKING: Primary action is "Start break" with optional neutral category */}
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={selectedBreakCategory}
+                              onChange={(e) => setSelectedBreakCategory(e.target.value)}
+                              className="h-10 text-xs px-2.5 rounded-lg border border-border bg-background text-foreground"
+                              title="Optional break category (not mandatory)"
+                            >
+                              <option value="General Break">General Break</option>
+                              <option value="Short Rest">Short Rest</option>
+                              <option value="Lunch Break">Lunch Break</option>
+                              <option value="Tea / Coffee">Tea / Coffee</option>
+                              <option value="Personal Break">Personal Break</option>
+                            </select>
+                            <Button
+                              size="lg"
+                              onClick={() => handleStartBreak()}
+                              disabled={actionLoading}
+                              className="bg-amber-600 hover:bg-amber-700 text-white gap-2 font-semibold shadow-sm"
+                            >
+                              <Coffee className="h-4 w-4" /> Start break
+                            </Button>
+                          </div>
+                          <Button
+                            size="lg"
+                            variant="destructive"
+                            onClick={handleOpenClockOutModal}
+                            disabled={actionLoading}
+                            className="gap-2 shadow-sm font-semibold"
+                          >
+                            <Square className="h-4 w-4" /> Clock Out
+                          </Button>
+                        </>
+                      )
+                    ) : canClockInAgain ? (
+                      <Button size="lg" onClick={handleClockIn} disabled={actionLoading} className="gap-2 shadow-sm font-semibold">
+                        <Play className="h-4 w-4" /> {sessionsCount > 0 ? `Clock In Session #${sessionsCount + 1}` : 'Start Shift (Clock In)'}
+                      </Button>
+                    ) : (
+                      <Badge variant="outline" className="py-2.5 px-4 text-xs font-semibold">
+                        Daily Session Limit Reached
+                      </Badge>
+                    )}
                   </div>
                 </div>
-                <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                  <div className="text-[11px] font-medium text-muted-foreground uppercase">Sessions Count</div>
-                  <div className="text-xl font-bold text-foreground mt-1">
-                    {sessionsCount} / {todayData?.todaySummary?.policy?.maxDailySessions || 5}
+
+                {/* OPTIONAL NOTES INPUT */}
+                <div className="flex items-center gap-3">
+                  <input
+                    type="text"
+                    placeholder="Optional note for current action or shift handoff (e.g. Remote work, client meeting, specific task)..."
+                    value={sessionNotes}
+                    onChange={(e) => setSessionNotes(e.target.value)}
+                    className="flex-1 text-xs px-3.5 py-2.5 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                </div>
+
+                {/* TODAY'S METRICS BAR */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
+                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Net Productive Time</div>
+                    <div className="text-xl font-bold font-mono text-foreground mt-1">
+                      {liveMetrics.hoursWorkedDisplay}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
+                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Total Break Time</div>
+                    <div className="text-xl font-bold font-mono text-foreground mt-1">
+                      {liveMetrics.totalBreaksDisplay}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
+                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Breaks Count</div>
+                    <div className="text-xl font-bold text-foreground mt-1">
+                      {liveMetrics.breaksList.length} break{liveMetrics.breaksList.length === 1 ? '' : 's'}
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
+                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Overtime Accrued</div>
+                    <div className="text-xl font-bold font-mono text-foreground mt-1">
+                      {liveMetrics.overtimeMinutes} mins
+                    </div>
                   </div>
                 </div>
-                <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                  <div className="text-[11px] font-medium text-muted-foreground uppercase">Overtime</div>
-                  <div className="text-xl font-bold text-foreground mt-1">
-                    {todayData?.todaySummary?.overtimeMinutes || 0} mins
+
+                {/* CURRENT SHIFT BREAKS BREAKDOWN LIST */}
+                {(liveMetrics.breaksList.length > 0 || isOnBreak) && (
+                  <div className="rounded-xl border border-border overflow-hidden">
+                    <div className="px-4 py-3 bg-surface-secondary/30 border-b border-border flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Coffee className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                        <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                          Current Shift Breaks Breakdown ({liveMetrics.breaksList.length})
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-muted-foreground">
+                        Timestamps recorded accurately. Auto-calculated durations.
+                      </span>
+                    </div>
+
+                    <div className="divide-y divide-border">
+                      {liveMetrics.breaksList.map((b: any, bIdx: number) => {
+                        const isCurrentActive = !b.breakEnd;
+                        const durationMins = isCurrentActive
+                          ? Math.round(liveMetrics.currentBreakSeconds / 60)
+                          : (b.durationMinutes || Math.round((new Date(b.breakEnd).getTime() - new Date(b.breakStart).getTime()) / 60000));
+                        const categoryName = (b.breakType || 'General Break').replace(/_/g, ' ');
+
+                        return (
+                          <div key={b.id || bIdx} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                            <div className="flex items-center gap-3">
+                              <span className="font-bold text-foreground min-w-[65px]">
+                                Break #{bIdx + 1}
+                              </span>
+                              <Badge variant="outline" className="text-[11px] border-amber-500/30 text-amber-700 dark:text-amber-300 bg-amber-500/10">
+                                {categoryName}
+                              </Badge>
+                              <div className="text-muted-foreground flex flex-wrap items-center gap-x-2">
+                                <span>Start: <strong className="text-foreground">{formatTimeOnly(b.breakStart)}</strong></span>
+                                <span>&rarr;</span>
+                                <span>End: {isCurrentActive ? (
+                                  <span className="text-amber-600 dark:text-amber-400 font-bold animate-pulse">In Progress...</span>
+                                ) : (
+                                  <strong className="text-foreground">{formatTimeOnly(b.breakEnd)}</strong>
+                                )}</span>
+                                <span>&bull;</span>
+                                <span>Duration: <strong className="font-mono text-foreground">{durationMins} mins</strong></span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleOpenBreakCorrection(b, bIdx + 1)}
+                                className="h-7 px-2.5 text-[11px] text-muted-foreground hover:text-foreground gap-1 border border-border/60"
+                              >
+                                <FileText className="h-3 w-3" /> Request Correction
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                )}
+
+              </CardContent>
+            </Card>
           )}
 
           {/* Today's Multi-Session Timeline */}
@@ -1292,42 +1633,62 @@ export default function TimeAttendancePage() {
                 </div>
               ) : (
                 <div className="divide-y divide-border">
-                  {correctionsList.map((c) => (
-                    <div key={c.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                      <div className="space-y-1.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-foreground text-sm">{c.employeeName}</span>
-                          {c.status === 'PENDING' ? (
-                            <Badge variant="outline" className="border-amber-400 text-amber-700">PENDING APPROVAL</Badge>
-                          ) : c.status === 'APPROVED' ? (
-                            <Badge variant="success">APPROVED</Badge>
-                          ) : (
-                            <Badge variant="destructive">REJECTED</Badge>
-                          )}
+                  {correctionsList.map((c) => {
+                    const isBreakCorr = c.type === 'BREAK' || c.reason?.includes('BREAK CORRECTION');
+                    return (
+                      <div key={c.id} className="py-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-foreground text-sm">{c.employeeName}</span>
+                            {isBreakCorr && (
+                              <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-700 dark:text-amber-300 bg-amber-500/10 gap-1">
+                                <Coffee className="h-3 w-3" /> Break Correction
+                              </Badge>
+                            )}
+                            {c.status === 'PENDING' ? (
+                              <Badge variant="outline" className="border-amber-400 text-amber-700">PENDING APPROVAL</Badge>
+                            ) : c.status === 'APPROVED' ? (
+                              <Badge variant="success">APPROVED</Badge>
+                            ) : (
+                              <Badge variant="destructive">REJECTED</Badge>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {isBreakCorr ? (
+                              <>
+                                <span>Original Break: {c.originalBreakStart ? new Date(c.originalBreakStart).toLocaleTimeString() : 'Start'} &rarr; {c.originalBreakEnd ? new Date(c.originalBreakEnd).toLocaleTimeString() : 'In Progress'}</span>
+                                <span className="mx-2 font-bold text-foreground">&bull;</span>
+                                <span className="text-foreground font-semibold">
+                                  Requested Break: {c.requestedBreakStart ? new Date(c.requestedBreakStart).toLocaleTimeString() : (c.requestedClockIn ? new Date(c.requestedClockIn).toLocaleTimeString() : '--')} &rarr; {c.requestedBreakEnd ? new Date(c.requestedBreakEnd).toLocaleTimeString() : (c.requestedClockOut ? new Date(c.requestedClockOut).toLocaleTimeString() : '--')}
+                                </span>
+                              </>
+                            ) : (
+                              <>
+                                <span>Original: {new Date(c.originalClockIn).toLocaleTimeString()} &rarr; {c.originalClockOut ? new Date(c.originalClockOut).toLocaleTimeString() : 'Missing'}</span>
+                                <span className="mx-2 font-bold text-foreground">&bull;</span>
+                                <span className="text-foreground font-semibold">
+                                  Requested: {new Date(c.requestedClockIn).toLocaleTimeString()} &rarr; {new Date(c.requestedClockOut).toLocaleTimeString()}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Justification: &ldquo;<span className="text-foreground">{c.reason}</span>&rdquo;
+                          </div>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          <span>Original: {new Date(c.originalClockIn).toLocaleTimeString()} &rarr; {c.originalClockOut ? new Date(c.originalClockOut).toLocaleTimeString() : 'Missing'}</span>
-                          <span className="mx-2 font-bold text-foreground">&bull;</span>
-                          <span className="text-foreground font-semibold">
-                            Requested: {new Date(c.requestedClockIn).toLocaleTimeString()} &rarr; {new Date(c.requestedClockOut).toLocaleTimeString()}
-                          </span>
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Justification: &ldquo;<span className="text-foreground">{c.reason}</span>&rdquo;
-                        </div>
+                        {c.status === 'PENDING' && (
+                          <div className="flex items-center gap-2">
+                            <Button size="sm" onClick={() => handleApproveCorrection(c.id)} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs">
+                              <Check className="h-3.5 w-3.5" /> Approve
+                            </Button>
+                            <Button size="sm" variant="destructive" onClick={() => handleRejectCorrection(c.id)} className="gap-1 text-xs">
+                              <XCircle className="h-3.5 w-3.5" /> Reject
+                            </Button>
+                          </div>
+                        )}
                       </div>
-                      {c.status === 'PENDING' && (
-                        <div className="flex items-center gap-2">
-                          <Button size="sm" onClick={() => handleApproveCorrection(c.id)} className="gap-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs">
-                            <Check className="h-3.5 w-3.5" /> Approve
-                          </Button>
-                          <Button size="sm" variant="destructive" onClick={() => handleRejectCorrection(c.id)} className="gap-1 text-xs">
-                            <XCircle className="h-3.5 w-3.5" /> Reject
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
@@ -1825,6 +2186,247 @@ export default function TimeAttendancePage() {
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: CLOCK-OUT SUMMARY & POLICY EXCEPTION CHECKS
+          ========================================================================= */}
+      {showClockOutModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-2xl shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-xl bg-destructive/10 text-destructive flex items-center justify-center">
+                  <Square className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-foreground">Clock-Out Shift Summary</h3>
+                  <p className="text-xs text-muted-foreground">Reconciliation &amp; policy exception checks</p>
+                </div>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowClockOutModal(false)}
+                className="h-8 w-8 p-0 text-muted-foreground"
+              >
+                &times;
+              </Button>
+            </div>
+
+            {/* Metrics Breakdown Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-surface-secondary/40 border border-border">
+                <div className="text-[11px] font-medium text-muted-foreground uppercase">Shift Span (Gross)</div>
+                <div className="text-lg font-bold font-mono text-foreground mt-0.5">
+                  {liveMetrics.shiftSpanDisplay}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {formatReadableMinutes(liveMetrics.grossShiftSeconds)}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-surface-secondary/40 border border-border">
+                <div className="text-[11px] font-medium text-muted-foreground uppercase">Total Break Time</div>
+                <div className="text-lg font-bold font-mono text-amber-600 dark:text-amber-400 mt-0.5">
+                  {liveMetrics.totalBreaksDisplay}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {liveMetrics.breaksList.length} break{liveMetrics.breaksList.length === 1 ? '' : 's'} logged
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-surface-secondary/40 border border-border col-span-2 sm:col-span-1">
+                <div className="text-[11px] font-medium text-muted-foreground uppercase">Net Worked Time</div>
+                <div className="text-lg font-bold font-mono text-emerald-600 dark:text-emerald-400 mt-0.5">
+                  {liveMetrics.hoursWorkedDisplay}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {formatReadableMinutes(liveMetrics.netWorkSeconds)}
+                </div>
+              </div>
+            </div>
+
+            {/* Policy & Exception Checks */}
+            <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20 space-y-2">
+              <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                <CheckCircle className="h-4 w-4 text-primary" />
+                <span>Shift Policy &amp; Exception Checks</span>
+              </div>
+
+              <div className="space-y-1.5 text-xs">
+                {liveMetrics.statusCheck === 'FULL_DAY_MET' ? (
+                  <div className="flex items-center gap-2 text-emerald-600 dark:text-emerald-400">
+                    <Check className="h-3.5 w-3.5 shrink-0" />
+                    <span>Full-Day Target Achieved (&ge; {(policy?.fullDayMinutes || 480) / 60} hours net)</span>
+                  </div>
+                ) : liveMetrics.statusCheck === 'HALF_DAY_MET' ? (
+                  <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
+                    <Check className="h-3.5 w-3.5 shrink-0" />
+                    <span>Half-Day Target Achieved (&ge; {(policy?.halfDayMinutes || 240) / 60} hours net)</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted-foreground">
+                    <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                    <span>Under standard threshold (&lt; {(policy?.halfDayMinutes || 240) / 60} hours net). Early departure may be recorded.</span>
+                  </div>
+                )}
+
+                {liveMetrics.overtimeMinutes > 0 ? (
+                  <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+                    <Timer className="h-3.5 w-3.5 shrink-0" />
+                    <span>Overtime accrued: <strong>+{liveMetrics.overtimeMinutes} mins</strong> beyond {(policy?.overtimeThresholdMinutes || 480) / 60}h standard</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 text-muted-foreground text-[11px]">
+                    <Timer className="h-3.5 w-3.5 shrink-0" />
+                    <span>No overtime threshold exceeded</span>
+                  </div>
+                )}
+
+                {liveMetrics.isOvernight && (
+                  <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+                    <Moon className="h-3.5 w-3.5 shrink-0" />
+                    <span>Overnight Shift: Span successfully crossed midnight</span>
+                  </div>
+                )}
+
+                {isOnBreak && (
+                  <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 font-medium">
+                    <Coffee className="h-3.5 w-3.5 shrink-0" />
+                    <span>An active break is currently in progress. Clocking out will automatically finalize this break at the current timestamp without data loss.</span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Checkout Handover Notes */}
+            <div>
+              <label className="text-xs font-semibold text-foreground">Checkout Remarks / Handover Notes (Optional)</label>
+              <textarea
+                rows={2}
+                placeholder="e.g. Completed client presentation, handed over daily tickets to night team..."
+                value={clockOutNotes}
+                onChange={(e) => setClockOutNotes(e.target.value)}
+                className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowClockOutModal(false)}
+                disabled={actionLoading}
+              >
+                Keep Working
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={executeClockOut}
+                disabled={actionLoading}
+                className="gap-1.5 font-semibold"
+              >
+                {actionLoading ? 'Clocking Out...' : 'Confirm & Complete Clock Out'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =========================================================================
+          MODAL: ACCIDENTAL BREAK START/END CORRECTION REQUEST
+          ========================================================================= */}
+      {showBreakCorrectionModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2">
+                <Coffee className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                <h3 className="text-base font-bold text-foreground">Request Break Correction</h3>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowBreakCorrectionModal(false)}
+                className="h-7 w-7 p-0 text-muted-foreground"
+              >
+                &times;
+              </Button>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Rectify accidental break clicks, missed end-break taps, or timestamp discrepancies for manager approval.
+            </p>
+
+            {breakCorrectionTarget && (
+              <div className="p-3 rounded-lg bg-surface-secondary/40 border border-border text-xs space-y-1">
+                <div className="font-semibold text-foreground">
+                  Break #{breakCorrectionTarget.index} &bull; {(breakCorrectionTarget.breakType || 'General Break').replace(/_/g, ' ')}
+                </div>
+                <div className="text-muted-foreground">
+                  Original: {formatTimeOnly(breakCorrectionTarget.breakStart)} &rarr; {breakCorrectionTarget.breakEnd ? formatTimeOnly(breakCorrectionTarget.breakEnd) : 'In Progress'}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-semibold text-foreground">Requested Break Start *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={requestedBreakStart}
+                  onChange={(e) => setRequestedBreakStart(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-foreground">Requested Break End *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={requestedBreakEnd}
+                  onChange={(e) => setRequestedBreakEnd(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-semibold text-foreground">Justification Reason *</label>
+                <textarea
+                  rows={3}
+                  required
+                  placeholder="e.g. Accidentally hit Start break 10 minutes early, or forgot to end break when returning from lunch..."
+                  value={breakCorrectionReason}
+                  onChange={(e) => setBreakCorrectionReason(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-lg border border-border bg-background text-foreground mt-1 focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-border">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBreakCorrectionModal(false)}
+                disabled={submittingBreakCorrection}
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleSubmitBreakCorrection}
+                disabled={submittingBreakCorrection}
+                className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold"
+              >
+                {submittingBreakCorrection ? 'Submitting...' : 'Submit Break Correction'}
+              </Button>
+            </div>
           </div>
         </div>
       )}

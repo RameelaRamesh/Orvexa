@@ -317,10 +317,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId },
       });
       const attData = await attRes.json();
-      if (attData.success) {
-        setTodayAttendance(attData.data);
-      }
-    } catch {}
+      const tData = attData?.data !== undefined ? attData.data : attData;
+      setTodayAttendance(tData);
+    } catch (err) {
+      console.error('Error reloading attendance in layout:', err);
+    }
   };
 
   useEffect(() => {
@@ -346,7 +347,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }, []);
 
   const isClockedIn = !!(todayAttendance?.todaySummary?.isClockedIn ?? (todayAttendance?.clockIn && !todayAttendance?.clockOut));
-  const isOnBreak = !!todayAttendance?.todaySummary?.isOnBreak;
+  const activeBreak = todayAttendance?.todaySummary?.activeBreak ?? todayAttendance?.breaks?.find((b: any) => !b.breakEnd);
+  const isOnBreak = !!(todayAttendance?.todaySummary?.isOnBreak ?? !!activeBreak);
 
   const formatClockInTime = (dateStr?: string | null) => {
     if (!dateStr) return '09:24 AM';
@@ -377,13 +379,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           Authorization: `Bearer ${token}`,
           'x-workspace-id': wsId,
         },
-        body: JSON.stringify({ breakType: 'TEA_COFFEE' }),
+        body: JSON.stringify({ breakType: 'SHORT_BREAK', notes: 'General Break' }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to start break');
       toast.success('Break started');
       await reloadAttendance();
-      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('attendance-updated', { detail: data }));
+      window.dispatchEvent(new CustomEvent('time-engine-updated', { detail: data }));
     } catch (err: any) {
       toast.error(err.message || 'Failed to start break');
     } finally {
@@ -409,7 +412,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error(data.message || 'Failed to end break');
       toast.success('Break ended');
       await reloadAttendance();
-      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('attendance-updated', { detail: data }));
+      window.dispatchEvent(new CustomEvent('time-engine-updated', { detail: data }));
     } catch (err: any) {
       toast.error(err.message || 'Failed to end break');
     } finally {
@@ -435,7 +439,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error(data.message || 'Failed to clock in');
       toast.success('Clocked in successfully');
       await reloadAttendance();
-      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('attendance-updated', { detail: data }));
+      window.dispatchEvent(new CustomEvent('time-engine-updated', { detail: data }));
     } catch (err: any) {
       toast.error(err.message || 'Failed to clock in');
     } finally {
@@ -461,7 +466,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       if (!res.ok) throw new Error(data.message || 'Failed to clock out');
       toast.success('Clocked out successfully');
       await reloadAttendance();
-      window.dispatchEvent(new CustomEvent('attendance-updated'));
+      window.dispatchEvent(new CustomEvent('attendance-updated', { detail: data }));
+      window.dispatchEvent(new CustomEvent('time-engine-updated', { detail: data }));
     } catch (err: any) {
       toast.error(err.message || 'Failed to clock out');
     } finally {
@@ -742,17 +748,29 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {/* Clock In / Status Pill */}
             {isClockedIn && (
-              <div className="hidden lg:flex items-center gap-2.5 px-3 py-1.5 rounded-full border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-xs">
+              <div className={`hidden lg:flex items-center gap-2.5 px-3 py-1.5 rounded-full border shadow-xs transition-colors ${
+                isOnBreak
+                  ? 'border-amber-300 dark:border-amber-800/60 bg-amber-50/50 dark:bg-amber-950/30'
+                  : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900'
+              }`}>
                 <span className="relative flex h-2.5 w-2.5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                  <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
+                    isOnBreak ? 'bg-amber-400' : 'bg-emerald-400'
+                  }`}></span>
+                  <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${
+                    isOnBreak ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`}></span>
                 </span>
                 <div className="flex flex-col text-left">
-                  <span className="text-[11px] font-bold text-slate-800 dark:text-slate-100 leading-tight">
+                  <span className={`text-[11px] font-bold leading-tight ${
+                    isOnBreak ? 'text-amber-700 dark:text-amber-300' : 'text-slate-800 dark:text-slate-100'
+                  }`}>
                     {isOnBreak ? 'On Break' : 'Clocked In'}
                   </span>
                   <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">
-                    {formatClockInTime(todayAttendance?.clockIn)} • {formatElapsed(todayAttendance?.clockIn)}
+                    {isOnBreak
+                      ? `Break • ${formatElapsed(activeBreak?.breakStart)}`
+                      : `${formatClockInTime(todayAttendance?.clockIn)} • ${formatElapsed(todayAttendance?.clockIn)}`}
                   </span>
                 </div>
               </div>
