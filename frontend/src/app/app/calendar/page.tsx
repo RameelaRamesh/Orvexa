@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
@@ -100,7 +100,52 @@ export default function UnifiedCalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventDetailOpen, setIsEventDetailOpen] = useState(false);
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+    const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+
+  // Drag-to-resize side screen width (defaults to current size 384px)
+  const DEFAULT_PANEL_WIDTH = 384;
+  const MIN_PANEL_WIDTH = 320;
+  const MAX_PANEL_WIDTH = 750;
+  const [panelWidth, setPanelWidth] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('orvexa_calendar_panel_width');
+      if (saved) {
+        const val = parseInt(saved, 10);
+        if (!isNaN(val) && val >= MIN_PANEL_WIDTH && val <= MAX_PANEL_WIDTH) {
+          return val;
+        }
+      }
+    }
+    return DEFAULT_PANEL_WIDTH;
+  });
+  const [isResizing, setIsResizing] = useState(false);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      // Panel is anchored to the right, so width is (window.innerWidth - clientX)
+      const calculated = window.innerWidth - e.clientX;
+      const maxWidth = Math.min(MAX_PANEL_WIDTH, Math.floor(window.innerWidth * 0.75));
+      if (calculated >= MIN_PANEL_WIDTH && calculated <= maxWidth) {
+        setPanelWidth(calculated);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      try {
+        localStorage.setItem('orvexa_calendar_panel_width', String(panelWidth));
+      } catch {}
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing, panelWidth]);
 
   // Workspace & Auth Context
   const [token, setToken] = useState<string | null>(null);
@@ -237,36 +282,62 @@ export default function UnifiedCalendarPage() {
         for (const t of taskList) {
           if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
           const tId = `task-${t.id}`;
-          if (!allEvents.some((e) => e.id === tId || e.id === t.id)) {
-            const rawDate = t.dueDate || t.startDate || t.createdAt || new Date();
-            const taskDate = new Date(rawDate);
-            if (!isNaN(taskDate.getTime())) {
-              const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
-              const aName = t.assignee?.user
-                ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
-                : t.assigneeName || (t.assignee?.name) || 'Assigned to you';
+          const rawDate = t.dueDate || t.startDate || t.createdAt || new Date();
+          const taskDate = new Date(rawDate);
+          if (isNaN(taskDate.getTime())) continue;
 
-              allEvents.push({
-                id: tId,
-                title: t.title,
-                type: 'TASK',
-                layer: 'TASKS',
-                startDate: taskDate.toISOString(),
-                endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
-                allDay: !t.dueDate,
-                status: t.status || 'TODO',
-                color: isUrgent ? '#ef4444' : '#8b5cf6',
-                description: t.description,
-                details: {
-                  projectName: t.project?.name || t.projectName || "Vattara's Tool (workforce management)",
-                  priority: t.priority || 'MEDIUM',
-                  assigneeName: aName,
-                  assigneeId: t.assigneeMembershipId,
-                  isMyTask: true,
-                  hasDueDate: Boolean(t.dueDate),
-                },
-              });
-            }
+          const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+          const aName = t.assignee?.user
+            ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
+            : t.assigneeName || (t.assignee?.name) || 'Assigned to you';
+
+          const sla = (t.sla as any) || {};
+          const creatorId = t.creatorMembershipId || sla.creatorMembershipId || (t as any).createdByMembershipId;
+          let assignerName = t.assignerName;
+          if (!assignerName && creatorId) {
+            const f = members.find((m) => m.id === creatorId || m.user?.id === creatorId || m.userId === creatorId);
+            if (f?.user) assignerName = `${f.user.firstName || ''} ${f.user.lastName || ''}`.trim();
+          }
+          if (!assignerName) {
+            const lead = members.find((m) => m.accessRole === 'OWNER' || m.accessRole === 'ADMIN' || m.accessRole === 'MANAGER');
+            if (lead?.user) assignerName = `${lead.user.firstName || ''} ${lead.user.lastName || ''}`.trim();
+          }
+
+          const taskDetails = {
+            projectName: t.project?.name || t.projectName || "General",
+            priority: t.priority || 'MEDIUM',
+            assigneeName: aName,
+            assigneeId: t.assigneeMembershipId,
+            assignerName: assignerName || 'Workspace Admin',
+            creatorMembershipId: creatorId,
+            dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : new Date(t.dueDate).toISOString()) : null,
+            isMyTask: true,
+            hasDueDate: Boolean(t.dueDate),
+          };
+
+          const existingIdx = allEvents.findIndex((e) => e.id === tId || e.id === t.id);
+          if (existingIdx >= 0) {
+            allEvents[existingIdx] = {
+              ...allEvents[existingIdx],
+              details: {
+                ...allEvents[existingIdx].details,
+                ...taskDetails,
+              },
+            };
+          } else {
+            allEvents.push({
+              id: tId,
+              title: t.title,
+              type: 'TASK',
+              layer: 'TASKS',
+              startDate: taskDate.toISOString(),
+              endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
+              allDay: !t.dueDate,
+              status: t.status || 'TODO',
+              color: isUrgent ? '#ef4444' : '#8b5cf6',
+              description: t.description,
+              details: taskDetails,
+            });
           }
         }
       }
@@ -559,6 +630,21 @@ export default function UnifiedCalendarPage() {
       return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
     } catch {
       return '';
+    }
+  };
+
+  const formatDeadlineDate = (dateStr?: string | null) => {
+    if (!dateStr) return 'No deadline';
+    try {
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return 'No deadline';
+      return d.toLocaleDateString('default', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    } catch {
+      return 'No deadline';
     }
   };
 
@@ -1110,7 +1196,23 @@ export default function UnifiedCalendarPage() {
             RIGHT-SIDE DATE DETAIL PANEL (+ Add button removed as requested)
            ========================================================================= */}
         {isRightPanelOpen && (
-          <div className="w-80 md:w-96 bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto shrink-0 shadow-xs animate-in slide-in-from-right duration-200">
+                    <div
+            style={{ width: `${panelWidth}px` }}
+            className={`relative bg-white border-l border-slate-200 flex flex-col p-5 overflow-y-auto shrink-0 shadow-xs animate-in slide-in-from-right duration-200 ${
+              isResizing ? 'select-none pointer-events-auto' : ''
+            }`}
+          >
+            {/* Draggable resize handle on the left edge to increase/decrease width */}
+            <div
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsResizing(true);
+              }}
+              className="absolute -left-1.5 top-0 bottom-0 w-3 cursor-ew-resize hover:bg-blue-500/20 active:bg-blue-500/40 transition-colors z-30 flex items-center justify-center group"
+              title="Drag to resize side panel width"
+            >
+              <div className="w-1 h-8 rounded-full bg-slate-300 group-hover:bg-blue-600 transition-colors shadow-2xs" />
+            </div>
             {/* Panel Header: Selected Date & Close Button (Notice: + Add button has been removed) */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <h3 className="text-base font-bold text-slate-900">
@@ -1177,36 +1279,64 @@ export default function UnifiedCalendarPage() {
                 </div>
 
                 {selectedTasks.length > 0 ? (
-                  <div className="space-y-2">
-                    {selectedTasks.map((t) => (
-                      <div
-                        key={t.id}
-                        onClick={() => { setSelectedEvent(t); setIsEventDetailOpen(true); }}
-                        className="p-3 rounded-xl border border-slate-200/90 hover:border-purple-300 hover:shadow-xs transition-all cursor-pointer bg-white group flex items-center justify-between"
-                      >
-                        <div className="flex items-start gap-3">
-                          <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 mt-0.5">
-                            <CheckSquare className="w-4 h-4" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h4 className="text-xs font-bold text-slate-900 group-hover:text-purple-600 transition-colors truncate">
-                              {t.title}
-                            </h4>
-                            <p className="text-[11px] text-slate-500 mt-0.5 line-clamp-2">
-                              {t.description || 'Complete assigned deliverables'}
-                            </p>
-                            <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400">
-                              <span className="text-purple-700 font-medium">
-                                {t.details?.assigneeName || 'Assigned to you'}
-                              </span>
-                              <span>•</span>
-                              <span>{t.startDate ? formatShortTime(t.startDate) : 'Due Today'}</span>
+                  <div className="space-y-2.5">
+                    {selectedTasks.map((t) => {
+                      const assignee = t.details?.assigneeName || 'Assigned to you';
+                      const assigner = t.details?.assignerName || 'Workspace Admin';
+                      const deadline = t.details?.dueDate ? formatDeadlineDate(t.details.dueDate) : 'No deadline';
+                      const taskTime = t.startDate ? formatShortTime(t.startDate) : '';
+
+                      return (
+                        <div
+                          key={t.id}
+                          onClick={() => { setSelectedEvent(t); setIsEventDetailOpen(true); }}
+                          className="p-3.5 rounded-xl border border-slate-200/90 hover:border-purple-300 hover:shadow-xs transition-all cursor-pointer bg-white group flex items-start justify-between gap-2.5 w-full overflow-hidden"
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0 flex-1 overflow-hidden">
+                            <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0 mt-0.5">
+                              <CheckSquare className="w-4 h-4" />
+                            </div>
+                            <div className="min-w-0 flex-1 overflow-hidden">
+                              <h4 className="text-xs font-bold text-slate-900 group-hover:text-purple-600 transition-colors break-words line-clamp-2 leading-snug">
+                                {t.title}
+                              </h4>
+                              {t.description && (
+                                <p className="text-[11px] text-slate-500 mt-1 line-clamp-1 break-words">
+                                  {t.description}
+                                </p>
+                              )}
+
+                              {/* Clean Meta Details: Assigned To, Assigned By, Time & Deadline */}
+                              <div className="mt-2.5 pt-2 border-t border-slate-100 space-y-1.5 text-[11px]">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                    <span className="text-slate-400 font-medium shrink-0">Assigned to:</span>
+                                    <span className="font-semibold text-slate-800 truncate">{assignee}</span>
+                                  </div>
+                                  {taskTime && (
+                                    <span className="text-[10px] text-slate-400 font-medium shrink-0">
+                                      {taskTime}
+                                    </span>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <div className="flex items-center gap-1.5 min-w-0 truncate">
+                                    <span className="text-slate-400 font-medium shrink-0">Assigned by:</span>
+                                    <span className="font-medium text-slate-600 truncate">{assigner}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1 shrink-0 text-[10px] font-semibold text-purple-700 bg-purple-50/80 px-2 py-0.5 rounded-md border border-purple-100">
+                                    <Clock className="w-3 h-3 text-purple-500" />
+                                    <span>Deadline: {deadline}</span>
+                                  </div>
+                                </div>
+                              </div>
                             </div>
                           </div>
+                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-0.5 transition-all shrink-0 mt-1" />
                         </div>
-                        <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-purple-500 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="p-3 rounded-xl border border-dashed border-slate-200 text-center text-xs text-slate-400">
@@ -1659,6 +1789,41 @@ export default function UnifiedCalendarPage() {
                   )}
                 </div>
               </div>
+
+              {/* Task Metadata Card: Assigned To, Assigned By, Scheduled Time, Deadline Date */}
+              {(selectedEvent.type === 'TASK' || selectedEvent.layer === 'TASKS') && (
+                <div className="bg-slate-50/90 rounded-xl p-3.5 border border-slate-200/80 space-y-2.5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Assigned To</span>
+                      <span className="text-xs font-semibold text-slate-800 block mt-0.5 truncate">
+                        {selectedEvent.details?.assigneeName || 'Assigned to you'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Assigned By</span>
+                      <span className="text-xs font-semibold text-slate-800 block mt-0.5 truncate">
+                        {selectedEvent.details?.assignerName || 'Workspace Admin'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200/60">
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Scheduled Time</span>
+                      <span className="text-xs font-medium text-slate-700 block mt-0.5 truncate">
+                        {selectedEvent.startDate ? formatShortTime(selectedEvent.startDate) : 'Not specified'}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-[10px] uppercase font-bold text-purple-600 block tracking-wider">Deadline Date</span>
+                      <span className="text-xs font-bold text-purple-800 block mt-0.5 truncate">
+                        {selectedEvent.details?.dueDate ? formatDeadlineDate(selectedEvent.details.dueDate) : 'No explicit deadline'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Location or Meeting Link */}
               {selectedEvent.locationUrl && (

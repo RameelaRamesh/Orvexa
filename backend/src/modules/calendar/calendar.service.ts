@@ -1,4 +1,4 @@
-import {
+﻿import {
   Injectable,
   NotFoundException,
   ForbiddenException,
@@ -299,23 +299,44 @@ export class CalendarService {
         ];
       }
 
-      const tasks = await this.prisma.task.findMany({
-        where: taskWhere,
-        include: {
-          project: { select: { name: true } },
-          assignee: {
-            include: { user: { select: { firstName: true, lastName: true, email: true } } },
+      const [tasks, workspaceMemberships] = await Promise.all([
+        this.prisma.task.findMany({
+          where: taskWhere,
+          include: {
+            project: { select: { name: true } },
+            assignee: {
+              include: { user: { select: { firstName: true, lastName: true, email: true } } },
+            },
           },
-        },
-      });
+        }),
+        this.prisma.membership.findMany({
+          where: { workspaceId },
+          include: { user: { select: { firstName: true, lastName: true } } },
+        }),
+      ]);
 
       for (const t of tasks) {
         if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
-        // Fallback to startDate or createdAt if dueDate is not specified
         const rawDate = t.dueDate || (t as any).startDate || t.createdAt || new Date();
         const taskDate = new Date(rawDate);
         if (isNaN(taskDate.getTime())) continue;
         if (taskDate < start || taskDate > end) continue;
+
+        const sla = (t.sla as any) || {};
+        const creatorId = sla.creatorMembershipId || (t as any).creatorMembershipId || (t as any).createdByMembershipId;
+        let assignerName = 'Workspace Admin';
+        if (creatorId) {
+          const creatorMem = workspaceMemberships.find((m: any) => m.id === creatorId || m.userId === creatorId);
+          if (creatorMem?.user) {
+            assignerName = `${creatorMem.user.firstName} ${creatorMem.user.lastName}`.trim();
+          }
+        }
+        if (assignerName === 'Workspace Admin') {
+          const lead = workspaceMemberships.find((m: any) => m.accessRole === 'OWNER' || m.accessRole === 'ADMIN' || m.accessRole === 'MANAGER');
+          if (lead?.user) {
+            assignerName = `${lead.user.firstName} ${lead.user.lastName}`.trim();
+          }
+        }
 
         const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
         const assigneeName = t.assignee?.user
@@ -338,6 +359,9 @@ export class CalendarService {
             priority: t.priority || 'MEDIUM',
             assigneeName,
             assigneeId: t.assigneeMembershipId,
+            assignerName,
+            creatorMembershipId: creatorId,
+            dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : (t.dueDate as any).toISOString()) : null,
             isMyTask: t.assigneeMembershipId === membershipId || userCtx.membership?.userId === (t as any).assignee?.userId,
             hasDueDate: Boolean(t.dueDate),
           },
