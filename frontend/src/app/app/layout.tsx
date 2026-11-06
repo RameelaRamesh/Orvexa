@@ -507,6 +507,27 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   };
   const isPlatformAdmin = accessRole === 'OWNER';
 
+  const [calendarBadgeCount, setCalendarBadgeCount] = useState<number>(() => {
+    if (typeof window === 'undefined') return 3;
+    try {
+      const b = localStorage.getItem('orvexa_calendar_badge_count');
+      return b !== null ? parseInt(b, 10) : 3;
+    } catch {
+      return 3;
+    }
+  });
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      try {
+        const b = localStorage.getItem('orvexa_calendar_badge_count');
+        if (b !== null) setCalendarBadgeCount(parseInt(b, 10));
+      } catch {}
+    };
+    window.addEventListener('calendar_badge_updated', handleUpdate);
+    return () => window.removeEventListener('calendar_badge_updated', handleUpdate);
+  }, []);
+
   const hasPerm = (perm: string) => checkPermission(activeWorkspace, perm);
 
   const enabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
@@ -519,6 +540,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Operations Calendar',
       href: '/app/calendar',
       icon: Calendar,
+      badge: calendarBadgeCount,
       visible: true,
     },
     {
@@ -652,7 +674,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 }`}
               >
                 <Icon className={`h-4 w-4 ${isActive ? 'text-primary' : ''}`} />
-                {item.name}
+                <span className="flex-1 truncate">{item.name}</span>
+                {(item as any).badge !== undefined && (item as any).badge > 0 && (
+                  <span className="ml-auto inline-flex items-center justify-center min-w-5 h-5 px-1.5 text-[10px] font-bold rounded-full bg-blue-600 text-white shadow-2xs">
+                    {(item as any).badge}
+                  </span>
+                )}
               </Link>
             );
           })}

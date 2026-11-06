@@ -15,8 +15,14 @@ export class InMemoryDatabase {
   designations: any[] = [];
   notifications: any[] = [];
   tickets: any[] = [];
-  projects: any[] = [];
   tasks: any[] = [];
+  projects: any[] = [];
+  leaveRequests: any[] = [];
+  shifts: any[] = [];
+  holidays: any[] = [];
+  attendances: any[] = [];
+  qualityReviews: any[] = [];
+  calendarEvents: any[] = [];
 
   constructor() {
     this.seed();
@@ -254,6 +260,16 @@ export class InMemoryDatabase {
       { code: 'departments:manage', name: 'Manage Departments & Teams', module: 'Departments' },
       { code: 'settings:manage', name: 'Manage Workspace Settings', module: 'Settings' },
       { code: 'billing:manage', name: 'Manage Subscriptions & Billing', module: 'Billing' },
+
+      // Calendar (Unified Company Calendar Permissions)
+      { code: 'calendar:view:all', name: 'View All Company Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:department', name: 'View Department Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:team', name: 'View Team Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:schedules', name: 'View Individual Employee Schedules', module: 'Calendar' },
+      { code: 'calendar:create', name: 'Create Calendar Events & Meetings', module: 'Calendar' },
+      { code: 'calendar:invite', name: 'Invite Participants to Meetings', module: 'Calendar' },
+      { code: 'calendar:manage', name: 'Edit and Cancel Events', module: 'Calendar' },
+      { code: 'calendar:holidays:manage', name: 'Manage Company Holidays', module: 'Calendar' },
     ];
 
     for (const p of permsSeed) {
@@ -284,6 +300,7 @@ export class InMemoryDatabase {
       'inventory:view', 'inventory:move',
       'ledger:view', 'ledger:export',
       'documents:view', 'documents:upload', 'documents:download',
+      'calendar:view:department', 'calendar:view:team', 'calendar:create', 'calendar:invite', 'calendar:manage',
     ];
     const memberPermCodes = [
       'tasks:view', 'tasks:create', 'tasks:edit',
@@ -294,6 +311,7 @@ export class InMemoryDatabase {
       'leave:view', 'leave:apply',
       'approvals:view',
       'people:view',
+      'calendar:create', 'calendar:invite',
     ];
 
     const rolePermAssignments: Record<string, string[]> = {
@@ -394,6 +412,18 @@ export class InMemoryDatabase {
       };
       this.memberships.push(membership);
     }
+
+    // Projects
+    this.projects.push(
+      { id: 'proj_ops', workspaceId: wsId, name: 'Operations & Platform', key: 'OPS', description: 'Core Operations', status: 'ACTIVE', createdAt: new Date() },
+      { id: 'proj_client', workspaceId: wsId, name: 'Client A Delivery', key: 'CAD', description: 'Client Deliverables', status: 'ACTIVE', createdAt: new Date() },
+    );
+
+    // Shifts
+    this.shifts.push(
+      { id: 'shift_general', workspaceId: wsId, name: 'General Shift', startTime: '09:00', endTime: '18:00', workDays: ['MON', 'TUE', 'WED', 'THU', 'FRI'] },
+    );
+
   }
 
   // Model Query Handlers

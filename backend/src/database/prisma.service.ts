@@ -45,8 +45,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           file: 'files',
           auditLog: 'auditLogs',
           asset: 'assets',
-          project: 'projects',
           task: 'tasks',
+          project: 'projects',
+          leaveRequest: 'leaveRequests',
+          shift: 'shifts',
+          holiday: 'holidays',
+          attendance: 'attendances',
+          qualityReview: 'qualityReviews',
+          calendarEvent: 'calendarEvents',
         };
 
         if (typeof prop === 'string' && modelMap[prop]) {
