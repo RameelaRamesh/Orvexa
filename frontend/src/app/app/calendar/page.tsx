@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
 import { Button } from '@/components/ui/button';
@@ -100,7 +100,23 @@ export default function UnifiedCalendarPage() {
   const [selectedEvent, setSelectedEvent] = useState<CalendarEvent | null>(null);
   const [isEventDetailOpen, setIsEventDetailOpen] = useState(false);
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState(false);
-    const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+
+  // Date Navigation Picker Popover State
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState(false);
+  const [pickerMonth, setPickerMonth] = useState<Date>(() => new Date());
+  const datePickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isDatePickerOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (datePickerRef.current && !datePickerRef.current.contains(e.target as Node)) {
+        setIsDatePickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isDatePickerOpen]);
 
   // Drag-to-resize side screen width (defaults to current size 384px)
   const DEFAULT_PANEL_WIDTH = 384;
@@ -412,19 +428,46 @@ export default function UnifiedCalendarPage() {
     }
   }, [token, wsId, currentDate.getFullYear(), currentDate.getMonth(), selectedTypeFilter, selectedDeptFilter]);
 
-  // Navigate Months
+  // Navigate Months / Weeks / Days
   const handlePrevMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
+    if (viewMode === 'month') {
+      const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
+      setCurrentDate(nextMonth);
+    } else if (viewMode === 'week') {
+      const nextD = new Date(selectedDate);
+      nextD.setDate(nextD.getDate() - 7);
+      setSelectedDate(nextD);
+      setCurrentDate(new Date(nextD.getFullYear(), nextD.getMonth(), 1));
+    } else {
+      const nextD = new Date(selectedDate);
+      nextD.setDate(nextD.getDate() - 1);
+      setSelectedDate(nextD);
+      setCurrentDate(new Date(nextD.getFullYear(), nextD.getMonth(), 1));
+    }
   };
 
   const handleNextMonth = () => {
-    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+    if (viewMode === 'month') {
+      const nextMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+      setCurrentDate(nextMonth);
+    } else if (viewMode === 'week') {
+      const nextD = new Date(selectedDate);
+      nextD.setDate(nextD.getDate() + 7);
+      setSelectedDate(nextD);
+      setCurrentDate(new Date(nextD.getFullYear(), nextD.getMonth(), 1));
+    } else {
+      const nextD = new Date(selectedDate);
+      nextD.setDate(nextD.getDate() + 1);
+      setSelectedDate(nextD);
+      setCurrentDate(new Date(nextD.getFullYear(), nextD.getMonth(), 1));
+    }
   };
 
   const handleGoToToday = () => {
     const today = new Date();
-    setCurrentDate(today);
+    setCurrentDate(new Date(today.getFullYear(), today.getMonth(), 1));
     setSelectedDate(today);
+    setPickerMonth(today);
   };
 
   // Date Math Helpers
@@ -851,37 +894,200 @@ export default function UnifiedCalendarPage() {
           </div>
         </div>
 
-        {/* Sub-bar: Navigation (< > Calendar Icon Month Year) */}
+        {/* Sub-bar: Navigation (< > on left, Date & Calendar Picker on right) */}
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-2.5">
-            <div className="flex items-center gap-1 text-slate-600">
-              <button
-                onClick={handlePrevMonth}
-                className="p-1 hover:bg-slate-100 rounded-md transition-colors"
-                title="Previous Month"
-              >
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button
-                onClick={handleNextMonth}
-                className="p-1 hover:bg-slate-100 rounded-md transition-colors"
-                title="Next Month"
-              >
-                <ChevronRight className="w-5 h-5" />
-              </button>
-            </div>
-
+          {/* Left Side: Month navigation chevrons */}
+          <div className="flex items-center gap-1 text-slate-600">
             <button
-              onClick={handleGoToToday}
-              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200 bg-white shadow-2xs flex items-center justify-center cursor-pointer"
-              title="Today"
+              onClick={handlePrevMonth}
+              className="p-1 hover:bg-slate-100 rounded-md transition-colors text-slate-600 hover:text-slate-900 cursor-pointer"
+              title="Previous Month"
             >
-              <CalendarIcon className="w-4 h-4" />
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button
+              onClick={handleNextMonth}
+              className="p-1 hover:bg-slate-100 rounded-md transition-colors text-slate-600 hover:text-slate-900 cursor-pointer"
+              title="Next Month"
+            >
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Right Side: The date (November 2026) and interactive Calendar Icon for date navigation */}
+          <div ref={datePickerRef} className="relative flex items-center gap-2">
+            <button
+              onClick={() => {
+                setPickerMonth(new Date(selectedDate));
+                setIsDatePickerOpen((prev) => !prev);
+              }}
+              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors border border-slate-200 bg-white shadow-2xs flex items-center justify-center cursor-pointer"
+              title="Click to navigate between dates"
+            >
+              <CalendarIcon className="w-4 h-4 text-blue-600" />
             </button>
 
-            <h2 className="text-lg font-semibold text-slate-800 tracking-tight">
+            <button
+              onClick={() => {
+                setPickerMonth(new Date(selectedDate));
+                setIsDatePickerOpen((prev) => !prev);
+              }}
+              className="text-lg font-semibold text-slate-800 tracking-tight hover:text-blue-600 transition-colors cursor-pointer"
+              title="Click to navigate between dates"
+            >
               {monthName} {year}
-            </h2>
+            </button>
+
+            {/* Date Navigation Picker Popover */}
+            {isDatePickerOpen && (
+              <div className="absolute right-0 top-full mt-2 w-72 bg-white border border-slate-200 rounded-2xl shadow-xl p-4 z-40 animate-in fade-in zoom-in-95 duration-150">
+                {/* Popover Month Navigation Header */}
+                <div className="flex items-center justify-between pb-3 mb-2 border-b border-slate-100">
+                  <button
+                    onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() - 1, 1))}
+                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors cursor-pointer"
+                    title="Previous Month"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+
+                  <span className="text-xs font-bold text-slate-800">
+                    {pickerMonth.toLocaleString('default', { month: 'long' })} {pickerMonth.getFullYear()}
+                  </span>
+
+                  <button
+                    onClick={() => setPickerMonth(new Date(pickerMonth.getFullYear(), pickerMonth.getMonth() + 1, 1))}
+                    className="p-1 hover:bg-slate-100 rounded-lg text-slate-600 transition-colors cursor-pointer"
+                    title="Next Month"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+
+                {/* Day-of-week header */}
+                <div className="grid grid-cols-7 text-center text-[11px] font-semibold text-slate-400 mb-1">
+                  <div>Su</div>
+                  <div>Mo</div>
+                  <div>Tu</div>
+                  <div>We</div>
+                  <div>Th</div>
+                  <div>Fr</div>
+                  <div>Sa</div>
+                </div>
+
+                {/* Days Grid */}
+                <div className="grid grid-cols-7 gap-1 text-center text-xs">
+                  {(() => {
+                    const pYear = pickerMonth.getFullYear();
+                    const pMonth = pickerMonth.getMonth();
+                    const pFirstDay = new Date(pYear, pMonth, 1).getDay();
+                    const pDaysInMonth = new Date(pYear, pMonth + 1, 0).getDate();
+                    const pDaysInPrevMonth = new Date(pYear, pMonth, 0).getDate();
+                    const cells = [];
+
+                    // Trailing days of previous month
+                    for (let i = 0; i < pFirstDay; i++) {
+                      const dNum = pDaysInPrevMonth - pFirstDay + i + 1;
+                      const dDate = new Date(pYear, pMonth - 1, dNum);
+                      cells.push(
+                        <button
+                          key={`prev-${i}`}
+                          onClick={() => {
+                            setSelectedDate(dDate);
+                            setCurrentDate(new Date(dDate.getFullYear(), dDate.getMonth(), 1));
+                            setIsDatePickerOpen(false);
+                          }}
+                          className="h-7 w-7 mx-auto rounded-lg text-slate-300 hover:bg-slate-50 flex items-center justify-center text-[11px] cursor-pointer"
+                        >
+                          {dNum}
+                        </button>
+                      );
+                    }
+
+                    // Days of current month
+                    for (let d = 1; d <= pDaysInMonth; d++) {
+                      const dDate = new Date(pYear, pMonth, d);
+                      const isSel = isSameDay(dDate, selectedDate);
+                      const isToday = isSameDay(dDate, new Date());
+
+                      cells.push(
+                        <button
+                          key={`curr-${d}`}
+                          onClick={() => {
+                            setSelectedDate(dDate);
+                            setCurrentDate(new Date(dDate.getFullYear(), dDate.getMonth(), 1));
+                            setIsDatePickerOpen(false);
+                          }}
+                          className={`h-7 w-7 mx-auto rounded-lg flex items-center justify-center text-xs transition-colors cursor-pointer font-medium ${
+                            isSel
+                              ? 'bg-blue-600 text-white font-bold shadow-xs'
+                              : isToday
+                              ? 'text-blue-600 font-bold bg-blue-50 border border-blue-200'
+                              : 'text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {d}
+                        </button>
+                      );
+                    }
+
+                    // Fill remaining cells for grid balance
+                    const totalCells = cells.length;
+                    const remaining = totalCells % 7 === 0 ? 0 : 7 - (totalCells % 7);
+                    for (let nextD = 1; nextD <= remaining; nextD++) {
+                      const dDate = new Date(pYear, pMonth + 1, nextD);
+                      cells.push(
+                        <button
+                          key={`next-${nextD}`}
+                          onClick={() => {
+                            setSelectedDate(dDate);
+                            setCurrentDate(new Date(dDate.getFullYear(), dDate.getMonth(), 1));
+                            setIsDatePickerOpen(false);
+                          }}
+                          className="h-7 w-7 mx-auto rounded-lg text-slate-300 hover:bg-slate-50 flex items-center justify-center text-[11px] cursor-pointer"
+                        >
+                          {nextD}
+                        </button>
+                      );
+                    }
+
+                    return cells;
+                  })()}
+                </div>
+
+                {/* Popover Footer: Quick Today Jump & Native Date Input */}
+                <div className="flex items-center justify-between pt-3 mt-3 border-t border-slate-100">
+                  <button
+                    onClick={() => {
+                      const today = new Date();
+                      setSelectedDate(today);
+                      setCurrentDate(new Date(today.getFullYear(), today.getMonth(), 1));
+                      setPickerMonth(today);
+                      setIsDatePickerOpen(false);
+                    }}
+                    className="text-xs font-semibold text-blue-600 hover:text-blue-700 hover:underline cursor-pointer"
+                  >
+                    Go to Today
+                  </button>
+
+                  <input
+                    type="date"
+                    value={`${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.getDate()).padStart(2, '0')}`}
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      const [y, m, d] = e.target.value.split('-').map(Number);
+                      const chosen = new Date(y, m - 1, d);
+                      setSelectedDate(chosen);
+                      setCurrentDate(new Date(y, m - 1, 1));
+                      setPickerMonth(chosen);
+                      setIsDatePickerOpen(false);
+                    }}
+                    className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 cursor-pointer focus:outline-none"
+                    title="Select date manually"
+                  />
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
