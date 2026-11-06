@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import React, { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
@@ -799,6 +799,20 @@ export default function UnifiedCalendarPage() {
           </div>
         </div>
       </div>
+
+            {/* Floating Side Tab Handle (Opens Date Details if panel was closed) */}
+      {!isRightPanelOpen && (
+        <button
+          onClick={() => setIsRightPanelOpen(true)}
+          className="fixed right-0 top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-r-0 rounded-l-xl px-2 py-3.5 shadow-md hover:bg-blue-50 text-slate-600 hover:text-blue-600 transition-all flex flex-col items-center gap-2 group cursor-pointer"
+          title="Open Date Details Panel"
+        >
+          <ChevronLeft className="w-4 h-4 text-blue-600 group-hover:-translate-x-0.5 transition-transform" />
+          <span className="text-[10px] font-bold [writing-mode:vertical-rl] tracking-wider uppercase text-slate-500 group-hover:text-blue-600">
+            Date Details
+          </span>
+        </button>
+      )}
 
       {/* =========================================================================
           MAIN CALENDAR BODY (Split View: Calendar Grid + Right Detail Panel)
