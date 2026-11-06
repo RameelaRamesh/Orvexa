@@ -276,6 +276,18 @@ const MODULE_DISPLAY_NAMES: Record<string, string> = {
 export default function SettingsPage() {
 const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
   const [permissionSearch, setPermissionSearch] = useState('');
+  const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
+    if (typeof window === 'undefined') return 'MEMBER';
+    try {
+      const u = localStorage.getItem('user');
+      if (u) {
+        const parsed = JSON.parse(u);
+        return parsed.role || parsed.accessRole || 'MEMBER';
+      }
+    } catch {}
+    return 'MEMBER';
+  });
+  const isOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
 
   // Loading states
   const [loading, setLoading] = useState(true);
@@ -645,6 +657,7 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
           if (meData.phone) setPersonalPhone(meData.phone);
           if (meData.avatarUrl || meData.avatar) setPersonalAvatar(meData.avatarUrl || meData.avatar);
           const activeMem = meData.memberships?.find((m: any) => m.workspaceId === wsId) || meData.memberships?.[0];
+          if (activeMem?.accessRole) setCurrentUserRole(activeMem.accessRole);
           if (activeMem?.designation?.title) {
             setPersonalDesignation(activeMem.designation.title);
           } else if (activeMem?.role?.name) {
@@ -1681,16 +1694,18 @@ const selectedRoleObj =
         >
           <Sliders className="h-4 w-4" /> Modules & Features
         </button>
-        <button
-          onClick={() => setActiveTab('roles')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'roles'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Shield className="h-4 w-4" /> Roles & Permissions
-        </button>
+        {isOwnerOrAdmin && (
+          <button
+            onClick={() => setActiveTab('roles')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+              activeTab === 'roles'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Shield className="h-4 w-4" /> Roles & Permissions
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('structure')}
           className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
@@ -2040,7 +2055,7 @@ const selectedRoleObj =
       )}
 
       {/* TAB 3: Roles & Permissions */}
-      {activeTab === 'roles' && (
+      {activeTab === 'roles' && isOwnerOrAdmin && (
         <div className="space-y-6">
           <div className="grid gap-6 md:grid-cols-3">
             {/* Roles List & Create */}

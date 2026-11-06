@@ -47,6 +47,7 @@ import {
   MapPin,
   Phone,
   ChevronRight,
+  ChevronDown,
   ArrowLeft,
   Network,
   Lock,
@@ -142,6 +143,7 @@ export default function PeoplePage() {
   const [viewingEmployee, setViewingEmployee] = useState<any>(null);
   const [employeeTasks, setEmployeeTasks] = useState<any[]>([]);
   const [loadingEmployeeTasks, setLoadingEmployeeTasks] = useState(false);
+  const [showAssignedTasks, setShowAssignedTasks] = useState(false);
 
   const handleClearFilters = () => {
     setSearchTerm('');
@@ -154,6 +156,7 @@ export default function PeoplePage() {
   const handleOpenEmployeeProfile = async (member: any) => {
     if (member?.accessRole === 'OWNER') return;
     setViewingEmployee(member);
+    setShowAssignedTasks(false);
     setLoadingEmployeeTasks(true);
     setEmployeeTasks([]);
     try {
@@ -323,8 +326,8 @@ export default function PeoplePage() {
       keywords: ['ceo', 'founder', 'co-founder', 'president', 'chief executive', 'owner'],
       role: 'OWNER',
       scope: 'WORKSPACE',
-      deptKeywords: [] as string[],
-      teamKeywords: [] as string[],
+      deptKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'Executive Leadership',
       description: 'Full organization-wide administrative ownership and global visibility across all records.',
     },
@@ -333,7 +336,7 @@ export default function PeoplePage() {
       role: 'MANAGER',
       scope: 'WORKSPACE',
       deptKeywords: ['management', 'executive', 'operations'],
-      teamKeywords: [] as string[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'Senior Leadership',
       description: 'Cross-functional leadership with enterprise-wide data access and operations management.',
     },
@@ -342,7 +345,7 @@ export default function PeoplePage() {
       role: 'MANAGER',
       scope: 'DEPARTMENT',
       deptKeywords: ['operations', 'general'],
-      teamKeywords: [] as string[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'Department Management',
       description: 'Departmental oversight, approvals, and cross-team workflow orchestration.',
     },
@@ -351,7 +354,7 @@ export default function PeoplePage() {
       role: 'ADMIN',
       scope: 'DEPARTMENT',
       deptKeywords: ['hr', 'human', 'people'],
-      teamKeywords: [] as string[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'HR & People Operations',
       description: 'Organization administration, employee records, onboarding, and leave approvals.',
     },
@@ -414,7 +417,7 @@ export default function PeoplePage() {
       role: 'MEMBER',
       scope: 'DEPARTMENT',
       deptKeywords: ['finance', 'accounts', 'billing'],
-      teamKeywords: [] as string[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'Finance & Compliance',
       description: 'Access to departmental financial records, billing, and accounting items.',
     },
@@ -422,8 +425,8 @@ export default function PeoplePage() {
       keywords: ['contractor', 'freelancer', 'consultant', 'intern', 'temporary', 'vendor', 'trainee'],
       role: 'MEMBER',
       scope: 'ASSIGNED',
-      deptKeywords: [] as string[],
-      teamKeywords: [] as string[],
+      deptKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'External Contributor / Intern',
       description: 'Strictly restricted to explicitly assigned tasks with zero access to peer data.',
     },
@@ -1067,6 +1070,23 @@ export default function PeoplePage() {
           team: teams.find((t: any) => t.id === editForm.teamId) || prev?.team,
         }));
       }
+      if (viewingEmployee && viewingEmployee.id === editingMember.id) {
+        setViewingEmployee((prev: any) => ({
+          ...prev,
+          emergencyContact: extraData,
+          user: {
+            ...prev?.user,
+            firstName: editForm.firstName.trim() || prev?.user?.firstName,
+            lastName: editForm.lastName.trim() || prev?.user?.lastName,
+            email: editForm.email.trim() || prev?.user?.email,
+            phone: editForm.phone.trim() || prev?.user?.phone,
+          },
+          accessRole: editForm.accessRole,
+          designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || prev?.designation?.title || 'Unassigned' },
+          department: departments.find((d: any) => d.id === editForm.departmentId) || prev?.department,
+          team: teams.find((t: any) => t.id === editForm.teamId) || prev?.team,
+        }));
+      }
 
       setEditingMember(null);
     } catch (err: any) {
@@ -1108,6 +1128,479 @@ export default function PeoplePage() {
     return 0;
   });
 
+  const renderMemberFullRecord = (member: any) => {
+    return (
+      <div className="pt-6 border-t border-border/60 space-y-4">
+        <div className="flex items-center gap-2 pb-1">
+          <FileText className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-bold text-foreground">Employee Record & Details</h3>
+        </div>
+              {/* Profile Completeness Bar & Actionable Incomplete Reminder (Phase 10 Requirement 2) */}
+              {(() => {
+                const extra = getMemberExtraData(member);
+                const hasPhone = Boolean(member.user?.phone || extra.phone);
+                const hasEmpId = Boolean(member.employeeId);
+                const hasBank = Boolean(extra.bankDetails?.accountNumber);
+                const hasAadhaar = Boolean(extra.identityDocs?.aadhaarNumber || extra.identityDocs?.panNumber);
+                const isComplete = hasPhone && hasEmpId && hasBank && hasAadhaar;
+                const score = [hasPhone, hasEmpId, hasBank, hasAadhaar].filter(Boolean).length * 25;
+
+                return (
+                  <div className="mt-3 p-2.5 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-foreground text-xs">Profile Completion</span>
+                        <Badge variant={isComplete ? 'default' : 'secondary'} className="text-[10px]">
+                          {isComplete ? '100% Complete' : `${score}% Completed`}
+                        </Badge>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground mt-0.5 block">
+                        {!isComplete
+                          ? `Missing: ${[!hasPhone && 'Phone', !hasBank && 'Bank Details', !hasAadhaar && 'Aadhaar / PAN ID'].filter(Boolean).join(', ')}`
+                          : 'All standard profile fields completed.'}
+                      </span>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
+                      onClick={async () => {
+                        try {
+                          const res = await fetch(`${BRANDING.apiUrl}/people/${member.id}/reminder`, {
+                            method: 'POST',
+                            headers: getHeaders(),
+                          });
+                          const data = await res.json();
+                          toast.success(data.message || 'Profile reminder sent to employee');
+                        } catch (e: any) {
+                          toast.error('Failed to send reminder');
+                        }
+                      }}
+                    >
+                      Send Incomplete Reminder
+                    </Button>
+                  </div>
+                );
+              })()}
+
+              {/* Profile Sub-tabs */}
+              <div className="flex border-b border-border space-x-3 pt-3 text-xs">
+                {((['personal', 'employment', ...(isCurrentUserOwnerOrAdmin || isSelfMember(member) ? ['access'] : []), 'assets', 'history', 'offboarding']) as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[]).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveProfileTab(tab)}
+                    className={`capitalize pb-2 border-b-2 font-semibold transition-colors ${
+                      activeProfileTab === tab
+                        ? 'border-primary text-primary'
+                        : 'border-transparent text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            <div className="py-3 text-xs space-y-4">
+              {/* Protected Workspace Owner Profile Notice */}
+              {member.accessRole === 'OWNER' && !isSelfMember(member) && (
+                <div className="p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+                  <ShieldCheck className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-semibold block text-foreground">Protected Workspace Owner Profile</span>
+                    <span>This account holds root workspace ownership. Details are visible for organizational attribution, but administrative edits, sensitive documents, and credentials are locked against external alteration.</span>
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION A: Personal, Banking & Identity */}
+              {activeProfileTab === 'personal' && (() => {
+                const extra = getMemberExtraData(member);
+                const bank = extra.bankDetails || {};
+                const idDocs = extra.identityDocs || {};
+                const personal = extra.personal || {};
+                const showAcc = showMemberSecrets[`${member.id}_acc`];
+                const showIfsc = showMemberSecrets[`${member.id}_ifsc`];
+                const showAadhaar = showMemberSecrets[`${member.id}_aadhaar`];
+
+                return (
+                  <div className="space-y-4">
+                    {/* 1. Personal Identity & Contact */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <User className="h-3.5 w-3.5 text-primary" /> Personal Identity & Contact
+                        </span>
+                        {canEditMember(member) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('personal');
+                              handleOpenEditModal(member);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit Personal Details
+                          </Button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Full Name:</span>
+                          <span className="font-semibold text-foreground">{member.user?.firstName} {member.user?.lastName}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Work Email:</span>
+                          <span className="font-semibold text-foreground">{member.user?.email}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Contact Phone:</span>
+                          <span className="font-semibold text-foreground">{member.user?.phone || extra.phone || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Date of Birth:</span>
+                          <span className="font-semibold text-foreground">{personal.dateOfBirth || 'Not provided'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Gender:</span>
+                          <span className="font-semibold text-foreground capitalize">{personal.gender || 'Not specified'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">District / Suburb:</span>
+                          <span className="font-semibold text-foreground">{personal.district || 'Not provided'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-muted-foreground block text-[11px]">Residential Address:</span>
+                          <span className="font-semibold text-foreground">{personal.address || 'Not provided'}</span>
+                          {personal.statePostcode && (
+                            <span className="text-muted-foreground block text-[10px] mt-0.5">State & PIN: {personal.statePostcode}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 2. Bank Account Details (Disbursement) */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <Landmark className="h-3.5 w-3.5 text-emerald-500" /> Bank Account Details (Salary Disbursement)
+                        </span>
+                        {canEditMember(member) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('banking');
+                              handleOpenEditModal(member);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit Bank Details
+                          </Button>
+                        )}
+                      </div>
+                      {member.accessRole === 'OWNER' && !isSelfMember(member) ? (
+                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
+                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          <span>Owner banking and disbursement details are private and encrypted.</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Bank Name:</span>
+                          <span className="font-semibold text-foreground">{bank.bankName || 'Not configured'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Branch:</span>
+                          <span className="font-semibold text-foreground">{bank.branchName || 'Main Branch'}</span>
+                        </div>
+                        <div className="col-span-2">
+                          <span className="text-muted-foreground block text-[11px]">Account Holder Name:</span>
+                          <span className="font-semibold text-foreground">{bank.accountHolder || `${member.user?.firstName || ''} ${member.user?.lastName || ''}`.trim()}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Account Number:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
+                            <span>
+                              {bank.accountNumber
+                                ? (showAcc ? bank.accountNumber : `••••••••${bank.accountNumber.slice(-4)}`)
+                                : 'Not provided'}
+                            </span>
+                            {bank.accountNumber && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${member.id}_acc`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showAcc ? "Hide Account Number" : "Show Account Number"}
+                              >
+                                {showAcc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">IFSC Code:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground uppercase">
+                            <span>
+                              {bank.ifscCode
+                                ? (showIfsc ? bank.ifscCode : `••••••${bank.ifscCode.slice(-4)}`)
+                                : 'Not provided'}
+                            </span>
+                            {bank.ifscCode && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${member.id}_ifsc`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showIfsc ? "Hide IFSC Code" : "Show IFSC Code"}
+                              >
+                                {showIfsc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                    {/* 3. Government IDs & Statutory Verification */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <div className="flex items-center justify-between pb-2 border-b border-border">
+                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
+                          <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Identity Proofs (Aadhaar & PAN)
+                        </span>
+                        {canEditMember(member) && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                            onClick={() => {
+                              setEditModalTab('identity');
+                              handleOpenEditModal(member);
+                            }}
+                          >
+                            <Pencil className="h-3 w-3" /> Edit ID Details
+                          </Button>
+                        )}
+                      </div>
+                      {member.accessRole === 'OWNER' && !isSelfMember(member) ? (
+                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
+                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          <span>Personal statutory identity documents are restricted to root authority.</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Aadhaar Number:</span>
+                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
+                            <span>
+                              {idDocs.aadhaarNumber
+                                ? (showAadhaar ? idDocs.aadhaarNumber : `•••• •••• ${idDocs.aadhaarNumber.slice(-4)}`)
+                                : 'Not submitted'}
+                            </span>
+                            {idDocs.aadhaarNumber && (
+                              <button
+                                type="button"
+                                onClick={() => toggleMemberSecret(`${member.id}_aadhaar`)}
+                                className="text-muted-foreground hover:text-foreground p-0.5"
+                                title={showAadhaar ? "Hide Aadhaar" : "Show Aadhaar"}
+                              >
+                                {showAadhaar ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">PAN Card Number:</span>
+                          <span className="font-mono text-xs font-semibold text-foreground uppercase">
+                            {idDocs.panNumber || 'Not submitted'}
+                          </span>
+                        </div>
+                        <div className="col-span-2 pt-1 flex flex-wrap gap-2">
+                          <Badge variant={idDocs.docApprovedId || idDocs.aadhaarNumber ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docApprovedId || idDocs.aadhaarNumber ? '✓ Aadhaar / ID Verified' : 'Aadhaar Pending'}
+                          </Badge>
+                          <Badge variant={idDocs.docPanCard || idDocs.panNumber ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docPanCard || idDocs.panNumber ? '✓ PAN Card Verified' : 'PAN Card Pending'}
+                          </Badge>
+                          <Badge variant={idDocs.docPassportPhoto ? 'success' : 'outline'} className="text-[10px]">
+                            {idDocs.docPassportPhoto ? '✓ Passport Photo Uploaded' : 'Photo Pending'}
+                          </Badge>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                    {/* 4. Emergency Contact */}
+                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
+                      <span className="font-semibold text-foreground text-xs flex items-center gap-1.5 pb-2 border-b border-border">
+                        <Phone className="h-3.5 w-3.5 text-primary" /> Emergency Contact
+                      </span>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Emergency Contact Person:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyName || 'Not configured'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Relationship:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyRelationship || 'Family / Relative'}</span>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground block text-[11px]">Emergency Phone:</span>
+                          <span className="font-semibold text-foreground">{extra.emergencyPhone || 'Not configured'}</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* SECTION B: Employment */}
+              {activeProfileTab === 'employment' && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-border">
+                    <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
+                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                        onClick={() => {
+                          setEditModalTab('org');
+                          handleOpenEditModal(member);
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit Designation & Org Details
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-muted-foreground block">Employee ID:</span>
+                      <span className="font-semibold text-foreground">{member.employeeId || 'EMP-' + member.id.slice(0, 6)}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Designation:</span>
+                      <span className="font-semibold text-foreground">{member.designation?.title || 'Unassigned'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Department:</span>
+                      <span className="font-semibold text-foreground">{member.department?.name || 'General'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Team:</span>
+                      <span className="font-semibold text-foreground">{member.team?.name || 'Unassigned'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Employment Type:</span>
+                      <span className="font-semibold text-foreground">{member.employmentType || 'FULL_TIME'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Work Location:</span>
+                      <span className="font-semibold text-foreground">{member.workLocation || 'Headquarters / Remote'}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION C: Access */}
+              {activeProfileTab === 'access' && (isCurrentUserOwnerOrAdmin || isSelfMember(member)) && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between pb-2 border-b border-border">
+                    <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
+                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
+                        onClick={() => {
+                          setEditModalTab('org');
+                          handleOpenEditModal(member);
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" /> Edit Access Role
+                      </Button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-muted-foreground block">System Access Role:</span>
+                      <Badge variant={member.accessRole === 'OWNER' ? 'default' : member.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
+                        {member.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : member.accessRole}
+                      </Badge>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Account Status:</span>
+                      <Badge variant="success">{member.status}</Badge>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Data Access Scope:</span>
+                      <span className="font-semibold text-foreground">{member.dataScope || 'ASSIGNED'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Last Login:</span>
+                      <span className="font-semibold text-foreground">
+                        {member.user?.lastLoginAt ? new Date(member.user.lastLoginAt).toLocaleString() : 'Never'}
+                      </span>
+                    </div>
+                  </div>
+
+
+                </div>
+              )}
+
+              {/* SECTION D: Assets */}
+              {activeProfileTab === 'assets' && (
+                <div className="space-y-2">
+                  <h4 className="font-bold text-foreground">Assigned Company Assets</h4>
+                  {member.assignedAssets?.length === 0 ? (
+                    <p className="text-muted-foreground">No assets currently assigned to this member.</p>
+                  ) : (
+                    (member.assignedAssets || []).map((asset: any) => (
+                      <div key={asset.id} className="p-2 border rounded-md flex justify-between">
+                        <span>{asset.name} ({asset.assetTag})</span>
+                        <Badge variant="outline">{asset.status}</Badge>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              {/* SECTION E: History */}
+              {activeProfileTab === 'history' && (
+                <div className="space-y-2">
+                  <h4 className="font-bold text-foreground">Assigned Tasks & Work Items</h4>
+                  <div className="space-y-1">
+                    {(member.assignedTasks || []).map((t: any) => (
+                      <div key={t.id} className="p-2 border rounded-md flex justify-between">
+                        <span>{t.title}</span>
+                        <Badge variant="secondary">{t.status}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* SECTION F: Offboarding */}
+              {activeProfileTab === 'offboarding' && (
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <span className="text-muted-foreground block">Offboarding Status:</span>
+                      <span className="font-semibold text-foreground">{member.offboardingStatus || 'ACTIVE_EMPLOYEE'}</span>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground block">Last Working Date:</span>
+                      <span className="font-semibold text-foreground">
+                        {member.lastWorkingDate ? new Date(member.lastWorkingDate).toLocaleDateString() : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+            </div>
+      </div>
+    );
+  };
   return (
     <div className="space-y-6">
       {viewingEmployee ? (
@@ -1118,25 +1611,15 @@ export default function PeoplePage() {
               variant="ghost"
               size="sm"
               onClick={() => setViewingEmployee(null)}
-              className="gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground pl-0"
+              className="gap-2 text-xs font-semibold text-muted-foreground hover:text-foreground pl-0 cursor-pointer"
             >
               <ArrowLeft className="h-4 w-4" /> Back to People Directory
             </Button>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSelectedMember(viewingEmployee)}
-                className="text-xs gap-1.5 rounded-xl"
-              >
-                <FileText className="h-3.5 w-3.5" /> Full Record
-              </Button>
-            </div>
           </div>
 
-          {/* Employee Profile Header Card */}
-          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs">
-            <div className="flex items-center justify-between pb-6 border-b border-border/60">
+          {/* Employee Profile Header Card with Compact Metrics Covering Top Space */}
+          <div className="rounded-2xl border border-border bg-card p-6 shadow-xs space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-border/60">
               <div className="flex items-center gap-4">
                 <UserAvatar
                   avatarUrl={viewingEmployee.user?.avatarUrl}
@@ -1144,7 +1627,7 @@ export default function PeoplePage() {
                   lastName={viewingEmployee.user?.lastName}
                   seed={viewingEmployee.user?.id || viewingEmployee.user?.email}
                   size="lg"
-                  className="h-16 w-16 rounded-xl border border-border"
+                  className="h-16 w-16 rounded-xl border border-border shrink-0"
                 />
                 <div className="space-y-1">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -1158,7 +1641,7 @@ export default function PeoplePage() {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground font-medium">
-                    {viewingEmployee.designation?.title || (viewingEmployee.accessRole === 'OWNER' ? 'Founder & CEO' : 'Team Member')} · {viewingEmployee.department?.name || 'Executive Leadership'}
+                    {viewingEmployee.designation?.title || (viewingEmployee.accessRole === 'OWNER' ? 'Founder & CEO' : 'Team Member')} • {viewingEmployee.department?.name || 'Executive Leadership'}
                   </p>
                   <div className="pt-0.5">
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
@@ -1167,12 +1650,35 @@ export default function PeoplePage() {
                   </div>
                 </div>
               </div>
-              <ChevronRight className="h-5 w-5 text-muted-foreground/60 hidden sm:block" />
+
+              {/* Compact Task Metric Cards covering empty space in top of page */}
+              <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap">
+                <div className="px-3.5 py-2.5 rounded-xl border border-border/80 bg-surface-secondary/50 min-w-[95px] shadow-2xs">
+                  <div className="text-lg font-bold text-foreground leading-tight">
+                    {loadingEmployeeTasks ? '...' : employeeTasks.length}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground font-medium mt-0.5">Total tasks</div>
+                </div>
+
+                <div className="px-3.5 py-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/10 min-w-[95px] shadow-2xs">
+                  <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 leading-tight">
+                    {loadingEmployeeTasks ? '...' : employeeTasks.filter((t: any) => t.status === 'COMPLETED' || t.status === 'DONE').length}
+                  </div>
+                  <div className="text-[10px] text-emerald-700 dark:text-emerald-300 font-medium mt-0.5">Completed</div>
+                </div>
+
+                <div className="px-3.5 py-2.5 rounded-xl border border-amber-500/25 bg-amber-500/10 min-w-[95px] shadow-2xs">
+                  <div className="text-lg font-bold text-amber-600 dark:text-amber-400 leading-tight">
+                    {loadingEmployeeTasks ? '...' : employeeTasks.filter((t: any) => t.status !== 'COMPLETED' && t.status !== 'DONE').length}
+                  </div>
+                  <div className="text-[10px] text-amber-700 dark:text-amber-300 font-medium mt-0.5">Pending</div>
+                </div>
+              </div>
             </div>
 
             {/* Owner Visibility & Protection Notice */}
             {viewingEmployee.accessRole === 'OWNER' && !isSelfMember(viewingEmployee) && (
-              <div className="mt-4 p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-3 text-xs text-amber-800 dark:text-amber-300">
+              <div className="p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-3 text-xs text-amber-800 dark:text-amber-300">
                 <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
                 <div className="space-y-0.5">
                   <span className="font-semibold block text-foreground">Public Attribution Record (Protected)</span>
@@ -1181,85 +1687,79 @@ export default function PeoplePage() {
               </div>
             )}
 
-            {/* Task Metrics Row (Image 2) */}
-            <div className="grid grid-cols-3 gap-6 py-8 border-b border-border/60">
-              <div>
-                <div className="text-3xl font-extrabold text-foreground">
+            {/* Collapsible Recent Assigned Tasks Section with Down Arrow */}
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => setShowAssignedTasks((prev) => !prev)}
+                className="w-full flex items-center justify-between p-3 rounded-xl border border-border/70 bg-surface-secondary/30 hover:bg-surface-secondary/60 transition-colors text-left group cursor-pointer"
+              >
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-bold text-foreground">Recent Assigned Tasks</h3>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-primary/10 text-primary border border-primary/20">
+                    {employeeTasks.length}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium group-hover:text-foreground transition-colors">
+                  <span>{showAssignedTasks ? 'Hide tasks' : 'Show tasks'}</span>
+                  <ChevronDown
+                    className={`h-4 w-4 transition-transform duration-200 ${
+                      showAssignedTasks ? 'rotate-180' : ''
+                    }`}
+                  />
+                </div>
+              </button>
+
+              {showAssignedTasks && (
+                <div className="pt-1">
                   {loadingEmployeeTasks ? (
-                    <span className="text-muted-foreground text-xl">...</span>
+                    <div className="flex items-center gap-2 py-4 px-3 text-xs text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                      Loading tasks assigned to {viewingEmployee.user?.firstName}...
+                    </div>
+                  ) : employeeTasks.length === 0 ? (
+                    <div className="py-4 px-3 text-xs text-muted-foreground italic rounded-xl border border-border/50 bg-surface-secondary/20">
+                      No tasks currently assigned to this team member.
+                    </div>
                   ) : (
-                    employeeTasks.length
+                    <ul className="space-y-2 p-3 rounded-xl border border-border/60 bg-surface-secondary/20">
+                      {employeeTasks.slice(0, 10).map((task: any) => {
+                        const isCompleted = task.status === 'COMPLETED' || task.status === 'DONE';
+                        const isInProgress =
+                          task.status === 'IN_PROGRESS' || task.status === 'PROCESSING' || task.status === 'IN_REVIEW';
+                        const label = isCompleted ? 'Completed' : isInProgress ? 'In Progress' : 'Pending';
+
+                        const badgeClass = isCompleted
+                          ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+                          : isInProgress
+                          ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800'
+                          : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
+
+                        return (
+                          <li
+                            key={task.id}
+                            className="flex items-center justify-between gap-3 text-xs p-2 rounded-lg hover:bg-card/60 transition-colors border-b border-border/30 last:border-b-0"
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className="text-muted-foreground text-sm leading-none">•</span>
+                              <span className="font-medium text-foreground truncate">{task.title || task.name}</span>
+                            </div>
+                            <span
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border shrink-0 ${badgeClass}`}
+                            >
+                              {label}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
                   )}
                 </div>
-                <div className="text-xs text-muted-foreground font-medium mt-1">Total tasks</div>
-              </div>
-
-              <div>
-                <div className="text-3xl font-extrabold text-emerald-600 dark:text-emerald-400">
-                  {loadingEmployeeTasks ? (
-                    <span className="text-muted-foreground text-xl">...</span>
-                  ) : (
-                    employeeTasks.filter((t: any) => t.status === 'COMPLETED' || t.status === 'DONE').length
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground font-medium mt-1">Completed</div>
-              </div>
-
-              <div>
-                <div className="text-3xl font-extrabold text-amber-600 dark:text-amber-500">
-                  {loadingEmployeeTasks ? (
-                    <span className="text-muted-foreground text-xl">...</span>
-                  ) : (
-                    employeeTasks.filter((t: any) => t.status !== 'COMPLETED' && t.status !== 'DONE').length
-                  )}
-                </div>
-                <div className="text-xs text-muted-foreground font-medium mt-1">Pending / Active</div>
-              </div>
-            </div>
-
-            {/* Recent Assigned Tasks Section (Image 2) */}
-            <div className="pt-6 space-y-4">
-              <h3 className="text-sm font-bold text-foreground">Recent Assigned Tasks</h3>
-
-              {loadingEmployeeTasks ? (
-                <div className="flex items-center gap-2 py-4 text-xs text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                  Loading tasks assigned to {viewingEmployee.user?.firstName}...
-                </div>
-              ) : employeeTasks.length === 0 ? (
-                <div className="py-4 text-xs text-muted-foreground italic">
-                  No tasks currently assigned to this team member.
-                </div>
-              ) : (
-                <ul className="space-y-3">
-                  {employeeTasks.slice(0, 10).map((task: any) => {
-                    const isCompleted = task.status === 'COMPLETED' || task.status === 'DONE';
-                    const isInProgress =
-                      task.status === 'IN_PROGRESS' || task.status === 'PROCESSING' || task.status === 'IN_REVIEW';
-                    const label = isCompleted ? 'Completed' : isInProgress ? 'In Progress' : 'Pending';
-
-                    const badgeClass = isCompleted
-                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-                      : isInProgress
-                      ? 'bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800'
-                      : 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800';
-
-                    return (
-                      <li key={task.id} className="flex items-center gap-2 text-xs text-foreground">
-                        <span className="text-muted-foreground text-sm leading-none">•</span>
-                        <span className="font-medium text-foreground">{task.title || task.name}</span>
-                        <span className="text-muted-foreground">–</span>
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold border ${badgeClass}`}
-                        >
-                          {label}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
               )}
             </div>
+
+            {/* Full Record Details - Automatically Visible Under Assigned Tasks */}
+            {renderMemberFullRecord(viewingEmployee)}
           </div>
         </div>
       ) : (
@@ -1978,520 +2478,6 @@ export default function PeoplePage() {
       )}
 
       {/* MODAL 2: Member Profile (6 Sections) */}
-      {selectedMember && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-2xl bg-card border-border shadow-2xl max-h-[90vh] overflow-y-auto">
-            <CardHeader className="pb-3 border-b border-border">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <UserAvatar
-                    avatarUrl={selectedMember.user?.avatarUrl}
-                    firstName={selectedMember.user?.firstName}
-                    lastName={selectedMember.user?.lastName}
-                    seed={selectedMember.user?.id || selectedMember.user?.email}
-                    size="md"
-                  />
-                  <div>
-                    <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
-                      {selectedMember.user?.firstName} {selectedMember.user?.lastName}
-                      {selectedMember.accessRole === 'OWNER' && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded-full">
-                          <ShieldCheck className="h-3 w-3" /> Verified Owner
-                        </span>
-                      )}
-                    </CardTitle>
-                    <CardDescription className="text-xs">{selectedMember.user?.email}</CardDescription>
-                  </div>
-                </div>
-                <Button variant="ghost" size="sm" onClick={() => setSelectedMember(null)}>
-                  Close
-                </Button>
-              </div>
-
-              {/* Profile Completeness Bar & Actionable Incomplete Reminder (Phase 10 Requirement 2) */}
-              {(() => {
-                const extra = getMemberExtraData(selectedMember);
-                const hasPhone = Boolean(selectedMember.user?.phone || extra.phone);
-                const hasEmpId = Boolean(selectedMember.employeeId);
-                const hasBank = Boolean(extra.bankDetails?.accountNumber);
-                const hasAadhaar = Boolean(extra.identityDocs?.aadhaarNumber || extra.identityDocs?.panNumber);
-                const isComplete = hasPhone && hasEmpId && hasBank && hasAadhaar;
-                const score = [hasPhone, hasEmpId, hasBank, hasAadhaar].filter(Boolean).length * 25;
-
-                return (
-                  <div className="mt-3 p-2.5 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-foreground text-xs">Profile Completion</span>
-                        <Badge variant={isComplete ? 'default' : 'secondary'} className="text-[10px]">
-                          {isComplete ? '100% Complete' : `${score}% Completed`}
-                        </Badge>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground mt-0.5 block">
-                        {!isComplete
-                          ? `Missing: ${[!hasPhone && 'Phone', !hasBank && 'Bank Details', !hasAadhaar && 'Aadhaar / PAN ID'].filter(Boolean).join(', ')}`
-                          : 'All standard profile fields completed.'}
-                      </span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 text-xs border-primary/30 text-primary hover:bg-primary/10"
-                      onClick={async () => {
-                        try {
-                          const res = await fetch(`${BRANDING.apiUrl}/people/${selectedMember.id}/reminder`, {
-                            method: 'POST',
-                            headers: getHeaders(),
-                          });
-                          const data = await res.json();
-                          toast.success(data.message || 'Profile reminder sent to employee');
-                        } catch (e: any) {
-                          toast.error('Failed to send reminder');
-                        }
-                      }}
-                    >
-                      Send Incomplete Reminder
-                    </Button>
-                  </div>
-                );
-              })()}
-
-              {/* Profile Sub-tabs */}
-              <div className="flex border-b border-border space-x-3 pt-3 text-xs">
-                {(['personal', 'employment', 'access', 'assets', 'history', 'offboarding'] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveProfileTab(tab)}
-                    className={`capitalize pb-2 border-b-2 font-semibold transition-colors ${
-                      activeProfileTab === tab
-                        ? 'border-primary text-primary'
-                        : 'border-transparent text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {tab}
-                  </button>
-                ))}
-              </div>
-            </CardHeader>
-
-            <CardContent className="py-4 text-xs space-y-4">
-              {/* Protected Workspace Owner Profile Notice */}
-              {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) && (
-                <div className="p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
-                  <ShieldCheck className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <div className="space-y-0.5">
-                    <span className="font-semibold block text-foreground">Protected Workspace Owner Profile</span>
-                    <span>This account holds root workspace ownership. Details are visible for organizational attribution, but administrative edits, sensitive documents, and credentials are locked against external alteration.</span>
-                  </div>
-                </div>
-              )}
-
-              {/* SECTION A: Personal, Banking & Identity */}
-              {activeProfileTab === 'personal' && (() => {
-                const extra = getMemberExtraData(selectedMember);
-                const bank = extra.bankDetails || {};
-                const idDocs = extra.identityDocs || {};
-                const personal = extra.personal || {};
-                const showAcc = showMemberSecrets[`${selectedMember.id}_acc`];
-                const showIfsc = showMemberSecrets[`${selectedMember.id}_ifsc`];
-                const showAadhaar = showMemberSecrets[`${selectedMember.id}_aadhaar`];
-
-                return (
-                  <div className="space-y-4">
-                    {/* 1. Personal Identity & Contact */}
-                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
-                      <div className="flex items-center justify-between pb-2 border-b border-border">
-                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
-                          <User className="h-3.5 w-3.5 text-primary" /> Personal Identity & Contact
-                        </span>
-                        {canEditMember(selectedMember) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                            onClick={() => {
-                              setEditModalTab('personal');
-                              handleOpenEditModal(selectedMember);
-                            }}
-                          >
-                            <Pencil className="h-3 w-3" /> Edit Personal Details
-                          </Button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Full Name:</span>
-                          <span className="font-semibold text-foreground">{selectedMember.user?.firstName} {selectedMember.user?.lastName}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Work Email:</span>
-                          <span className="font-semibold text-foreground">{selectedMember.user?.email}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Contact Phone:</span>
-                          <span className="font-semibold text-foreground">{selectedMember.user?.phone || extra.phone || 'Not provided'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Date of Birth:</span>
-                          <span className="font-semibold text-foreground">{personal.dateOfBirth || 'Not provided'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Gender:</span>
-                          <span className="font-semibold text-foreground capitalize">{personal.gender || 'Not specified'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">District / Suburb:</span>
-                          <span className="font-semibold text-foreground">{personal.district || 'Not provided'}</span>
-                        </div>
-                        <div className="col-span-2">
-                          <span className="text-muted-foreground block text-[11px]">Residential Address:</span>
-                          <span className="font-semibold text-foreground">{personal.address || 'Not provided'}</span>
-                          {personal.statePostcode && (
-                            <span className="text-muted-foreground block text-[10px] mt-0.5">State & PIN: {personal.statePostcode}</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* 2. Bank Account Details (Disbursement) */}
-                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
-                      <div className="flex items-center justify-between pb-2 border-b border-border">
-                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
-                          <Landmark className="h-3.5 w-3.5 text-emerald-500" /> Bank Account Details (Salary Disbursement)
-                        </span>
-                        {canEditMember(selectedMember) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                            onClick={() => {
-                              setEditModalTab('banking');
-                              handleOpenEditModal(selectedMember);
-                            }}
-                          >
-                            <Pencil className="h-3 w-3" /> Edit Bank Details
-                          </Button>
-                        )}
-                      </div>
-                      {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) ? (
-                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
-                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                          <span>Owner banking and disbursement details are private and encrypted.</span>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Bank Name:</span>
-                          <span className="font-semibold text-foreground">{bank.bankName || 'Not configured'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Branch:</span>
-                          <span className="font-semibold text-foreground">{bank.branchName || 'Main Branch'}</span>
-                        </div>
-                        <div className="col-span-2">
-                          <span className="text-muted-foreground block text-[11px]">Account Holder Name:</span>
-                          <span className="font-semibold text-foreground">{bank.accountHolder || `${selectedMember.user?.firstName || ''} ${selectedMember.user?.lastName || ''}`.trim()}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Account Number:</span>
-                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
-                            <span>
-                              {bank.accountNumber
-                                ? (showAcc ? bank.accountNumber : `••••••••${bank.accountNumber.slice(-4)}`)
-                                : 'Not provided'}
-                            </span>
-                            {bank.accountNumber && (
-                              <button
-                                type="button"
-                                onClick={() => toggleMemberSecret(`${selectedMember.id}_acc`)}
-                                className="text-muted-foreground hover:text-foreground p-0.5"
-                                title={showAcc ? "Hide Account Number" : "Show Account Number"}
-                              >
-                                {showAcc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">IFSC Code:</span>
-                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground uppercase">
-                            <span>
-                              {bank.ifscCode
-                                ? (showIfsc ? bank.ifscCode : `••••••${bank.ifscCode.slice(-4)}`)
-                                : 'Not provided'}
-                            </span>
-                            {bank.ifscCode && (
-                              <button
-                                type="button"
-                                onClick={() => toggleMemberSecret(`${selectedMember.id}_ifsc`)}
-                                className="text-muted-foreground hover:text-foreground p-0.5"
-                                title={showIfsc ? "Hide IFSC Code" : "Show IFSC Code"}
-                              >
-                                {showIfsc ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                    {/* 3. Government IDs & Statutory Verification */}
-                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
-                      <div className="flex items-center justify-between pb-2 border-b border-border">
-                        <span className="font-semibold text-foreground text-xs flex items-center gap-1.5">
-                          <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Identity Proofs (Aadhaar & PAN)
-                        </span>
-                        {canEditMember(selectedMember) && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                            onClick={() => {
-                              setEditModalTab('identity');
-                              handleOpenEditModal(selectedMember);
-                            }}
-                          >
-                            <Pencil className="h-3 w-3" /> Edit ID Details
-                          </Button>
-                        )}
-                      </div>
-                      {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) ? (
-                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
-                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                          <span>Personal statutory identity documents are restricted to root authority.</span>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Aadhaar Number:</span>
-                          <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
-                            <span>
-                              {idDocs.aadhaarNumber
-                                ? (showAadhaar ? idDocs.aadhaarNumber : `•••• •••• ${idDocs.aadhaarNumber.slice(-4)}`)
-                                : 'Not submitted'}
-                            </span>
-                            {idDocs.aadhaarNumber && (
-                              <button
-                                type="button"
-                                onClick={() => toggleMemberSecret(`${selectedMember.id}_aadhaar`)}
-                                className="text-muted-foreground hover:text-foreground p-0.5"
-                                title={showAadhaar ? "Hide Aadhaar" : "Show Aadhaar"}
-                              >
-                                {showAadhaar ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">PAN Card Number:</span>
-                          <span className="font-mono text-xs font-semibold text-foreground uppercase">
-                            {idDocs.panNumber || 'Not submitted'}
-                          </span>
-                        </div>
-                        <div className="col-span-2 pt-1 flex flex-wrap gap-2">
-                          <Badge variant={idDocs.docApprovedId || idDocs.aadhaarNumber ? 'success' : 'outline'} className="text-[10px]">
-                            {idDocs.docApprovedId || idDocs.aadhaarNumber ? '✓ Aadhaar / ID Verified' : 'Aadhaar Pending'}
-                          </Badge>
-                          <Badge variant={idDocs.docPanCard || idDocs.panNumber ? 'success' : 'outline'} className="text-[10px]">
-                            {idDocs.docPanCard || idDocs.panNumber ? '✓ PAN Card Verified' : 'PAN Card Pending'}
-                          </Badge>
-                          <Badge variant={idDocs.docPassportPhoto ? 'success' : 'outline'} className="text-[10px]">
-                            {idDocs.docPassportPhoto ? '✓ Passport Photo Uploaded' : 'Photo Pending'}
-                          </Badge>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                    {/* 4. Emergency Contact */}
-                    <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
-                      <span className="font-semibold text-foreground text-xs flex items-center gap-1.5 pb-2 border-b border-border">
-                        <Phone className="h-3.5 w-3.5 text-primary" /> Emergency Contact
-                      </span>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Emergency Contact Person:</span>
-                          <span className="font-semibold text-foreground">{extra.emergencyName || 'Not configured'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Relationship:</span>
-                          <span className="font-semibold text-foreground">{extra.emergencyRelationship || 'Family / Relative'}</span>
-                        </div>
-                        <div>
-                          <span className="text-muted-foreground block text-[11px]">Emergency Phone:</span>
-                          <span className="font-semibold text-foreground">{extra.emergencyPhone || 'Not configured'}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* SECTION B: Employment */}
-              {activeProfileTab === 'employment' && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between pb-2 border-b border-border">
-                    <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
-                    {canEditMember(selectedMember) && isCurrentUserOwnerOrAdmin && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                        onClick={() => {
-                          setEditModalTab('org');
-                          handleOpenEditModal(selectedMember);
-                        }}
-                      >
-                        <Pencil className="h-3 w-3" /> Edit Designation & Org Details
-                      </Button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-muted-foreground block">Employee ID:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.employeeId || 'EMP-' + selectedMember.id.slice(0, 6)}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Designation:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.designation?.title || 'Unassigned'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Department:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.department?.name || 'General'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Team:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.team?.name || 'Unassigned'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Employment Type:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.employmentType || 'FULL_TIME'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Work Location:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.workLocation || 'Headquarters / Remote'}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* SECTION C: Access */}
-              {activeProfileTab === 'access' && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between pb-2 border-b border-border">
-                    <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
-                    {canEditMember(selectedMember) && isCurrentUserOwnerOrAdmin && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs gap-1.5 text-primary border-primary/30 hover:bg-primary/10"
-                        onClick={() => {
-                          setEditModalTab('org');
-                          handleOpenEditModal(selectedMember);
-                        }}
-                      >
-                        <Pencil className="h-3 w-3" /> Edit Access Role
-                      </Button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-muted-foreground block">System Access Role:</span>
-                      <Badge variant={selectedMember.accessRole === 'OWNER' ? 'default' : selectedMember.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                        {selectedMember.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : selectedMember.accessRole}
-                      </Badge>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Account Status:</span>
-                      <Badge variant="success">{selectedMember.status}</Badge>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Data Access Scope:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.dataScope || 'ASSIGNED'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Last Login:</span>
-                      <span className="font-semibold text-foreground">
-                        {selectedMember.user?.lastLoginAt ? new Date(selectedMember.user.lastLoginAt).toLocaleString() : 'Never'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Direct link to Settings > Roles */}
-                  <div className="mt-3 p-3 rounded-lg border border-border bg-muted/40 flex items-center justify-between">
-                    <div className="space-y-0.5">
-                      <span className="font-semibold text-foreground flex items-center gap-1.5 text-xs">
-                        <Shield className="h-3.5 w-3.5 text-primary" /> Workspace Roles & Permissions
-                      </span>
-                      <p className="text-[11px] text-muted-foreground">
-                        Configure module capabilities and permission matrices in Settings.
-                      </p>
-                    </div>
-                    <Link
-                      href="/app/settings?tab=roles"
-                      className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline"
-                    >
-                      Settings Roles <ArrowUpRight className="h-3 w-3" />
-                    </Link>
-                  </div>
-                </div>
-              )}
-
-              {/* SECTION D: Assets */}
-              {activeProfileTab === 'assets' && (
-                <div className="space-y-2">
-                  <h4 className="font-bold text-foreground">Assigned Company Assets</h4>
-                  {selectedMember.assignedAssets?.length === 0 ? (
-                    <p className="text-muted-foreground">No assets currently assigned to this member.</p>
-                  ) : (
-                    (selectedMember.assignedAssets || []).map((asset: any) => (
-                      <div key={asset.id} className="p-2 border rounded-md flex justify-between">
-                        <span>{asset.name} ({asset.assetTag})</span>
-                        <Badge variant="outline">{asset.status}</Badge>
-                      </div>
-                    ))
-                  )}
-                </div>
-              )}
-
-              {/* SECTION E: History */}
-              {activeProfileTab === 'history' && (
-                <div className="space-y-2">
-                  <h4 className="font-bold text-foreground">Assigned Tasks & Work Items</h4>
-                  <div className="space-y-1">
-                    {(selectedMember.assignedTasks || []).map((t: any) => (
-                      <div key={t.id} className="p-2 border rounded-md flex justify-between">
-                        <span>{t.title}</span>
-                        <Badge variant="secondary">{t.status}</Badge>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {/* SECTION F: Offboarding */}
-              {activeProfileTab === 'offboarding' && (
-                <div className="space-y-2">
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-muted-foreground block">Offboarding Status:</span>
-                      <span className="font-semibold text-foreground">{selectedMember.offboardingStatus || 'ACTIVE_EMPLOYEE'}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block">Last Working Date:</span>
-                      <span className="font-semibold text-foreground">
-                        {selectedMember.lastWorkingDate ? new Date(selectedMember.lastWorkingDate).toLocaleDateString() : 'N/A'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
       {/* MODAL 3: Offboarding Workflow Modal */}
       {showOffboardModal && offboardMember && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
