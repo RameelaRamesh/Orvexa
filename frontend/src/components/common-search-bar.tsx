@@ -129,16 +129,17 @@ export function CommonSearchBar({ className = '' }: { className?: string }) {
               item.designation?.title?.toLowerCase().includes(lowerQ) ||
               item.department?.name?.toLowerCase().includes(lowerQ)
             ) {
+              const targetPersonId = item.id || user.id;
               matchedPeople.push({
                 type: 'people',
-                id: item.id || user.id,
+                id: targetPersonId,
                 title: fullName || user.email || 'Team Member',
                 subtitle: `${item.designation?.title || item.accessRole || 'Member'} • ${item.department?.name || 'General'}`,
                 avatarUrl: user.avatarUrl,
                 firstName: user.firstName,
                 lastName: user.lastName,
                 status: item.status,
-                href: '/app/people',
+                href: `/app/people?memberId=${targetPersonId}`,
               });
             }
           }
@@ -209,6 +210,9 @@ export function CommonSearchBar({ className = '' }: { className?: string }) {
     setIsOpen(false);
     setQuery('');
     router.push(href);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('orvexa-navigate', { detail: { href } }));
+    }
   };
 
   return (

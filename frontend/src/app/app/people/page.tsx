@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -48,6 +49,7 @@ import {
   ChevronRight,
   ArrowLeft,
   Network,
+  Lock,
   Filter,
   ListFilter,
   Loader2,
@@ -56,6 +58,7 @@ import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
 
 export default function PeoplePage() {
+  const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
   const [members, setMembers] = useState<any[]>([]);
   const [invitations, setInvitations] = useState<any[]>([]);
@@ -121,7 +124,12 @@ export default function PeoplePage() {
 
   const canEditMember = (m: any): boolean => {
     if (!m) return false;
-    return true;
+    // The Workspace Owner account is protected: only the Owner themselves can edit their record
+    if (m.accessRole === 'OWNER') {
+      return isSelfMember(m);
+    }
+    // For other members, either the member themselves or an Admin/Owner can edit
+    return isCurrentUserOwnerOrAdmin || isSelfMember(m);
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -144,6 +152,7 @@ export default function PeoplePage() {
   };
 
   const handleOpenEmployeeProfile = async (member: any) => {
+    if (member?.accessRole === 'OWNER') return;
     setViewingEmployee(member);
     setLoadingEmployeeTasks(true);
     setEmployeeTasks([]);
@@ -565,7 +574,13 @@ export default function PeoplePage() {
       const teamData = rawTeam.data !== undefined ? rawTeam.data : rawTeam;
       const roleData = rawRole.data !== undefined ? rawRole.data : rawRole;
 
-      setMembers(Array.isArray(memData) ? memData : []);
+      const rawMemList = Array.isArray(memData) ? memData : [];
+      rawMemList.sort((a: any, b: any) => {
+        if (a.accessRole === 'OWNER' && b.accessRole !== 'OWNER') return -1;
+        if (a.accessRole !== 'OWNER' && b.accessRole === 'OWNER') return 1;
+        return 0;
+      });
+      setMembers(rawMemList);
       setInvitations(Array.isArray(invData) ? invData : []);
       setDepartments(Array.isArray(deptData) ? deptData : []);
       setDesignations(Array.isArray(desigData) ? desigData : []);
@@ -611,6 +626,65 @@ export default function PeoplePage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Helper to open a specific member profile by ID or email
+  const openMemberById = (idOrEmail: string, memberList = members) => {
+    if (!idOrEmail || memberList.length === 0) return;
+    const cleanTarget = idOrEmail.toLowerCase().trim();
+    const target = memberList.find(
+      (m: any) =>
+        (m.id && m.id.toLowerCase() === cleanTarget) ||
+        (m.userId && m.userId.toLowerCase() === cleanTarget) ||
+        (m.user?.id && m.user.id.toLowerCase() === cleanTarget) ||
+        (m.employeeId && m.employeeId.toLowerCase() === cleanTarget) ||
+        (m.user?.email && m.user.email.toLowerCase() === cleanTarget) ||
+        (m.email && m.email.toLowerCase() === cleanTarget)
+    );
+
+    if (target) {
+      if (target.accessRole === 'OWNER') {
+        const ownerCard = document.getElementById('workspace-owner-card');
+        if (ownerCard) {
+          ownerCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      } else {
+        handleOpenEmployeeProfile(target);
+      }
+    }
+  };
+
+  // Sync with searchParams / URL query parameter (?memberId=... or ?id=...)
+  useEffect(() => {
+    let memberIdParam = searchParams?.get('memberId') || searchParams?.get('id');
+    if (!memberIdParam && typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      memberIdParam = urlParams.get('memberId') || urlParams.get('id');
+    }
+    if (memberIdParam && members.length > 0) {
+      openMemberById(memberIdParam, members);
+    }
+  }, [searchParams, members]);
+
+  // Listen to custom navigation events from CommonSearchBar when already on /app/people
+  useEffect(() => {
+    const handleNav = (e: any) => {
+      const href = e.detail?.href || '';
+      if (href.includes('/app/people')) {
+        try {
+          const urlObj = new URL(href, window.location.origin);
+          const idParam = urlObj.searchParams.get('memberId') || urlObj.searchParams.get('id');
+          if (idParam && members.length > 0) {
+            openMemberById(idParam, members);
+          }
+        } catch {}
+      }
+    };
+
+    window.addEventListener('orvexa-navigate', handleNav);
+    return () => window.removeEventListener('orvexa-navigate', handleNav);
+  }, [members]);
 
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -816,6 +890,14 @@ export default function PeoplePage() {
   };
 
   const handleOpenEditModal = (m: any) => {
+    if (!canEditMember(m)) {
+      if (m?.accessRole === 'OWNER') {
+        toast.error('The workspace owner profile is protected and can only be modified by the owner.');
+      } else {
+        toast.error('You only have permission to edit your own details. HR (Admin) or Owner access is required to edit other members.');
+      }
+      return;
+    }
     setEditingMember(m);
     if (!isCurrentUserOwnerOrAdmin && editModalTab === 'org') {
       setEditModalTab('personal');
@@ -994,7 +1076,11 @@ export default function PeoplePage() {
     }
   };
 
+  const ownerMember = members.find((m) => m.accessRole === 'OWNER');
+
   const filteredMembers = members.filter((m) => {
+    // Dedicated Workspace Ownership header card handles the Owner
+    if (m.accessRole === 'OWNER') return false;
     const fullName = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.toLowerCase();
     const email = (m.user?.email || m.email || '').toLowerCase();
     const designation = (m.designation?.title || '').toLowerCase();
@@ -1016,6 +1102,10 @@ export default function PeoplePage() {
     const matchesRole = filterRole ? m.accessRole === filterRole : true;
 
     return matchesSearch && matchesDept && matchesDesignation && matchesTeam && matchesRole;
+  }).sort((a, b) => {
+    if (a.accessRole === 'OWNER' && b.accessRole !== 'OWNER') return -1;
+    if (a.accessRole !== 'OWNER' && b.accessRole === 'OWNER') return 1;
+    return 0;
   });
 
   return (
@@ -1057,11 +1147,18 @@ export default function PeoplePage() {
                   className="h-16 w-16 rounded-xl border border-border"
                 />
                 <div className="space-y-1">
-                  <h2 className="text-xl font-bold text-foreground">
-                    {viewingEmployee.user?.firstName} {viewingEmployee.user?.lastName}
-                  </h2>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-xl font-bold text-foreground">
+                      {viewingEmployee.user?.firstName} {viewingEmployee.user?.lastName}
+                    </h2>
+                    {viewingEmployee.accessRole === 'OWNER' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary border border-primary/20">
+                        <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Verified Workspace Owner
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs text-muted-foreground font-medium">
-                    {viewingEmployee.designation?.title || 'Team Member'} · {viewingEmployee.department?.name || 'General'}
+                    {viewingEmployee.designation?.title || (viewingEmployee.accessRole === 'OWNER' ? 'Founder & CEO' : 'Team Member')} · {viewingEmployee.department?.name || 'Executive Leadership'}
                   </p>
                   <div className="pt-0.5">
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
@@ -1072,6 +1169,17 @@ export default function PeoplePage() {
               </div>
               <ChevronRight className="h-5 w-5 text-muted-foreground/60 hidden sm:block" />
             </div>
+
+            {/* Owner Visibility & Protection Notice */}
+            {viewingEmployee.accessRole === 'OWNER' && !isSelfMember(viewingEmployee) && (
+              <div className="mt-4 p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-3 text-xs text-amber-800 dark:text-amber-300">
+                <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                <div className="space-y-0.5">
+                  <span className="font-semibold block text-foreground">Public Attribution Record (Protected)</span>
+                  <span>This profile represents root workspace ownership. Details are visible across the team for organizational hierarchy, but administrative alteration and role modifications are locked.</span>
+                </div>
+              </div>
+            )}
 
             {/* Task Metrics Row (Image 2) */}
             <div className="grid grid-cols-3 gap-6 py-8 border-b border-border/60">
@@ -1231,7 +1339,59 @@ export default function PeoplePage() {
 
           {/* TAB 1: Members Directory (Matching Image 1) */}
           {activeTab === 'members' && (
-        <Card className="border-border">
+            <div className="space-y-4">
+              {/* Dedicated Workspace Ownership Header Card (Option 3) */}
+              {ownerMember && (
+                <div id="workspace-owner-card" className="rounded-2xl border border-border bg-card p-4 shadow-xs flex items-center justify-between gap-4 transition-all">
+                  <div className="flex items-center gap-3.5">
+                    <div className="relative">
+                      <UserAvatar
+                        avatarUrl={ownerMember.user?.avatarUrl}
+                        firstName={ownerMember.user?.firstName}
+                        lastName={ownerMember.user?.lastName}
+                        seed={ownerMember.user?.id || ownerMember.user?.email}
+                        size="md"
+                        className="h-12 w-12 rounded-full border border-border/80"
+                      />
+                      <span className="absolute -bottom-1 -right-1 bg-primary text-primary-foreground rounded-full p-1 shadow-xs border-2 border-background">
+                        <ShieldCheck className="h-3 w-3" />
+                      </span>
+                    </div>
+                    <div className="h-10 border-l border-border/70 mx-1 hidden sm:block" />
+                    <div className="space-y-0.5">
+                      <span className="text-[11px] font-medium text-muted-foreground block">
+                        Workspace Managed By:
+                      </span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-bold text-sm text-foreground">
+                          {ownerMember.user?.firstName} {ownerMember.user?.lastName}
+                        </span>
+                        <span className="text-xs text-muted-foreground font-medium">
+                          (Primary Owner)
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        Root Authority · All Workspaces &amp; Teams
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    {currentUserRole === 'OWNER' && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowTransferModal(true)}
+                        className="text-xs font-semibold rounded-xl border-border hover:bg-muted/60"
+                      >
+                        Owner Settings
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <Card className="border-border">
           <CardContent className="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm border-collapse">
@@ -1242,26 +1402,36 @@ export default function PeoplePage() {
                     <th className="py-3 px-4">Designation</th>
                     <th className="py-3 px-4">Department / Team</th>
                     <th className="py-3 px-4">Status</th>
-                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredMembers.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
+                      <td colSpan={5} className="py-8 text-center text-muted-foreground text-xs">
                         No members found.
                       </td>
                     </tr>
                   ) : (
-                    filteredMembers.map((m) => (
+                    filteredMembers.map((m) => {
+                      const isOwner = m.accessRole === 'OWNER';
+                      return (
                       <tr
                         key={m.id}
                         onClick={(e) => {
-                              e.stopPropagation();
-                              handleOpenEmployeeProfile(m);
-                            }}
-                        className="hover:bg-surface-secondary/40 transition-colors cursor-pointer group"
-                        title={`Click to view profile & task metrics for ${m.user?.firstName || 'member'}`}
+                          e.stopPropagation();
+                          if (isOwner) return;
+                          handleOpenEmployeeProfile(m);
+                        }}
+                        className={`transition-colors ${
+                          isOwner
+                            ? 'bg-primary/[0.02] cursor-default'
+                            : 'hover:bg-surface-secondary/40 cursor-pointer group'
+                        }`}
+                        title={
+                          isOwner
+                            ? 'Workspace Owner (Root Authority - Protected)'
+                            : `Click to view profile & task metrics for ${m.user?.firstName || 'member'}`
+                        }
                       >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-3">
@@ -1274,8 +1444,16 @@ export default function PeoplePage() {
                             />
                             <div>
                               <div
-                                onClick={() => handleOpenEmployeeProfile(m)}
-                                className="font-semibold text-foreground hover:underline cursor-pointer"
+                                onClick={(e) => {
+                                  if (isOwner) {
+                                    e.stopPropagation();
+                                    return;
+                                  }
+                                  handleOpenEmployeeProfile(m);
+                                }}
+                                className={`font-semibold text-foreground ${
+                                  isOwner ? 'cursor-default select-none' : 'hover:underline cursor-pointer'
+                                }`}
                               >
                                 {m.user?.firstName} {m.user?.lastName}
                               </div>
@@ -1284,9 +1462,15 @@ export default function PeoplePage() {
                           </div>
                         </td>
                         <td className="py-3 px-4">
-                          <Badge variant={m.accessRole === 'OWNER' ? 'default' : m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                            {m.accessRole}
-                          </Badge>
+                          {m.accessRole === 'OWNER' ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/10 text-primary border border-primary/20 shadow-xs">
+                              <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Workspace Owner
+                            </span>
+                          ) : (
+                            <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
+                              {m.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : m.accessRole}
+                            </Badge>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
                           {m.designation?.title || 'Unassigned'}
@@ -1308,71 +1492,17 @@ export default function PeoplePage() {
                             {m.status}
                           </Badge>
                         </td>
-                        <td className="py-3 px-4 text-right space-x-1 whitespace-nowrap">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs px-2.5 text-primary font-semibold hover:text-primary hover:bg-primary/10"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditModalTab('personal');
-                              handleOpenEditModal(m);
-                            }}
-                          >
-                            <Pencil className="h-3 w-3 mr-1" /> Edit
-                          </Button>
-                          {isCurrentUserOwnerOrAdmin && !isSelfMember(m) && (
-                            <>
-                              {m.status === 'ACTIVE' ? (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs px-2 text-amber-600 hover:text-amber-700"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleSuspendMember(m.id);
-                                  }}
-                                >
-                                  Suspend
-                                </Button>
-                              ) : m.status === 'SUSPENDED' ? (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs px-2 text-emerald-600 hover:text-emerald-700"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleReactivateMember(m.id);
-                                  }}
-                                >
-                                  Reactivate
-                                </Button>
-                              ) : null}
-                              {m.accessRole !== 'OWNER' && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 text-xs px-2 text-destructive"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setOffboardMember(m);
-                                    setShowOffboardModal(true);
-                                  }}
-                                >
-                                  Offboard
-                                </Button>
-                              )}
-                            </>
-                          )}
-                        </td>
+
                       </tr>
-                    ))
+                    );
+                  })
                   )}
                 </tbody>
               </table>
             </div>
           </CardContent>
         </Card>
+            </div>
       )}
 
       {/* TAB 2: Invitations */}
@@ -1394,7 +1524,7 @@ export default function PeoplePage() {
                 <tbody className="divide-y divide-border">
                   {invitations.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
+                      <td colSpan={5} className="py-8 text-center text-muted-foreground text-xs">
                         No invitations sent yet.
                       </td>
                     </tr>
@@ -1526,14 +1656,24 @@ export default function PeoplePage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {members
                     .filter((m) => m.accessRole === 'OWNER' || (m.designation?.title || '').toLowerCase().includes('ceo') || (m.designation?.title || '').toLowerCase().includes('founder') || (m.designation?.title || '').toLowerCase().includes('director'))
-                    .map((m) => (
+                    .sort((a, b) => {
+                      if (a.accessRole === 'OWNER' && b.accessRole !== 'OWNER') return -1;
+                      if (a.accessRole !== 'OWNER' && b.accessRole === 'OWNER') return 1;
+                      return 0;
+                    })
+                    .map((m) => {
+                      const isOwner = m.accessRole === 'OWNER';
+                      return (
                       <div
                         key={m.id}
                         onClick={() => {
+                          if (isOwner) return;
                           setShowOrgChartModal(false);
                           handleOpenEmployeeProfile(m);
                         }}
-                        className="p-3 rounded-xl border border-primary/20 bg-primary/5 flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-colors"
+                        className={`p-3 rounded-xl border border-primary/20 bg-primary/5 flex items-center gap-3 transition-colors ${
+                          isOwner ? 'cursor-default' : 'cursor-pointer hover:border-primary/50'
+                        }`}
                       >
                         <UserAvatar
                           avatarUrl={m.user?.avatarUrl}
@@ -1551,7 +1691,8 @@ export default function PeoplePage() {
                           </div>
                         </div>
                       </div>
-                    ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1851,8 +1992,13 @@ export default function PeoplePage() {
                     size="md"
                   />
                   <div>
-                    <CardTitle className="text-lg">
+                    <CardTitle className="text-lg flex items-center gap-2 flex-wrap">
                       {selectedMember.user?.firstName} {selectedMember.user?.lastName}
+                      {selectedMember.accessRole === 'OWNER' && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary bg-primary/10 border border-primary/20 px-2 py-0.5 rounded-full">
+                          <ShieldCheck className="h-3 w-3" /> Verified Owner
+                        </span>
+                      )}
                     </CardTitle>
                     <CardDescription className="text-xs">{selectedMember.user?.email}</CardDescription>
                   </div>
@@ -1929,6 +2075,17 @@ export default function PeoplePage() {
             </CardHeader>
 
             <CardContent className="py-4 text-xs space-y-4">
+              {/* Protected Workspace Owner Profile Notice */}
+              {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) && (
+                <div className="p-3.5 rounded-xl border border-amber-500/20 bg-amber-500/5 flex items-start gap-2.5 text-xs text-amber-800 dark:text-amber-300">
+                  <ShieldCheck className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <span className="font-semibold block text-foreground">Protected Workspace Owner Profile</span>
+                    <span>This account holds root workspace ownership. Details are visible for organizational attribution, but administrative edits, sensitive documents, and credentials are locked against external alteration.</span>
+                  </div>
+                </div>
+              )}
+
               {/* SECTION A: Personal, Banking & Identity */}
               {activeProfileTab === 'personal' && (() => {
                 const extra = getMemberExtraData(selectedMember);
@@ -2016,7 +2173,13 @@ export default function PeoplePage() {
                           </Button>
                         )}
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) ? (
+                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
+                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          <span>Owner banking and disbursement details are private and encrypted.</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
                         <div>
                           <span className="text-muted-foreground block text-[11px]">Bank Name:</span>
                           <span className="font-semibold text-foreground">{bank.bankName || 'Not configured'}</span>
@@ -2070,7 +2233,8 @@ export default function PeoplePage() {
                           </div>
                         </div>
                       </div>
-                    </div>
+                    )}
+                  </div>
 
                     {/* 3. Government IDs & Statutory Verification */}
                     <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
@@ -2092,7 +2256,13 @@ export default function PeoplePage() {
                           </Button>
                         )}
                       </div>
-                      <div className="grid grid-cols-2 gap-3">
+                      {selectedMember.accessRole === 'OWNER' && !isSelfMember(selectedMember) ? (
+                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
+                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                          <span>Personal statutory identity documents are restricted to root authority.</span>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 gap-3">
                         <div>
                           <span className="text-muted-foreground block text-[11px]">Aadhaar Number:</span>
                           <div className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
@@ -2131,7 +2301,8 @@ export default function PeoplePage() {
                           </Badge>
                         </div>
                       </div>
-                    </div>
+                    )}
+                  </div>
 
                     {/* 4. Emergency Contact */}
                     <div className="p-3.5 rounded-lg border border-border bg-card space-y-3">
@@ -2162,7 +2333,7 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
-                    {isCurrentUserOwnerOrAdmin && (
+                    {canEditMember(selectedMember) && isCurrentUserOwnerOrAdmin && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -2210,7 +2381,7 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
-                    {isCurrentUserOwnerOrAdmin && (
+                    {canEditMember(selectedMember) && isCurrentUserOwnerOrAdmin && (
                       <Button
                         size="sm"
                         variant="outline"
