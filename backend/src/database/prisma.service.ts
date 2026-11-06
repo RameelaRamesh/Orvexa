@@ -72,6 +72,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         this.isDatabaseConnected = true;
         this.logger.log('✔ Prisma connected to PostgreSQL successfully');
         await this.autoSyncOwnerCredentials();
+        await this.cleanupTestProjects();
+        await this.cleanupUnwantedWorkspaces();
         return;
       } catch (error: any) {
         if (attempt === maxRetries) {
@@ -109,6 +111,84 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       }
     } catch (err: any) {
       this.logger.warn(`Owner sync check note: ${err?.message || err}`);
+    }
+  }
+
+  private async cleanupTestProjects() {
+    try {
+      const testKeys = ['JUJIJI', 'LK0IHB'];
+      const testNames = ['ABC', 'gf4f4tr'];
+
+      const testProjects = await (this as any).project.findMany({
+        where: {
+          OR: [
+            { key: { in: testKeys, mode: 'insensitive' } },
+            { name: { in: testNames, mode: 'insensitive' } },
+          ],
+        },
+      });
+
+      if (testProjects && testProjects.length > 0) {
+        for (const proj of testProjects) {
+          await (this as any).task.updateMany({
+            where: { projectId: proj.id },
+            data: { projectId: null },
+          });
+          await (this as any).project.delete({
+            where: { id: proj.id },
+          });
+          this.logger.log(`✔ Automatically cleaned up live test project: [${proj.key}] ${proj.name} (ID: ${proj.id})`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.warn(`Test project cleanup note: ${err?.message || err}`);
+    }
+  }
+
+  private async cleanupUnwantedWorkspaces() {
+    try {
+      const targetWorkspaces = await (this as any).workspace.findMany({
+        where: {
+          OR: [
+            { name: { contains: 'KB Construction', mode: 'insensitive' } },
+            { slug: { contains: 'kb-construction', mode: 'insensitive' } },
+          ],
+        },
+      });
+
+      if (targetWorkspaces && targetWorkspaces.length > 0) {
+        for (const ws of targetWorkspaces) {
+          await (this as any).membership.deleteMany({
+            where: { workspaceId: ws.id },
+          });
+          await (this as any).task.deleteMany({
+            where: { workspaceId: ws.id },
+          });
+          await (this as any).project.deleteMany({
+            where: { workspaceId: ws.id },
+          });
+          await (this as any).role.deleteMany({
+            where: { workspaceId: ws.id },
+          });
+          await (this as any).workspace.delete({
+            where: { id: ws.id },
+          });
+          this.logger.log(`✔ Automatically cleaned up unwanted workspace from live database: ${ws.name} (ID: ${ws.id})`);
+        }
+      }
+
+      await (this as any).membership.deleteMany({
+        where: {
+          workspace: {
+            OR: [
+              { name: { contains: 'KB Construction', mode: 'insensitive' } },
+              { slug: { contains: 'kb-construction', mode: 'insensitive' } },
+            ],
+          },
+        },
+      });
+    } catch (err: any) {
+      this.logger.warn(`Workspace cleanup note: ${err?.message || err}`);
     }
   }
 

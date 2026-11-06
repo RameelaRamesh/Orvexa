@@ -35,6 +35,14 @@ describe('CalendarService', () => {
   });
 
   it('should retrieve events with permission scoping for Owner', async () => {
+    await service.createEvent('ws_default_1', 'mem_owner', 'OWNER', {
+      title: 'Owner Strategy Meeting',
+      type: 'MEETING' as any,
+      startDate: '2026-11-10T10:00:00.000Z',
+      endDate: '2026-11-10T11:00:00.000Z',
+      audience: 'ALL' as any,
+    });
+
     const res = await service.getEvents('ws_default_1', 'mem_owner', 'OWNER', {
       startDate: '2026-11-01T00:00:00.000Z',
       endDate: '2026-11-30T23:59:59.999Z',

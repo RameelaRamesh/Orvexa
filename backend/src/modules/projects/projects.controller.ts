@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
@@ -50,5 +50,13 @@ export class ProjectsController {
     },
   ) {
     return this.projectsService.update(id, workspaceId, body);
+  }
+
+  @Delete(':id')
+  async remove(
+    @CurrentWorkspace() workspaceId: string,
+    @Param('id') id: string,
+  ) {
+    return this.projectsService.remove(id, workspaceId);
   }
 }

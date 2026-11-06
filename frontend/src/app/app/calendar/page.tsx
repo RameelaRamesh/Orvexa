@@ -79,8 +79,8 @@ export default function UnifiedCalendarPage() {
   const router = useRouter();
 
   // Navigation Date (controls month/year displayed)
-  const [currentDate, setCurrentDate] = useState<Date>(() => new Date(2026, 10, 5)); // Defaults to Nov 2026 matching screenshot or current date
-  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date(2026, 10, 5));
+  const [currentDate, setCurrentDate] = useState<Date>(() => new Date()); // Defaults to Nov 2026 matching screenshot or current date
+  const [selectedDate, setSelectedDate] = useState<Date>(() => new Date());
   const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>('month');
 
   // Events & Loading
@@ -143,15 +143,18 @@ export default function UnifiedCalendarPage() {
   // Initialize Auth & Workspace from localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const t = localStorage.getItem('orvexa_token');
-    const w = localStorage.getItem('orvexa_cached_workspace');
-    const p = localStorage.getItem('orvexa_cached_profile');
+    const t = localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token');
+    const activeWs = localStorage.getItem('activeWorkspaceId');
+    const cachedWs = localStorage.getItem('orvexa_cached_workspace');
+    const p = localStorage.getItem('orvexa_cached_profile') || localStorage.getItem('user');
 
     if (t) setToken(t);
-    if (w) {
+    if (activeWs) setWsId(activeWs);
+    if (cachedWs) {
       try {
-        const wsObj = JSON.parse(w);
-        if (wsObj?.id) setWsId(wsObj.id);
+        const wsObj = JSON.parse(cachedWs);
+        if (!activeWs && (wsObj?.workspaceId || wsObj?.id)) setWsId(wsObj.workspaceId || wsObj.id);
+        if (wsObj?.id) setCurrentMembershipId(wsObj.id);
         if (wsObj?.membershipId) setCurrentMembershipId(wsObj.membershipId);
         if (wsObj?.accessRole || wsObj?.role) setCurrentUserRole(wsObj.accessRole || wsObj.role);
       } catch {}
@@ -160,7 +163,7 @@ export default function UnifiedCalendarPage() {
       try {
         const prof = JSON.parse(p);
         if (prof?.memberships && prof.memberships[0]?.id) {
-          setCurrentMembershipId(prof.memberships[0].id);
+          if (!currentMembershipId) setCurrentMembershipId(prof.memberships[0].id);
           if (prof.memberships[0].accessRole) setCurrentUserRole(prof.memberships[0].accessRole);
         }
       } catch {}
@@ -169,7 +172,9 @@ export default function UnifiedCalendarPage() {
 
   // Fetch Calendar Events & Concurrently Fetch Workspace Tasks for Complete Visibility
   const fetchEvents = async () => {
-    if (!token || !wsId) return;
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
     setLoading(true);
     setError(null);
 
@@ -191,9 +196,11 @@ export default function UnifiedCalendarPage() {
       if (selectedDeptFilter !== 'ALL') params.append('departmentId', selectedDeptFilter);
 
       const headers = {
-        Authorization: `Bearer ${token}`,
-        'x-workspace-id': wsId,
+        Authorization: `Bearer ${activeToken}`,
+        'x-workspace-id': activeWs,
       };
+      if (!token) setToken(activeToken);
+      if (!wsId) setWsId(activeWs);
 
       // Query both the unified calendar API and tasks API concurrently to ensure all assigned tasks are visible
       const [calRes, tasksRes] = await Promise.all([
@@ -205,7 +212,7 @@ export default function UnifiedCalendarPage() {
 
       if (calRes && calRes.ok) {
         const data = await calRes.json();
-        allEvents = data.events || [];
+        allEvents = (data.events || []).filter((e: any) => !e.id?.startsWith('evt_seed_') && !e.id?.startsWith('task_seed_') && !e.id?.startsWith('leave_seed_') && !e.id?.startsWith('seed_') && !e.id?.includes('seed'));
       } else {
         // Fallback to analytics calendar
         const fallbackRes = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null);
@@ -221,6 +228,7 @@ export default function UnifiedCalendarPage() {
         const taskList: any[] = Array.isArray(tJson) ? tJson : tJson.tasks || tJson.data || [];
 
         for (const t of taskList) {
+          if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
           const tId = `task-${t.id}`;
           if (!allEvents.some((e) => e.id === tId || e.id === t.id)) {
             const rawDate = t.dueDate || t.startDate || t.createdAt || new Date();
@@ -266,10 +274,12 @@ export default function UnifiedCalendarPage() {
 
   // Fetch Auxiliary Workspace Data (Departments, Teams, Members) for Event Creation
   const fetchWorkspaceMeta = async () => {
-    if (!token || !wsId) return;
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
     const headers = {
-      Authorization: `Bearer ${token}`,
-      'x-workspace-id': wsId,
+      Authorization: `Bearer ${activeToken}`,
+      'x-workspace-id': activeWs,
     };
 
     try {
@@ -295,8 +305,24 @@ export default function UnifiedCalendarPage() {
 
       if (peopleRes && peopleRes.ok) {
         const pJson = await peopleRes.json();
-        const peopleList = Array.isArray(pJson) ? pJson : pJson.members || pJson.data || [];
-        setMembers(peopleList);
+        const rawList = pJson.data !== undefined ? pJson.data : (Array.isArray(pJson) ? pJson : pJson.members || []);
+        if (Array.isArray(rawList)) {
+          const mapped = rawList.map((m: any) => ({
+            id: m.id,
+            user: {
+              id: m.user?.id || m.userId,
+              firstName: m.user?.firstName || m.firstName || '',
+              lastName: m.user?.lastName || m.lastName || '',
+              email: m.user?.email || m.email || '',
+              avatarUrl: m.user?.avatarUrl || m.avatarUrl || '',
+            },
+            accessRole: m.accessRole || m.role || 'MEMBER',
+            designation: m.designation,
+            department: m.department,
+            team: m.team,
+          }));
+          setMembers(mapped);
+        }
       }
     } catch {}
   };
@@ -375,13 +401,16 @@ export default function UnifiedCalendarPage() {
     setFormDescription('');
     setFormSelectedMembers([]);
     setMemberSearchTerm('');
+    fetchWorkspaceMeta();
     setIsCreateModalOpen(true);
   };
 
   // Submit Event Creation
   const handleCreateEventSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formTitle.trim() || !formStartDate || !token || !wsId) {
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!formTitle.trim() || !formStartDate || !activeToken || !activeWs) {
       toast.error('Please enter an event title and start date');
       return;
     }
@@ -421,8 +450,8 @@ export default function UnifiedCalendarPage() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'x-workspace-id': wsId,
+          Authorization: `Bearer ${activeToken}`,
+          'x-workspace-id': activeWs,
         },
         body: JSON.stringify(payload),
       });
@@ -472,14 +501,16 @@ export default function UnifiedCalendarPage() {
 
   // RSVP Handlers
   const handleRsvp = async (eventId: string, status: 'ACCEPTED' | 'DECLINED' | 'TENTATIVE') => {
-    if (!token || !wsId) return;
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
     try {
       const res = await fetch(`${BRANDING.apiUrl}/calendar/events/${eventId}/rsvp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          'x-workspace-id': wsId,
+          Authorization: `Bearer ${activeToken}`,
+          'x-workspace-id': activeWs,
         },
         body: JSON.stringify({ status }),
       });
@@ -524,17 +555,9 @@ export default function UnifiedCalendarPage() {
     }
   };
 
-  // Available members list for multi-select (fallback to default workspace roster if empty)
+  // Available members list for multi-select (strictly live members from workspace database)
   const availableMembers = useMemo(() => {
-    if (members.length > 0) return members;
-    return [
-      { id: 'mem_owner', user: { firstName: 'John', lastName: 'Daniel', email: 'vattaraofficial@gmail.com' }, accessRole: 'OWNER' },
-      { id: 'mem_head', user: { firstName: 'Elena', lastName: 'Rostova', email: 'head@orvexa.local' }, accessRole: 'ADMIN' },
-      { id: 'mem_techlead', user: { firstName: 'Marcus', lastName: 'Vance', email: 'techlead@orvexa.local' }, accessRole: 'MANAGER' },
-      { id: 'mem_alex', user: { firstName: 'Alex', lastName: 'Mercer', email: 'alex.dev@orvexa.local' }, accessRole: 'MEMBER' },
-      { id: 'mem_jordan', user: { firstName: 'Jordan', lastName: 'Blake', email: 'jordan.dev@orvexa.local' }, accessRole: 'MEMBER' },
-      { id: 'mem_rameela', user: { firstName: 'Rameela', lastName: 'R', email: 'rameela240@gmail.com' }, accessRole: 'MANAGER' },
-    ];
+    return members;
   }, [members]);
 
   const filteredMembersList = useMemo(() => {
@@ -1459,7 +1482,12 @@ export default function UnifiedCalendarPage() {
 
                   {/* Members Scroll List */}
                   <div className="max-h-36 overflow-y-auto space-y-1 pr-1 divide-y divide-slate-100">
-                    {filteredMembersList.map((m) => {
+                    {filteredMembersList.length === 0 ? (
+                      <div className="py-4 text-center text-xs text-slate-400">
+                        {memberSearchTerm ? 'No members match your search' : 'No workspace members found'}
+                      </div>
+                    ) : (
+                      filteredMembersList.map((m) => {
                       const isChecked = formSelectedMembers.includes(m.id);
                       const name = `${m.user?.firstName || 'User'} ${m.user?.lastName || ''}`.trim();
                       const role = m.accessRole || 'MEMBER';
@@ -1502,7 +1530,8 @@ export default function UnifiedCalendarPage() {
                           </Badge>
                         </div>
                       );
-                    })}
+                    })
+                    )}
                   </div>
                 </div>
               )}

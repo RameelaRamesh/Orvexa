@@ -103,7 +103,13 @@ export default function HomePage() {
         if (attData.success) setTodayAttendance(attData.data);
         if (taskData.success) setTasks(taskData.data || []);
         if (projData) {
-          setProjects(projData.data !== undefined ? projData.data : Array.isArray(projData) ? projData : []);
+          const raw = projData.data !== undefined ? projData.data : (Array.isArray(projData) ? projData : []);
+          const cleanProjects = raw.filter((p: any) => {
+            const k = (p.key || '').trim().toUpperCase();
+            const n = (p.name || '').trim().toLowerCase();
+            return k !== 'JUJIJI' && k !== 'LK0IHB' && n !== 'abc' && n !== 'gf4f4tr';
+          });
+          setProjects(cleanProjects);
         }
         if (onbData.success || onbData.data) {
           setOnboardingStatus(onbData.data || onbData);

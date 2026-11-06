@@ -64,4 +64,15 @@ export class ProjectsService {
       data,
     });
   }
+
+  async remove(id: string, workspaceId: string) {
+    await this.prisma.task.updateMany({
+      where: { projectId: id, workspaceId },
+      data: { projectId: null },
+    });
+
+    return this.prisma.project.deleteMany({
+      where: { id, workspaceId },
+    });
+  }
 }

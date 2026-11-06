@@ -213,7 +213,8 @@ export class CalendarService {
       }
     }
 
-    for (const evt of allCustomEvents) {
+    const liveCustomEvents = allCustomEvents.filter((e) => !e.id?.startsWith('evt_seed_') && !e.id?.startsWith('seed_') && !e.id?.includes('seed'));
+    for (const evt of liveCustomEvents) {
       if (evt.status === 'CANCELLED' && filters.status !== 'CANCELLED') continue;
 
       const evtStart = new Date(evt.startDate);
@@ -309,6 +310,7 @@ export class CalendarService {
       });
 
       for (const t of tasks) {
+        if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
         // Fallback to startDate or createdAt if dueDate is not specified
         const rawDate = t.dueDate || (t as any).startDate || t.createdAt || new Date();
         const taskDate = new Date(rawDate);
@@ -387,7 +389,8 @@ export class CalendarService {
       }
     } catch {}
 
-    for (const ch of companyHolidays) {
+    const cleanCompanyHolidays = companyHolidays.filter((ch) => !ch.id?.startsWith('hol_seed_') && !ch.id?.startsWith('seed_') && !ch.id?.includes('seed'));
+    for (const ch of cleanCompanyHolidays) {
       const cDate = new Date(ch.date);
       if (cDate >= start && cDate <= end) {
         events.push({
@@ -449,6 +452,7 @@ export class CalendarService {
       });
 
       for (const l of leaves) {
+        if (l.id?.startsWith('leave_seed_') || l.id?.startsWith('seed_') || l.id?.includes('seed')) continue;
         const memberName = l.membership?.user
           ? `${l.membership.user.firstName} ${l.membership.user.lastName}`.trim()
           : 'Team Member';

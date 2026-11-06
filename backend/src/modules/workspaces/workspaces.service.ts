@@ -96,7 +96,7 @@ export class WorkspacesService {
   }
 
   async getUserWorkspaces(userId: string) {
-    return this.prisma.membership.findMany({
+    const list = await this.prisma.membership.findMany({
       where: { userId, status: 'ACTIVE' },
       include: {
         workspace: true,
@@ -105,6 +105,12 @@ export class WorkspacesService {
         team: true,
         designation: true,
       },
+    });
+
+    return list.filter((m: any) => {
+      const name = (m.workspace?.name || '').toLowerCase();
+      const slug = (m.workspace?.slug || '').toLowerCase();
+      return !name.includes('kb construction') && !slug.includes('kb-construction');
     });
   }
 
