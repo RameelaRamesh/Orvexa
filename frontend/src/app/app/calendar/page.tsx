@@ -140,6 +140,13 @@ export default function UnifiedCalendarPage() {
     }
   }, []);
 
+  // By default, always anchor calendar to today's date upon mounting
+  useEffect(() => {
+    const today = new Date();
+    setCurrentDate(today);
+    setSelectedDate(today);
+  }, []);
+
   // Initialize Auth & Workspace from localStorage
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -721,19 +728,6 @@ export default function UnifiedCalendarPage() {
               )}
             </div>
 
-            {/* Toggle Side Panel Button (Allows user to reopen Date Details at any time) */}
-            <button
-              onClick={() => setIsRightPanelOpen(!isRightPanelOpen)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
-                isRightPanelOpen
-                  ? 'bg-blue-50 border-blue-200 text-blue-700'
-                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-              }`}
-              title="Toggle Date Details Side Panel"
-            >
-              <PanelRight className="w-3.5 h-3.5" />
-              <span>Details</span>
-            </button>
 
             {/* View Mode Segmented Selector (Month, Week, Day) */}
             <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-medium">
@@ -771,9 +765,9 @@ export default function UnifiedCalendarPage() {
           </div>
         </div>
 
-        {/* Sub-bar: Navigation (< > Month Year) and + Create Event (Notice: Today button is removed) */}
+        {/* Sub-bar: Navigation (< > Calendar Icon Month Year) */}
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <div className="flex items-center gap-1 text-slate-600">
               <button
                 onClick={handlePrevMonth}
@@ -790,36 +784,21 @@ export default function UnifiedCalendarPage() {
                 <ChevronRight className="w-5 h-5" />
               </button>
             </div>
+
+            <button
+              onClick={handleGoToToday}
+              className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition-colors border border-slate-200 bg-white shadow-2xs flex items-center justify-center cursor-pointer"
+              title="Today"
+            >
+              <CalendarIcon className="w-4 h-4" />
+            </button>
+
             <h2 className="text-lg font-semibold text-slate-800 tracking-tight">
               {monthName} {year}
             </h2>
           </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleOpenCreateModal()}
-              className="flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-medium rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors shadow-2xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              Create Event
-            </button>
-          </div>
         </div>
       </div>
-
-      {/* Floating Side Tab Handle (Opens Date Details if panel was closed) */}
-      {!isRightPanelOpen && (
-        <button
-          onClick={() => setIsRightPanelOpen(true)}
-          className="fixed right-0 top-1/2 -translate-y-1/2 z-30 bg-white border border-slate-200 border-r-0 rounded-l-xl px-2 py-3.5 shadow-md hover:bg-blue-50 text-slate-600 hover:text-blue-600 transition-all flex flex-col items-center gap-2 group cursor-pointer"
-          title="Open Date Details Panel"
-        >
-          <ChevronLeft className="w-4 h-4 text-blue-600 group-hover:-translate-x-0.5 transition-transform" />
-          <span className="text-[10px] font-bold [writing-mode:vertical-rl] tracking-wider uppercase text-slate-500 group-hover:text-blue-600">
-            Date Details
-          </span>
-        </button>
-      )}
 
       {/* =========================================================================
           MAIN CALENDAR BODY (Split View: Calendar Grid + Right Detail Panel)
@@ -1050,16 +1029,11 @@ export default function UnifiedCalendarPage() {
           {/* DAY VIEW */}
           {viewMode === 'day' && (
             <div className="bg-white border border-slate-200 rounded-xl shadow-xs overflow-hidden flex flex-col flex-1 p-6">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-800">
-                    {selectedDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
-                  </h3>
-                  <p className="text-xs text-slate-500">Day timeline and scheduled activities</p>
-                </div>
-                <Button size="sm" onClick={() => handleOpenCreateModal(selectedDate)} className="bg-blue-600 hover:bg-blue-700">
-                  <Plus className="w-4 h-4 mr-1" /> Create Event
-                </Button>
+              <div className="pb-4 border-b border-slate-100">
+                <h3 className="text-lg font-bold text-slate-800">
+                  {selectedDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+                </h3>
+                <p className="text-xs text-slate-500">Day timeline and scheduled activities</p>
               </div>
 
               <div className="space-y-4 mt-6 flex-1 overflow-y-auto">
@@ -1272,44 +1246,6 @@ export default function UnifiedCalendarPage() {
                 </div>
               )}
 
-              {/* Quick Actions */}
-              <div className="pt-2">
-                <h4 className="text-xs font-bold text-slate-700 mb-2">Quick Actions</h4>
-                <div className="bg-white border border-slate-200 rounded-xl divide-y divide-slate-100 shadow-2xs">
-                  <button
-                    onClick={() => handleOpenCreateModal(selectedDate)}
-                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <CalendarIcon className="w-4 h-4 text-slate-400" />
-                      <span>Create Event</span>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                  </button>
-
-                  <button
-                    onClick={handleGoToToday}
-                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <CalendarDays className="w-4 h-4 text-slate-400" />
-                      <span>Go to Today</span>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                  </button>
-
-                  <button
-                    onClick={() => setViewMode(viewMode === 'month' ? 'week' : viewMode === 'week' ? 'day' : 'month')}
-                    className="w-full flex items-center justify-between px-3.5 py-2.5 text-xs text-slate-700 hover:bg-slate-50 transition-colors"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <LayoutGrid className="w-4 h-4 text-slate-400" />
-                      <span>Change View ({viewMode === 'month' ? 'Month' : viewMode === 'week' ? 'Week' : 'Day'})</span>
-                    </div>
-                    <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
         )}
