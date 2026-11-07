@@ -276,7 +276,14 @@ export default function UnifiedCalendarPage() {
 
       if (searchQuery.trim()) params.append('search', searchQuery.trim());
       if (selectedTypeFilter !== 'ALL') params.append('type', selectedTypeFilter);
-      if (selectedDeptFilter !== 'ALL') params.append('departmentId', selectedDeptFilter);
+      if (selectedDeptFilter !== 'ALL') {
+        params.append('departmentId', selectedDeptFilter);
+      } else if (selectedScope === 'MY_DEPARTMENT' && userDepartmentId) {
+        params.append('departmentId', userDepartmentId);
+      }
+      if (selectedScope === 'MY_TEAM' && userTeamId) {
+        params.append('teamId', userTeamId);
+      }
       params.append('scope', selectedScope);
       if (selectedScope === 'SELECT_PEOPLE' && selectedMemberIds.length > 0) {
         params.append('memberIds', selectedMemberIds.join(','));
@@ -294,6 +301,10 @@ export default function UnifiedCalendarPage() {
         taskParams.append('scope', 'MY_WORK');
       } else if (selectedScope === 'MY_TEAM') {
         taskParams.append('scope', 'TEAM_WORK');
+        if (userTeamId) taskParams.append('teamId', userTeamId);
+      } else if (selectedScope === 'MY_DEPARTMENT') {
+        const dId = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
+        if (dId) taskParams.append('departmentId', dId);
       }
 
       // Query both the unified calendar API and tasks API concurrently to ensure all assigned tasks are visible
@@ -352,6 +363,34 @@ export default function UnifiedCalendarPage() {
 
         for (const t of taskList) {
           if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
+
+          // Scope-based filtering to ensure strict permission compliance
+          if (selectedScope === 'SELECT_PEOPLE') {
+            if (selectedMemberIds.length > 0 && !selectedMemberIds.includes(t.assigneeMembershipId)) {
+              continue;
+            }
+          } else if (selectedScope === 'MY_SCHEDULE') {
+            if (t.assigneeMembershipId !== currentMembershipId) {
+              continue;
+            }
+          } else if (selectedScope === 'MY_TEAM') {
+            const member = liveMembers.find((m: any) => m.id === t.assigneeMembershipId || m.user?.id === t.assigneeMembershipId);
+            const isMine = t.assigneeMembershipId === currentMembershipId;
+            const isInMyTeam = userTeamId && (member?.team?.id === userTeamId || member?.teamId === userTeamId);
+            const reportsToMe = member?.reportsToId === currentMembershipId;
+            if (!isMine && !isInMyTeam && !reportsToMe) {
+              continue;
+            }
+          } else if (selectedScope === 'MY_DEPARTMENT') {
+            const member = liveMembers.find((m: any) => m.id === t.assigneeMembershipId || m.user?.id === t.assigneeMembershipId);
+            const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
+            const isMine = t.assigneeMembershipId === currentMembershipId;
+            const isInMyDept = targetDept && (member?.department?.id === targetDept || member?.departmentId === targetDept);
+            if (!isMine && !isInMyDept) {
+              continue;
+            }
+          }
+
           const tId = `task-${t.id}`;
           const sla = (t.sla as any) || {};
           const rawStart = sla.startDate || t.startDate || t.createdAt || t.dueDate || new Date();
@@ -442,7 +481,57 @@ export default function UnifiedCalendarPage() {
         }
       }
 
-      setEvents(allEvents);
+      let filteredEvents = allEvents;
+
+      if (selectedScope === 'SELECT_PEOPLE' && selectedMemberIds.length > 0) {
+        filteredEvents = allEvents.filter((e) => {
+          if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
+          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          const orgId = e.organizer?.id;
+          const pIds = (e.participants || []).map((p: any) => p.membershipId);
+          return (
+            (aId && selectedMemberIds.includes(aId)) ||
+            (orgId && selectedMemberIds.includes(orgId)) ||
+            pIds.some((pId: string) => selectedMemberIds.includes(pId))
+          );
+        });
+      } else if (selectedScope === 'MY_SCHEDULE') {
+        filteredEvents = allEvents.filter((e) => {
+          if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
+          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          const orgId = e.organizer?.id;
+          const pIds = (e.participants || []).map((p: any) => p.membershipId);
+          return (
+            aId === currentMembershipId ||
+            orgId === currentMembershipId ||
+            pIds.includes(currentMembershipId)
+          );
+        });
+      } else if (selectedScope === 'MY_TEAM') {
+        filteredEvents = allEvents.filter((e) => {
+          if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
+          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          if (!aId) return true;
+          const member = liveMembers.find((m: any) => m.id === aId || m.user?.id === aId);
+          const isMine = aId === currentMembershipId;
+          const isInMyTeam = userTeamId && (member?.team?.id === userTeamId || member?.teamId === userTeamId);
+          const reportsToMe = member?.reportsToId === currentMembershipId;
+          return isMine || isInMyTeam || reportsToMe;
+        });
+      } else if (selectedScope === 'MY_DEPARTMENT') {
+        filteredEvents = allEvents.filter((e) => {
+          if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
+          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          if (!aId) return true;
+          const member = liveMembers.find((m: any) => m.id === aId || m.user?.id === aId);
+          const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
+          const isMine = aId === currentMembershipId;
+          const isInMyDept = targetDept && (member?.department?.id === targetDept || member?.departmentId === targetDept);
+          return isMine || isInMyDept;
+        });
+      }
+
+      setEvents(filteredEvents);
     } catch (err: any) {
       setError(err?.message || 'Error connecting to calendar service.');
     } finally {
@@ -1011,39 +1100,7 @@ export default function UnifiedCalendarPage() {
             </div>
 
 
-            {/* View Mode Segmented Selector (Month, Week, Day) */}
-            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5 text-xs font-medium">
-              <button
-                onClick={() => setViewMode('month')}
-                className={`px-3 py-1 rounded-md transition-all ${
-                  viewMode === 'month'
-                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Month
-              </button>
-              <button
-                onClick={() => setViewMode('week')}
-                className={`px-3 py-1 rounded-md transition-all ${
-                  viewMode === 'week'
-                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Week
-              </button>
-              <button
-                onClick={() => setViewMode('day')}
-                className={`px-3 py-1 rounded-md transition-all ${
-                  viewMode === 'day'
-                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                Day
-              </button>
-            </div>
+
 
             {/* Quick Action Buttons */}
             <div className="flex items-center gap-2">

@@ -354,10 +354,10 @@ export default function ProjectsAndTasksPage() {
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
     return tasks.filter((t) => {
-      // Must be assigned to user or created by user
+      // Must be assigned to user (or unassigned tasks created by user)
       const isMine =
         t.assigneeMembershipId === currentMembershipId ||
-        (t as any).creatorMembershipId === currentMembershipId;
+        (!t.assigneeMembershipId && (t as any).creatorMembershipId === currentMembershipId);
       if (!isMine) return false;
 
       // Status Filter
