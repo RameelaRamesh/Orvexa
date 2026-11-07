@@ -410,7 +410,16 @@ export default function UnifiedCalendarPage() {
       if (calRes && calRes.ok) {
         const rawJson = await calRes.json();
         const data = rawJson.data || rawJson;
-        allEvents = (data.events || []).filter((e: any) => !e.id?.startsWith('evt_seed_') && !e.id?.startsWith('task_seed_') && !e.id?.startsWith('leave_seed_') && !e.id?.startsWith('seed_') && !e.id?.includes('seed'));
+        allEvents = (data.events || []).filter(
+          (e: any) =>
+            !e.id?.startsWith('evt_seed_') &&
+            !e.id?.startsWith('task_seed_') &&
+            !e.id?.startsWith('leave_seed_') &&
+            !e.id?.startsWith('seed_') &&
+            !e.id?.includes('seed') &&
+            e.title !== 'vtbhyvjhgfd' &&
+            !e.title?.toLowerCase().includes('vtbhyvjhgfd'),
+        );
         if (data.metadata?.canManageHolidays !== undefined) {
           setCanManageHolidaysServer(Boolean(data.metadata.canManageHolidays));
         }
@@ -422,7 +431,13 @@ export default function UnifiedCalendarPage() {
         const fallbackRes = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null);
         if (fallbackRes && fallbackRes.ok) {
           const fallbackData = await fallbackRes.json();
-          allEvents = (fallbackData.events || []).filter((e: any) => !e.id?.includes('seed') && !e.id?.includes('mock'));
+          allEvents = (fallbackData.events || []).filter(
+            (e: any) =>
+              !e.id?.includes('seed') &&
+              !e.id?.includes('mock') &&
+              e.title !== 'vtbhyvjhgfd' &&
+              !e.title?.toLowerCase().includes('vtbhyvjhgfd'),
+          );
         }
       }
 
@@ -771,11 +786,13 @@ export default function UnifiedCalendarPage() {
 
     for (const evt of events) {
       if (!evt.startDate) continue;
+      if (evt.title === 'vtbhyvjhgfd' || evt.title?.toLowerCase().includes('vtbhyvjhgfd')) continue;
+
       const isMeeting = evt.layer === 'MEETINGS' || evt.type === 'MEETING';
+      const isHoliday = evt.layer === 'HOLIDAYS' || evt.type === 'HOLIDAY';
       const isAllDayEvt = Boolean(
         evt.allDay ||
-        evt.layer === 'HOLIDAYS' ||
-        evt.type === 'HOLIDAY' ||
+        isHoliday ||
         evt.layer === 'LEAVE' ||
         evt.type === 'LEAVE'
       );
@@ -793,6 +810,36 @@ export default function UnifiedCalendarPage() {
           _isMultiDay: false,
         });
         continue;
+      }
+
+      // For holidays, prevent accidental 24h timezone bleed (e.g. Nov 8 - Nov 9) and deduplicate
+      if (isHoliday) {
+        const sTime = keyToDate(startKey).getTime();
+        const eTime = keyToDate(endKey || startKey).getTime();
+        const isOneDaySpill = (eTime - sTime) === (24 * 60 * 60 * 1000);
+        const effectiveEndKey = isOneDaySpill ? startKey : (endKey || startKey);
+
+        // Deduplicate holidays on the same day with same/similar festival name
+        const normTitle = evt.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const alreadyExistsOnDay = map[startKey]?.some((existing) => {
+          if (existing.layer !== 'HOLIDAYS' && existing.type !== 'HOLIDAY') return false;
+          const exNorm = existing.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return exNorm.includes(normTitle.slice(0, 4)) || normTitle.includes(exNorm.slice(0, 4));
+        });
+        if (alreadyExistsOnDay) {
+          continue;
+        }
+
+        if (startKey === effectiveEndKey) {
+          if (!map[startKey]) map[startKey] = [];
+          map[startKey].push({
+            ...evt,
+            _isFirstDay: true,
+            _isLastDay: true,
+            _isMultiDay: false,
+          });
+          continue;
+        }
       }
 
       const startDateObj = keyToDate(startKey);
@@ -1575,16 +1622,6 @@ export default function UnifiedCalendarPage() {
                 )}
               </Button>
 
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => handleOpenLeaveModal()}
-                className="text-xs h-8 gap-1.5 border-amber-300 bg-amber-50/70 hover:bg-amber-100 text-amber-900 font-medium shadow-2xs"
-                title="Apply for leave or record manual leave for team members"
-              >
-                <CalendarOff className="w-3.5 h-3.5 text-amber-600" />
-                Apply / Manual Leave
-              </Button>
 
               <Button
                 size="sm"

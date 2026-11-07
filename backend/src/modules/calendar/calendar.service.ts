@@ -207,6 +207,34 @@ export class CalendarService {
     const settings = (ws?.settings as Record<string, any>) || {};
     const storedCalendarEvents: any[] = settings.calendarEvents || [];
 
+    // Permanently purge any corrupt test events like 'vtbhyvjhgfd'
+    const hasCorruptTestEvents = storedCalendarEvents.some(
+      (e) => e.title === 'vtbhyvjhgfd' || e.title?.toLowerCase().includes('vtbhyvjhgfd'),
+    );
+    if (hasCorruptTestEvents) {
+      const sanitized = storedCalendarEvents.filter(
+        (e) => e.title !== 'vtbhyvjhgfd' && !e.title?.toLowerCase().includes('vtbhyvjhgfd'),
+      );
+      await this.prisma.workspace.update({
+        where: { id: workspaceId },
+        data: {
+          settings: {
+            ...settings,
+            calendarEvents: sanitized,
+          },
+        },
+      }).catch(() => null);
+
+      try {
+        await (this.prisma as any).calendarEvent.deleteMany({
+          where: {
+            workspaceId,
+            title: { contains: 'vtbhyvjhgfd', mode: 'insensitive' },
+          },
+        });
+      } catch {}
+    }
+
     let inMemEvents: any[] = [];
     try {
       inMemEvents = await (this.prisma as any).calendarEvent.findMany({ where: { workspaceId } });
@@ -221,7 +249,14 @@ export class CalendarService {
       }
     }
 
-    const liveCustomEvents = allCustomEvents.filter((e) => !e.id?.startsWith('evt_seed_') && !e.id?.startsWith('seed_') && !e.id?.includes('seed'));
+    const liveCustomEvents = allCustomEvents.filter(
+      (e) =>
+        !e.id?.startsWith('evt_seed_') &&
+        !e.id?.startsWith('seed_') &&
+        !e.id?.includes('seed') &&
+        e.title !== 'vtbhyvjhgfd' &&
+        !e.title?.toLowerCase().includes('vtbhyvjhgfd'),
+    );
     for (const evt of liveCustomEvents) {
       if (evt.status === 'CANCELLED' && filters.status !== 'CANCELLED') continue;
 
@@ -510,7 +545,19 @@ export class CalendarService {
       }
     } catch {}
 
-    const cleanCompanyHolidays = companyHolidays.filter((ch) => !ch.id?.startsWith('hol_seed_') && !ch.id?.startsWith('seed_') && !ch.id?.includes('seed'));
+    const cleanCompanyHolidays = companyHolidays.filter((ch) => {
+      if (ch.id?.startsWith('hol_seed_') || ch.id?.startsWith('seed_') || ch.id?.includes('seed')) return false;
+      const rawD = typeof ch.date === 'string' ? ch.date : new Date(ch.date).toISOString();
+      const dOnly = rawD.includes('T') ? rawD.split('T')[0] : rawD;
+      const nameLower = (ch.name || '').toLowerCase();
+      // If there's already a public holiday on this exact date with matching name, don't duplicate
+      const alreadyHasPublic = events.some(
+        (pub) => pub.layer === 'HOLIDAYS' && pub.startDate.startsWith(dOnly) &&
+        (pub.title.toLowerCase().includes(nameLower.slice(0, 4)) || nameLower.includes(pub.title.toLowerCase().slice(0, 4))),
+      );
+      return !alreadyHasPublic;
+    });
+
     for (const ch of cleanCompanyHolidays) {
       const cDate = new Date(ch.date);
       if (cDate >= start && cDate <= end) {
@@ -523,6 +570,13 @@ export class CalendarService {
           const rawEndDate = typeof ch.endDate === 'string' ? ch.endDate : new Date(ch.endDate).toISOString();
           const endDateOnly = rawEndDate.includes('T') ? rawEndDate.split('T')[0] : rawEndDate;
           endStr = `${endDateOnly}T00:00:00.000Z`;
+        }
+
+        // If start and end are consecutive days (old 24h timezone bug spillover), snap back to 1 day
+        const sTime = new Date(startStr).getTime();
+        const eTime = new Date(endStr).getTime();
+        if (eTime - sTime === 24 * 60 * 60 * 1000 && !ch.isMultiDay && !ch.description?.toLowerCase().includes('multi')) {
+          endStr = startStr;
         }
 
         events.push({
