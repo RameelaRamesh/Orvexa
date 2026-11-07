@@ -234,12 +234,14 @@ export class CalendarService {
       } else if (scope === 'MY_SCHEDULE') {
         isVisible = evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
-      } else if (scope === 'MY_TEAM' && userCtx.teamId) {
-        isVisible = evt.teamId === userCtx.teamId ||
+      } else if (scope === 'MY_TEAM') {
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        isVisible = (teamId && evt.teamId === teamId) ||
           evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
-      } else if (scope === 'MY_DEPARTMENT' && userCtx.departmentId) {
-        isVisible = evt.departmentId === userCtx.departmentId ||
+      } else if (scope === 'MY_DEPARTMENT') {
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
+        isVisible = (deptId && evt.departmentId === deptId) ||
           evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
       } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
@@ -300,10 +302,39 @@ export class CalendarService {
           { assigneeMembershipId: membershipId },
           { assignee: { userId: userCtx.membership?.userId } },
         ];
-      } else if (scope === 'MY_TEAM' && userCtx.teamId) {
-        taskWhere.assignee = { teamId: userCtx.teamId };
-      } else if (scope === 'MY_DEPARTMENT' && userCtx.departmentId) {
-        taskWhere.assignee = { departmentId: userCtx.departmentId };
+      } else if (scope === 'MY_TEAM') {
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        if (teamId) {
+          taskWhere.assignee = {
+            OR: [
+              { id: membershipId },
+              { teamId: teamId },
+              { reportsToId: membershipId },
+            ],
+          };
+        } else if (userCtx.isManager || userCtx.isLead) {
+          taskWhere.assignee = {
+            OR: [
+              { id: membershipId },
+              { reportsToId: membershipId },
+            ],
+          };
+        } else {
+          taskWhere.assigneeMembershipId = membershipId;
+        }
+      } else if (scope === 'MY_DEPARTMENT') {
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
+        if (deptId) {
+          taskWhere.assignee = {
+            OR: [
+              { departmentId: deptId },
+              { team: { departmentId: deptId } },
+              { id: membershipId },
+            ],
+          };
+        } else {
+          taskWhere.assigneeMembershipId = membershipId;
+        }
       } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
         taskWhere.assigneeMembershipId = { in: filters.memberIds };
       } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
@@ -494,21 +525,47 @@ export class CalendarService {
         status: { notIn: ['CANCELLED', 'REJECTED'] },
       };
 
-      if (!userCtx.canViewAll) {
+      if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        leaveWhere.membershipId = { in: filters.memberIds };
+      } else if (scope === 'MY_SCHEDULE') {
+        leaveWhere.membershipId = membershipId;
+      } else if (scope === 'MY_TEAM') {
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        if (teamId) {
+          leaveWhere.OR = [
+            { membershipId },
+            { membership: { teamId } },
+            { membership: { reportsToId: membershipId } },
+          ];
+        } else {
+          leaveWhere.OR = [
+            { membershipId },
+            { membership: { reportsToId: membershipId } },
+          ];
+        }
+      } else if (scope === 'MY_DEPARTMENT') {
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
+        if (deptId) {
+          leaveWhere.OR = [
+            { membershipId },
+            { membership: { departmentId: deptId } },
+            { membership: { team: { departmentId: deptId } } },
+          ];
+        } else {
+          leaveWhere.membershipId = membershipId;
+        }
+      } else if (!userCtx.canViewAll) {
         if (userCtx.canViewDept && userCtx.departmentId) {
-          // Department leave
           leaveWhere.OR = [
             { membershipId },
             { membership: { departmentId: userCtx.departmentId } },
           ];
         } else if (userCtx.canViewTeam && userCtx.teamId) {
-          // Team leave
           leaveWhere.OR = [
             { membershipId },
             { membership: { teamId: userCtx.teamId } },
           ];
         } else {
-          // Strictly user's own leave
           leaveWhere.membershipId = membershipId;
         }
       }
