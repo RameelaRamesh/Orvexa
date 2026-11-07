@@ -321,7 +321,8 @@ export default function ProjectsAndTasksPage() {
       const res = await fetch(`${BRANDING.apiUrl}/tasks/${taskId}`, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
-        setSelectedTask(data);
+        const payload = data && data.data !== undefined ? data.data : data;
+        setSelectedTask(payload);
       }
     } catch {
       toast.error('Failed to load task details');
@@ -335,7 +336,8 @@ export default function ProjectsAndTasksPage() {
       const res = await fetch(`${BRANDING.apiUrl}/projects/${projectId}`, { headers: getHeaders() });
       if (res.ok) {
         const data = await res.json();
-        setActiveProjectWorkspace(data);
+        const payload = data && data.data !== undefined ? data.data : data;
+        setActiveProjectWorkspace(payload);
         setMainView('projects');
         setProjectWorkspaceTab('overview');
       }
@@ -461,8 +463,9 @@ export default function ProjectsAndTasksPage() {
         throw new Error(err.message || 'Failed to create project');
       }
 
-      const created = await res.json();
-      toast.success(`Project "${created.name}" created successfully!`);
+      const createdRaw = await res.json();
+      const created = createdRaw && createdRaw.data !== undefined ? createdRaw.data : createdRaw;
+      toast.success(`Project "${created.name || ''}" created successfully!`);
       setCreateProjectModalOpen(false);
       setNewProjectForm({
         name: '',
@@ -516,8 +519,9 @@ export default function ProjectsAndTasksPage() {
         throw new Error(err.message || 'Failed to create task');
       }
 
-      const created = await res.json();
-      toast.success(`Task "${created.title}" created successfully!`);
+      const createdRaw = await res.json();
+      const created = createdRaw && createdRaw.data !== undefined ? createdRaw.data : createdRaw;
+      toast.success(`Task "${created.title || ''}" created successfully!`);
       setCreateTaskModalOpen(false);
       setNewTaskForm({
         title: '',
@@ -551,7 +555,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success('Subtask added');
       }
@@ -569,7 +574,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
       }
     } catch {
@@ -585,7 +591,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success('Subtask removed');
       }
@@ -605,7 +612,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         setProgressModalOpen(false);
         setProgressForm({ progress: 50, comment: '' });
         await loadData();
@@ -625,7 +633,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success('Task submitted for review! Manager notified.');
       }
@@ -643,7 +652,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success(approved ? 'Task approved and completed!' : 'Changes requested. Task returned to In Progress.');
       }
@@ -660,7 +670,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success('Task marked as Done!');
       }
@@ -683,7 +694,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         setExtensionModalOpen(false);
         setExtensionForm({ proposedDeadline: '', reason: '' });
         await loadData();
@@ -703,7 +715,8 @@ export default function ProjectsAndTasksPage() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setSelectedTask(updated);
+        const payload = updated && updated.data !== undefined ? updated.data : updated;
+        setSelectedTask(payload);
         await loadData();
         toast.success(action === 'APPROVE' ? 'Deadline extension approved!' : 'Extension rejected.');
       }
@@ -746,7 +759,7 @@ export default function ProjectsAndTasksPage() {
     } else if (status === 'BLOCKED') {
       base = 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300 border-rose-200 dark:border-rose-900';
       label = 'Blocked';
-    } else if (status === 'COMPLETED') {
+    } else if (status === 'COMPLETED' || (status as string) === 'DONE') {
       base = 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900';
       label = 'Done';
     }
@@ -756,7 +769,7 @@ export default function ProjectsAndTasksPage() {
         <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${base}`}>
           {label}
         </span>
-        {isOverdue && status !== 'COMPLETED' && (
+        {isOverdue && status !== 'COMPLETED' && (status as string) !== 'DONE' && (
           <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-500 text-white shadow-2xs">
             Overdue
           </span>
@@ -1541,7 +1554,7 @@ export default function ProjectsAndTasksPage() {
                         <span className="text-[10px] text-muted-foreground">({f.size})</span>
                       </div>
                       <span className="text-[10px] text-muted-foreground">
-                        {new Date(f.uploadedAt).toLocaleDateString()}
+                        {f.uploadedAt ? new Date(f.uploadedAt).toLocaleDateString() : ''}
                       </span>
                     </div>
                   ))}
@@ -1564,7 +1577,7 @@ export default function ProjectsAndTasksPage() {
                       <div>
                         <p className="text-foreground font-medium">{act.details || act.action}</p>
                         <span className="text-[10px] text-muted-foreground">
-                          {new Date(act.timestamp).toLocaleString()}
+                          {act.timestamp ? new Date(act.timestamp).toLocaleString() : ''}
                         </span>
                       </div>
                     </div>
@@ -1705,7 +1718,7 @@ export default function ProjectsAndTasksPage() {
             <div className="p-4 border-b border-border flex items-center justify-between bg-slate-50/50 dark:bg-slate-900/50">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-muted-foreground">
-                  {selectedTask.project?.key ? `${selectedTask.project.key} • ` : ''}TASK-{selectedTask.id.slice(0, 6)}
+                  {selectedTask.project?.key ? `${selectedTask.project.key} • ` : ''}TASK-{selectedTask.id ? selectedTask.id.slice(0, 6) : ''}
                 </span>
                 {getStatusBadge(selectedTask.status, selectedTask.isOverdue)}
               </div>
@@ -1735,7 +1748,7 @@ export default function ProjectsAndTasksPage() {
                     Deadline Extension Requested
                   </div>
                   <p className="text-xs">
-                    Proposed New Deadline: <strong>{new Date(selectedTask.extensionRequest.proposedDeadline).toLocaleDateString()}</strong>
+                    Proposed New Deadline: <strong>{selectedTask.extensionRequest?.proposedDeadline ? new Date(selectedTask.extensionRequest.proposedDeadline).toLocaleDateString() : 'N/A'}</strong>
                   </p>
                   <p className="text-xs text-amber-800 dark:text-amber-300">
                     Reason: {selectedTask.extensionRequest.reason}
@@ -1766,11 +1779,11 @@ export default function ProjectsAndTasksPage() {
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-xs text-foreground">Completion Progress</span>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-sm text-blue-600 dark:text-blue-400">{selectedTask.progress}%</span>
+                    <span className="font-bold text-sm text-blue-600 dark:text-blue-400">{selectedTask.progress ?? 0}%</span>
                     <button
                       type="button"
                       onClick={() => {
-                        setProgressForm({ progress: selectedTask.progress, comment: '' });
+                        setProgressForm({ progress: selectedTask.progress ?? 0, comment: '' });
                         setProgressModalOpen(true);
                       }}
                       className="px-2 py-0.5 rounded-md border border-border text-[10px] font-semibold hover:bg-white dark:hover:bg-slate-800 cursor-pointer"
@@ -1782,7 +1795,7 @@ export default function ProjectsAndTasksPage() {
                 <div className="w-full bg-slate-200 dark:bg-slate-700 h-2 rounded-full overflow-hidden">
                   <div
                     className="h-full bg-blue-600 rounded-full transition-all"
-                    style={{ width: `${selectedTask.progress}%` }}
+                    style={{ width: `${selectedTask.progress ?? 0}%` }}
                   />
                 </div>
                 <p className="text-[10px] text-muted-foreground">
@@ -1797,31 +1810,36 @@ export default function ProjectsAndTasksPage() {
                 </div>
 
                 <div className="space-y-1.5">
-                  {(selectedTask.subtasks || []).map((sub) => (
-                    <div
-                      key={sub.id}
-                      className="flex items-center justify-between p-2 rounded-lg border border-border/80 bg-background hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
-                    >
-                      <label className="flex items-center gap-2 cursor-pointer flex-1">
-                        <input
-                          type="checkbox"
-                          checked={sub.isCompleted}
-                          onChange={(e) => handleToggleSubtask(selectedTask.id, sub.id, e.target.checked)}
-                          className="h-3.5 w-3.5 rounded-sm border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                        />
-                        <span className={`text-xs ${sub.isCompleted ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
-                          {sub.title}
-                        </span>
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSubtask(selectedTask.id, sub.id)}
-                        className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
+                  {(selectedTask.subtasks || []).map((sub: any, idx: number) => {
+                    const subId = typeof sub === 'string' ? `sub_${idx}` : (sub.id || `sub_${idx}`);
+                    const subTitle = typeof sub === 'string' ? sub : (sub.title || '');
+                    const isDone = typeof sub === 'string' ? false : Boolean(sub.isCompleted);
+                    return (
+                      <div
+                        key={subId}
+                        className="flex items-center justify-between p-2 rounded-lg border border-border/80 bg-background hover:bg-slate-50/60 dark:hover:bg-slate-800/40"
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ))}
+                        <label className="flex items-center gap-2 cursor-pointer flex-1">
+                          <input
+                            type="checkbox"
+                            checked={isDone}
+                            onChange={(e) => handleToggleSubtask(selectedTask.id, subId, e.target.checked)}
+                            className="h-3.5 w-3.5 rounded-sm border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span className={`text-xs ${isDone ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+                            {subTitle}
+                          </span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteSubtask(selectedTask.id, subId)}
+                          className="text-slate-400 hover:text-rose-500 p-1 cursor-pointer"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    );
+                  })}
 
                   <form
                     onSubmit={(e) => {
@@ -1920,13 +1938,13 @@ export default function ProjectsAndTasksPage() {
               <div className="space-y-2">
                 <h4 className="font-bold text-xs uppercase tracking-wider text-muted-foreground">Activity Timeline</h4>
                 <div className="p-3 rounded-xl border border-border bg-card divide-y divide-border/60 max-h-48 overflow-y-auto">
-                  {(selectedTask.activityLog || []).map((act, idx) => (
+                  {(selectedTask.activityLog || []).map((act: any, idx: number) => (
                     <div key={idx} className="py-2 text-[11px]">
                       <div className="flex items-center justify-between text-muted-foreground">
                         <span className="font-semibold text-foreground">{act.action}</span>
-                        <span>{new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>{act.timestamp ? new Date(act.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}</span>
                       </div>
-                      <p className="text-slate-600 dark:text-slate-400 mt-0.5">{act.details}</p>
+                      <p className="text-slate-600 dark:text-slate-400 mt-0.5">{typeof act.details === 'object' ? JSON.stringify(act.details) : act.details}</p>
                     </div>
                   ))}
                 </div>
@@ -1936,12 +1954,12 @@ export default function ProjectsAndTasksPage() {
               <div className="space-y-2 pt-2 border-t border-border">
                 <h4 className="font-bold text-xs uppercase tracking-wider text-muted-foreground">Comments & Discussion</h4>
                 <div className="space-y-2">
-                  {(selectedTask.comments || []).map((comm) => (
+                  {(selectedTask.comments || []).map((comm: any) => (
                     <div key={comm.id} className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-border">
                       <div className="flex items-center justify-between text-[11px] font-semibold text-foreground">
                         <span>{comm.authorName}</span>
                         <span className="text-[10px] text-muted-foreground font-normal">
-                          {new Date(comm.createdAt).toLocaleString()}
+                          {comm.createdAt ? new Date(comm.createdAt).toLocaleString() : ''}
                         </span>
                       </div>
                       <p className="text-xs text-slate-700 dark:text-slate-300 mt-1">{comm.text}</p>
