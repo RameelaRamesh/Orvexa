@@ -143,7 +143,7 @@ export default function HomePage() {
   };
 
   const role = activeWorkspace?.accessRole || 'MEMBER';
-  const roleLabel = role === 'ADMIN' ? 'HR Executive' : role === 'OWNER' ? 'Owner' : role === 'MANAGER' ? 'Manager' : 'Team Member';
+  const roleLabel = role === 'ADMIN' ? 'Admin' : role === 'OWNER' ? 'Owner' : role === 'MANAGER' ? 'Manager' : 'Team Member';
   const departmentName = activeWorkspace?.department?.name || 'Engineering';
 
   // Fallback demo tasks if workspace tasks list is empty

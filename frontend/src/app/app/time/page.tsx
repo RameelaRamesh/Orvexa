@@ -26,6 +26,7 @@ import {
   Sunrise,
   Moon,
   ChevronRight,
+  ChevronDown,
   Pause,
   Timer,
   Info,
@@ -87,6 +88,7 @@ export default function TimeAttendancePage() {
   const [requestedBreakEnd, setRequestedBreakEnd] = useState('');
   const [breakCorrectionReason, setBreakCorrectionReason] = useState('');
   const [submittingBreakCorrection, setSubmittingBreakCorrection] = useState(false);
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
   // Live ticking timer for real-time shift and break tracking
   useEffect(() => {
@@ -282,11 +284,84 @@ export default function TimeAttendancePage() {
         meRes.json(),
       ]);
 
+      const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
+      let currentMembershipObj: any = null;
+      if (meData?.memberships) {
+        const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
+        if (mem) {
+          const isHR =
+            mem.designation?.title?.toLowerCase().includes('hr') ||
+            mem.department?.name?.toLowerCase().includes('hr') ||
+            mem.user?.email?.toLowerCase().includes('hr');
+          const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
+          setCurrentUserRole(effectiveRole);
+          setCurrentMembershipId(mem.id);
+          setCurrentUserDesignation(mem.designation?.title || '');
+          const isOwner = mem.accessRole === 'OWNER';
+          setIsPlatformAdmin(isOwner);
+
+          const perms: string[] = (mem.role?.permissions || []).map(
+            (rp: any) => rp.permission?.code || rp.code || rp
+          );
+          setUserPermissions(perms);
+
+          currentMembershipObj = {
+            id: mem.id,
+            employeeId: mem.employeeId || '',
+            user: mem.user || {
+              firstName: meData.firstName || '',
+              lastName: meData.lastName || '',
+              email: meData.email || '',
+              avatarUrl: meData.avatarUrl || null,
+            },
+            department: mem.department || null,
+            team: mem.team || null,
+            designation: mem.designation || null,
+          };
+        }
+      }
+
       const tData = rawToday.data !== undefined ? rawToday.data : rawToday;
       setTodayData(tData);
 
       const lData = rawList.data !== undefined ? rawList.data : rawList;
-      setAttendanceList(Array.isArray(lData) ? lData : []);
+      let combinedList: any[] = Array.isArray(lData) ? [...lData] : [];
+
+      // Seamlessly merge all sessions from My Shift and Sessions into Workspace Attendance Logs
+      const allToday: any[] = Array.isArray(tData?.allSessions)
+        ? tData.allSessions
+        : tData?.clockIn
+        ? [tData]
+        : [];
+
+      allToday.forEach((s: any) => {
+        if (!s || !s.id) return;
+        const idx = combinedList.findIndex((item: any) => item.id === s.id);
+        const existingItem = idx >= 0 ? combinedList[idx] : null;
+        const membership =
+          existingItem?.membership ||
+          s.membership ||
+          tData?.membership ||
+          currentMembershipObj;
+
+        const merged = {
+          ...(existingItem || {}),
+          ...s,
+          membership,
+        };
+
+        if (idx >= 0) {
+          combinedList[idx] = merged;
+        } else {
+          const sDateStr = new Date(s.date || s.clockIn).toISOString().slice(0, 10);
+          const todayDateStr = new Date().toISOString().slice(0, 10);
+          if (!filterDate || filterDate === sDateStr || filterDate === todayDateStr) {
+            combinedList.unshift(merged);
+          }
+        }
+      });
+
+      setAttendanceList(combinedList);
 
       const sData = rawSummary.data !== undefined ? rawSummary.data : rawSummary;
       setSummaryMetrics(sData);
@@ -316,28 +391,6 @@ export default function TimeAttendancePage() {
 
       const bData = rawBalance.data !== undefined ? rawBalance.data : rawBalance;
       setLeaveBalances(Array.isArray(bData) ? bData : []);
-
-      const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
-      if (meData?.memberships) {
-        const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
-        if (mem) {
-          const isHR =
-            mem.designation?.title?.toLowerCase().includes('hr') ||
-            mem.department?.name?.toLowerCase().includes('hr') ||
-            mem.user?.email?.toLowerCase().includes('hr');
-          const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
-          setCurrentUserRole(effectiveRole);
-          setCurrentMembershipId(mem.id);
-          setCurrentUserDesignation(mem.designation?.title || '');
-          const isOwner = mem.accessRole === 'OWNER';
-          setIsPlatformAdmin(isOwner);
-
-          const perms: string[] = (mem.role?.permissions || []).map(
-            (rp: any) => rp.permission?.code || rp.code || rp
-          );
-          setUserPermissions(perms);
-        }
-      }
 
       if (attendanceDisabled && typeof window !== 'undefined') {
         const tabParam = new URLSearchParams(window.location.search).get('tab');
@@ -756,36 +809,54 @@ export default function TimeAttendancePage() {
   // Export CSV
   const handleExportCSV = async () => {
     try {
-      const res = await fetch(`${BRANDING.apiUrl}/time/export`, {
-        headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId! },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Export failed');
-
-      if (!Array.isArray(data) || data.length === 0) {
+      if (filteredLogs.length === 0) {
         toast.info('No attendance records available to export.');
         return;
       }
 
-      const headers = Object.keys(data[0]);
-      const csvRows = [
-        headers.join(','),
-        ...data.map((row) =>
-          headers
-            .map((h) => {
-              const val = row[h] !== null && row[h] !== undefined ? String(row[h]) : '';
-              return `"${val.replace(/"/g, '""')}"`;
-            })
-            .join(',')
-        ),
-      ];
+      const rows = filteredLogs.map((a) => {
+        const nowMs = currentTime ? currentTime.getTime() : Date.now();
+        const clockInMs = new Date(a.clockIn).getTime();
+        const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : nowMs;
+        const gross = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
+        let brk = 0;
+        (a.breaks || []).forEach((b: any) => {
+          if (b.durationMinutes && b.durationMinutes > 0) brk += b.durationMinutes;
+          else if (b.breakEnd) brk += Math.max(0, Math.round((new Date(b.breakEnd).getTime() - new Date(b.breakStart).getTime()) / 60000));
+          else if (b.breakStart) brk += Math.max(0, Math.round((nowMs - new Date(b.breakStart).getTime()) / 60000));
+        });
+        const effBrk = Math.max(a.totalBreakMinutes || 0, brk);
+        const net = (a.clockOut && a.totalWorkMinutes && a.totalWorkMinutes > 0) ? a.totalWorkMinutes : Math.max(0, gross - effBrk);
 
-      const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+        return {
+          'Employee Name': `${a.membership?.user?.firstName || ''} ${a.membership?.user?.lastName || ''}`.trim() || 'Staff',
+          'Email': a.membership?.user?.email || '',
+          'Department': a.membership?.department?.name || 'General',
+          'Team': a.membership?.team?.name || '',
+          'Date': new Date(a.date || a.clockIn).toLocaleDateString(),
+          'Clock In': new Date(a.clockIn).toLocaleTimeString(),
+          'Clock Out': a.clockOut ? new Date(a.clockOut).toLocaleTimeString() : 'Active',
+          'Net Hours': (net / 60).toFixed(1),
+          'Net Minutes': net,
+          'Total Break Minutes': effBrk,
+          'Breaks Count': (a.breaks || []).length,
+          'Status': a.clockOut ? (a.status || 'COMPLETED') : 'ON SHIFT',
+        };
+      });
+
+      const headers = Object.keys(rows[0]);
+      const csvContent = [
+        headers.join(','),
+        ...rows.map((r: any) => headers.map((h) => `"${String(r[h] ?? '').replace(/"/g, '""')}"`).join(',')),
+      ].join('\n');
+
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `attendance-report-${new Date().toISOString().split('T')[0]}.csv`;
+      a.download = `attendance-logs-${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
+      window.URL.revokeObjectURL(url);
       toast.success('Attendance records exported successfully!');
     } catch (err: any) {
       toast.error(err.message || 'Failed to export CSV');
@@ -871,6 +942,27 @@ export default function TimeAttendancePage() {
     }
     return true;
   });
+
+  // Dynamically compute live metrics across filteredLogs so active shifts are included accurately
+  const liveComputedTotalWorkMinutes = filteredLogs.reduce((sum, a) => {
+    const clockInMs = new Date(a.clockIn).getTime();
+    const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : (currentTime ? currentTime.getTime() : Date.now());
+    const grossMins = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
+    let brkMins = 0;
+    (a.breaks || []).forEach((b: any) => {
+      if (b.durationMinutes && b.durationMinutes > 0) brkMins += b.durationMinutes;
+      else if (b.breakEnd) brkMins += Math.max(0, Math.round((new Date(b.breakEnd).getTime() - new Date(b.breakStart).getTime()) / 60000));
+      else if (b.breakStart) brkMins += Math.max(0, Math.round(((currentTime ? currentTime.getTime() : Date.now()) - new Date(b.breakStart).getTime()) / 60000));
+    });
+    const effBrk = Math.max(a.totalBreakMinutes || 0, brkMins);
+    const netMins = (a.clockOut && a.totalWorkMinutes && a.totalWorkMinutes > 0) ? a.totalWorkMinutes : Math.max(0, grossMins - effBrk);
+    return sum + netMins;
+  }, 0);
+
+  const displayTotalWorkHours = (liveComputedTotalWorkMinutes / 60).toFixed(1);
+  const activeStaffCount = filteredLogs.filter((a) => !a.clockOut).length;
+  const uniqueEmployeeCount = new Set(filteredLogs.map((a) => a.membershipId || a.membership?.id || a.id)).size;
+  const lateCountDynamic = filteredLogs.filter((a) => a.status === 'LATE').length;
 
   return (
     <div className="space-y-6">
@@ -1453,34 +1545,44 @@ export default function TimeAttendancePage() {
       {activeTab === 'team_logs' && (
         <div className="space-y-6">
           {/* Summary Stat Cards */}
-          {summaryMetrics && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <Card className="p-4">
-                <div className="text-xs text-muted-foreground uppercase font-semibold">Total Work Hours</div>
-                <div className="text-2xl font-bold text-foreground mt-1">{summaryMetrics.totalWorkHours} hrs</div>
-                <div className="text-xs text-muted-foreground mt-0.5">{summaryMetrics.totalRecords} sessions logged</div>
-              </Card>
-              <Card className="p-4">
-                <div className="text-xs text-muted-foreground uppercase font-semibold">Active Staff</div>
-                <div className="text-2xl font-bold text-foreground mt-1">{summaryMetrics.uniqueEmployees}</div>
-                <div className="text-xs text-muted-foreground mt-0.5">Employees recorded</div>
-              </Card>
-              <Card className="p-4">
-                <div className="text-xs text-muted-foreground uppercase font-semibold">Attendance Rate</div>
-                <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                  {summaryMetrics.attendanceComplianceRate}
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">{summaryMetrics.presentCount} present</div>
-              </Card>
-              <Card className="p-4">
-                <div className="text-xs text-muted-foreground uppercase font-semibold">Late Arrivals</div>
-                <div className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
-                  {summaryMetrics.lateCount}
-                </div>
-                <div className="text-xs text-muted-foreground mt-0.5">{summaryMetrics.missedCheckoutCount} missed checkouts</div>
-              </Card>
-            </div>
-          )}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground uppercase font-semibold">Total Work Hours</div>
+              <div className="text-2xl font-bold text-foreground mt-1">{displayTotalWorkHours} hrs</div>
+              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.length} session{filteredLogs.length === 1 ? '' : 's'} logged</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground uppercase font-semibold">Staff Presence</div>
+              <div className="text-2xl font-bold text-foreground mt-1">
+                {activeStaffCount > 0 ? (
+                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    {activeStaffCount} on shift
+                  </span>
+                ) : (
+                  `${uniqueEmployeeCount} recorded`
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">{uniqueEmployeeCount} employee{uniqueEmployeeCount === 1 ? '' : 's'} recorded</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground uppercase font-semibold">Attendance Rate</div>
+              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                {summaryMetrics?.attendanceComplianceRate || (filteredLogs.length > 0 ? '100%' : 'N/A')}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.filter((r) => r.status === 'PRESENT' || !r.clockOut).length} present</div>
+            </Card>
+            <Card className="p-4">
+              <div className="text-xs text-muted-foreground uppercase font-semibold">Late Arrivals</div>
+              <div className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
+                {lateCountDynamic}
+              </div>
+              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.filter((r) => r.notes?.includes('[AUTO_CLOSED_MISSED_CHECKOUT]')).length} missed checkouts</div>
+            </Card>
+          </div>
 
           {/* Filters Bar */}
           <Card>
@@ -1531,75 +1633,263 @@ export default function TimeAttendancePage() {
                 <table className="w-full text-left text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-border text-xs uppercase text-muted-foreground bg-surface-secondary/50">
-                      <th className="py-3.5 px-4">Employee</th>
-                      <th className="py-3.5 px-4">Department / Team</th>
+                      <th className="py-3.5 px-4">Employee & Session</th>
+                      <th className="py-3.5 px-4">Department / Shift</th>
                       <th className="py-3.5 px-4">Date</th>
                       <th className="py-3.5 px-4">Clock In</th>
                       <th className="py-3.5 px-4">Clock Out</th>
                       <th className="py-3.5 px-4">Net Hours</th>
                       <th className="py-3.5 px-4">Breaks</th>
                       <th className="py-3.5 px-4">Status</th>
+                      <th className="py-3.5 px-4 text-right">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {filteredLogs.map((a) => {
-                      const hasOpenBreak = a.breaks?.some((b: any) => !b.breakEnd);
+                    {filteredLogs.map((a, rowIdx) => {
+                      const nowMs = currentTime ? currentTime.getTime() : Date.now();
+                      const clockInMs = new Date(a.clockIn).getTime();
+                      const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : nowMs;
+                      const grossMinutes = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
+
+                      // Dynamic breaks calculation
+                      let computedBreakMinutes = 0;
+                      const breaksList: any[] = Array.isArray(a.breaks) ? a.breaks : [];
+                      const openBreak = breaksList.find((b: any) => !b.breakEnd);
+                      const hasOpenBreak = !!openBreak;
+
+                      breaksList.forEach((b: any) => {
+                        if (b.breakEnd) {
+                          if (b.durationMinutes && b.durationMinutes > 0) {
+                            computedBreakMinutes += b.durationMinutes;
+                          } else {
+                            const bStart = new Date(b.breakStart).getTime();
+                            const bEnd = new Date(b.breakEnd).getTime();
+                            if (!isNaN(bStart) && !isNaN(bEnd) && bEnd >= bStart) {
+                              computedBreakMinutes += Math.max(0, Math.round((bEnd - bStart) / 60000));
+                            }
+                          }
+                        } else if (b.breakStart) {
+                          const bStart = new Date(b.breakStart).getTime();
+                          if (!isNaN(bStart)) {
+                            computedBreakMinutes += Math.max(0, Math.round((nowMs - bStart) / 60000));
+                          }
+                        }
+                      });
+
+                      const totalBreakMinutes = Math.max(a.totalBreakMinutes || 0, computedBreakMinutes);
+
+                      // Dynamic net work minutes calculation
+                      let netWorkMinutes = 0;
+                      if (a.clockOut && a.totalWorkMinutes && a.totalWorkMinutes > 0) {
+                        netWorkMinutes = a.totalWorkMinutes;
+                      } else {
+                        netWorkMinutes = Math.max(0, grossMinutes - totalBreakMinutes);
+                      }
+                      const netHours = (netWorkMinutes / 60).toFixed(1);
+
+                      // Extract session metadata
+                      let sessionIndex: number | null = null;
+                      let shiftName = '';
+                      if (a.notes) {
+                        const metaMatch = a.notes.match(/\[META:(\{.*?\})\]/);
+                        if (metaMatch) {
+                          try {
+                            const parsed = JSON.parse(metaMatch[1]);
+                            if (parsed.sessionIndex) sessionIndex = parsed.sessionIndex;
+                            if (parsed.shiftName) shiftName = parsed.shiftName;
+                          } catch (e) {}
+                        }
+                      }
+
+                      // Fallback session index calculation per employee per day
+                      if (!sessionIndex) {
+                        const memberKey = a.membershipId || a.membership?.id || a.membership?.user?.email || 'unknown';
+                        const aDateStr = new Date(a.date || a.clockIn).toDateString();
+                        const sameDaySessions = filteredLogs
+                          .filter((x) => {
+                            const xKey = x.membershipId || x.membership?.id || x.membership?.user?.email || 'unknown';
+                            const xDateStr = new Date(x.date || x.clockIn).toDateString();
+                            return xKey === memberKey && xDateStr === aDateStr;
+                          })
+                          .sort((x, y) => new Date(x.clockIn).getTime() - new Date(y.clockIn).getTime());
+                        const seq = sameDaySessions.findIndex((x) => x.id === a.id) + 1;
+                        sessionIndex = seq > 0 ? seq : 1;
+                      }
+
+                      // Clean user notes
+                      const displayNotes = (a.notes || '')
+                        .replace(/\[META:\{.*?\}\]/g, '')
+                        .replace(/\[AUTO_CLOSED_MISSED_CHECKOUT\]/g, 'Auto-closed (missed checkout)')
+                        .replace(/\[OUT:\s*(.*?)\]/g, 'Handoff: $1')
+                        .trim();
+
+                      const isExpanded = expandedSessionId === a.id;
+
                       return (
-                        <tr key={a.id} className="hover:bg-surface-secondary/20 transition-colors">
-                          <td className="py-3.5 px-4">
-                            <div className="font-semibold text-foreground">
-                              {a.membership?.user?.firstName} {a.membership?.user?.lastName}
-                            </div>
-                            <div className="text-xs text-muted-foreground">{a.membership?.user?.email}</div>
-                          </td>
-                          <td className="py-3.5 px-4">
-                            <div className="text-foreground text-xs">{a.membership?.department?.name || 'General'}</div>
-                            <div className="text-[11px] text-muted-foreground">{a.membership?.team?.name || 'Team'}</div>
-                          </td>
-                          <td className="py-3.5 px-4 font-mono text-xs text-muted-foreground">
-                            {new Date(a.date).toLocaleDateString()}
-                          </td>
-                          <td className="py-3.5 px-4 font-mono text-xs">
-                            {new Date(a.clockIn).toLocaleTimeString()}
-                          </td>
-                          <td className="py-3.5 px-4 font-mono text-xs">
-                            {a.clockOut ? (
-                              new Date(a.clockOut).toLocaleTimeString()
-                            ) : (
-                              <span className="text-emerald-600 dark:text-emerald-400 font-bold">Active</span>
-                            )}
-                          </td>
-                          <td className="py-3.5 px-4 font-semibold text-foreground text-xs">
-                            {a.netHours || (a.totalWorkMinutes / 60).toFixed(1)} hrs ({a.totalWorkMinutes}m)
-                          </td>
-                          <td className="py-3.5 px-4 text-xs text-muted-foreground">
-                            {a.totalBreakMinutes || 0}m ({a.breaks?.length || 0})
-                          </td>
-                          <td className="py-3.5 px-4">
-                            {a.status === 'LATE' ? (
-                              <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300">
-                                LATE
-                              </Badge>
-                            ) : a.status === 'HALF_DAY' ? (
-                              <Badge variant="outline" className="border-purple-300 text-purple-700">
-                                HALF DAY
-                              </Badge>
-                            ) : hasOpenBreak ? (
-                              <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300">
-                                ON BREAK
-                              </Badge>
-                            ) : a.clockOut ? (
-                              <Badge variant="secondary">COMPLETED</Badge>
-                            ) : (
-                              <Badge variant="success">ON SHIFT</Badge>
-                            )}
-                          </td>
-                        </tr>
+                        <React.Fragment key={a.id || rowIdx}>
+                          <tr className="hover:bg-surface-secondary/20 transition-colors">
+                            <td className="py-3.5 px-4">
+                              <div className="flex items-center gap-2">
+                                <div>
+                                  <div className="font-semibold text-foreground flex items-center gap-1.5">
+                                    {a.membership?.user?.firstName || 'Staff'} {a.membership?.user?.lastName || 'Member'}
+                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono font-medium border-muted-foreground/30">
+                                      Session #{sessionIndex}
+                                    </Badge>
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">{a.membership?.user?.email || a.membership?.employeeId || ''}</div>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="text-foreground text-xs font-medium">{a.membership?.department?.name || 'General'}</div>
+                              <div className="text-[11px] text-muted-foreground">{shiftName || a.membership?.team?.name || 'Standard Shift'}</div>
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-xs text-muted-foreground">
+                              {new Date(a.date || a.clockIn).toLocaleDateString()}
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-xs font-medium">
+                              {new Date(a.clockIn).toLocaleTimeString()}
+                            </td>
+                            <td className="py-3.5 px-4 font-mono text-xs">
+                              {a.clockOut ? (
+                                new Date(a.clockOut).toLocaleTimeString()
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-bold">
+                                  <span className="relative flex h-2 w-2">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                                  </span>
+                                  Active
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3.5 px-4 font-semibold text-foreground text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span>{netHours} hrs ({netWorkMinutes}m)</span>
+                                {!a.clockOut && (
+                                  <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-400 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 font-mono">
+                                    Live
+                                  </Badge>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-xs">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-foreground font-semibold">{totalBreakMinutes}m</span>
+                                <span className="text-muted-foreground text-[11px]">({breaksList.length} break{breaksList.length === 1 ? '' : 's'})</span>
+                                {hasOpenBreak && (
+                                  <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 text-[9px] px-1 py-0">
+                                    On Break
+                                  </Badge>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4">
+                              <div className="space-y-1">
+                                <div className="flex flex-wrap items-center gap-1">
+                                  {hasOpenBreak ? (
+                                    <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 text-[10px]">
+                                      ON BREAK
+                                    </Badge>
+                                  ) : a.clockOut ? (
+                                    <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
+                                  ) : (
+                                    <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
+                                  )}
+                                  {a.status === 'LATE' && (
+                                    <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300 text-[10px]">
+                                      LATE
+                                    </Badge>
+                                  )}
+                                  {a.status === 'HALF_DAY' && (
+                                    <Badge variant="outline" className="border-purple-300 text-purple-700 text-[10px]">
+                                      HALF DAY
+                                    </Badge>
+                                  )}
+                                </div>
+                                {displayNotes && (
+                                  <div className="text-[10px] text-muted-foreground italic truncate max-w-[200px]" title={displayNotes}>
+                                    &ldquo;{displayNotes}&rdquo;
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3.5 px-4 text-right">
+                              <div className="flex items-center justify-end gap-1">
+                                {breaksList.length > 0 && (
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setExpandedSessionId(isExpanded ? null : a.id)}
+                                    className="text-xs h-7 px-2 text-muted-foreground hover:text-foreground gap-1"
+                                    title={isExpanded ? 'Hide break timeline' : 'View break breakdown'}
+                                  >
+                                    {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                                    <span className="text-[11px]">{breaksList.length} break{breaksList.length === 1 ? '' : 's'}</span>
+                                  </Button>
+                                )}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setCorrectionTarget(a);
+                                    setRequestedClockIn(new Date(a.clockIn).toISOString().slice(0, 16));
+                                    setRequestedClockOut(a.clockOut ? new Date(a.clockOut).toISOString().slice(0, 16) : '');
+                                    setShowCorrectionModal(true);
+                                  }}
+                                  className="text-[11px] h-7 px-2 gap-1 text-muted-foreground hover:text-foreground"
+                                  title="Request Attendance Correction"
+                                >
+                                  <FileText className="h-3 w-3" /> Correct
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                          {isExpanded && (
+                            <tr className="bg-muted/30">
+                              <td colSpan={9} className="py-3 px-6">
+                                <div className="rounded-lg border border-border/60 bg-background/80 p-3 space-y-2">
+                                  <div className="text-xs font-semibold text-foreground flex items-center gap-2">
+                                    <Coffee className="h-3.5 w-3.5 text-amber-600" /> Breaks Breakdown for Session #{sessionIndex}
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                    {breaksList.map((b: any, bIdx: number) => {
+                                      const bStart = new Date(b.breakStart).toLocaleTimeString();
+                                      const bEnd = b.breakEnd ? new Date(b.breakEnd).toLocaleTimeString() : 'In Progress';
+                                      let bDur = b.durationMinutes;
+                                      if (!bDur) {
+                                        const bEndMs = b.breakEnd ? new Date(b.breakEnd).getTime() : nowMs;
+                                        bDur = Math.max(1, Math.round((bEndMs - new Date(b.breakStart).getTime()) / 60000));
+                                      }
+                                      return (
+                                        <div key={b.id || bIdx} className="text-xs p-2 rounded border border-border bg-card flex items-center justify-between">
+                                          <div>
+                                            <div className="font-medium text-foreground">{b.breakType?.replace(/_/g, ' ') || 'General Break'}</div>
+                                            <div className="text-[11px] text-muted-foreground">{bStart} - {bEnd}</div>
+                                          </div>
+                                          <Badge variant={b.breakEnd ? 'secondary' : 'default'} className="text-[10px]">
+                                            {bDur}m
+                                          </Badge>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                  {displayNotes && (
+                                    <div className="text-xs text-muted-foreground border-t border-border/50 pt-2">
+                                      <strong>Notes / Handoff:</strong> {displayNotes}
+                                    </div>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       );
                     })}
                     {filteredLogs.length === 0 && (
                       <tr>
-                        <td colSpan={8} className="text-center py-8 text-xs text-muted-foreground">
+                        <td colSpan={9} className="text-center py-8 text-xs text-muted-foreground">
                           No matching attendance records found.
                         </td>
                       </tr>
@@ -1878,7 +2168,7 @@ export default function TimeAttendancePage() {
                   <div>
                     <CardTitle className="text-sm font-bold flex items-center gap-2">
                       <Users className="h-4 w-4 text-primary" />
-                      Team Leave Approvals {currentUserRole === 'MANAGER' ? '(Team Lead — View Only)' : currentUserRole === 'ADMIN' ? '(HR Executive Approvals)' : '(Owner Approvals)'}
+                      Team Leave Approvals {currentUserRole === 'MANAGER' ? '(Team Lead — View Only)' : currentUserRole === 'ADMIN' ? '(Admin Approvals)' : '(Owner Approvals)'}
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
                       {currentUserRole === 'MANAGER'

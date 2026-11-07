@@ -505,7 +505,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   const accessRole = activeWorkspace?.accessRole || 'MEMBER';
   const getPortalRoleLabel = (r: string) => {
-    if (r === 'ADMIN') return 'HR EXECUTIVE';
+    if (r === 'ADMIN') return 'ADMIN';
     if (r === 'OWNER') return 'OWNER';
     if (r === 'MANAGER') return 'MANAGER';
     if (r === 'MEMBER') return 'MEMBER';

@@ -60,7 +60,7 @@ export function checkPermission(ctx: PermissionContext | null | undefined, requi
   const grantedCodes = extractPermissionCodes(ctx);
 
   // Platform ADMIN has operational authority for all standard operations
-  if (accessRole === 'ADMIN' && requiredPerm !== 'billing:manage') {
+  if (accessRole === 'ADMIN' && grantedCodes.length === 0 && requiredPerm !== 'billing:manage') {
     return true;
   }
 

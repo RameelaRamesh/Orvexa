@@ -1524,7 +1524,7 @@ export default function PeoplePage() {
                     <div>
                       <span className="text-muted-foreground block">System Access Role:</span>
                       <Badge variant={member.accessRole === 'OWNER' ? 'default' : member.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                        {member.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : member.accessRole}
+                        {member.accessRole}
                       </Badge>
                     </div>
                     <div>
@@ -1968,7 +1968,7 @@ export default function PeoplePage() {
                             </span>
                           ) : (
                             <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                              {m.accessRole === 'ADMIN' ? 'HR EXECUTIVE' : m.accessRole}
+                              {m.accessRole}
                             </Badge>
                           )}
                         </td>
@@ -2370,7 +2370,7 @@ export default function PeoplePage() {
                     >
                       <option value="MEMBER">Member (Individual contributor)</option>
                       <option value="MANAGER">Manager (Team & operations management)</option>
-                      <option value="ADMIN">HR Executive (HR &amp; Organization administration)</option>
+                      <option value="ADMIN">Admin (Organization administration)</option>
                       <option value="OWNER">Owner (Organization ownership)</option>
                     </select>
                   </div>
@@ -3068,7 +3068,7 @@ export default function PeoplePage() {
                           >
                             <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
                             <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
-                            <option value="ADMIN">HR Executive / Admin (People, Leaves, Attendance, Org Settings)</option>
+                            <option value="ADMIN">Admin (People, Leaves, Attendance, Org Settings)</option>
                             <option value="OWNER">Owner (Full Organization Root Authority)</option>
                           </select>
                         </div>
