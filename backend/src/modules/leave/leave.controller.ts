@@ -81,9 +81,28 @@ export class LeaveController {
   async create(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
-    @Body() body: { leaveType: LeaveType; startDate: Date; endDate: Date; totalDays: number; reason?: string },
+    @Body()
+    body: {
+      leaveType: LeaveType;
+      startDate: Date | string;
+      endDate: Date | string;
+      totalDays?: number;
+      reason?: string;
+      membershipId?: string;
+      status?: LeaveStatus;
+    },
   ) {
-    return this.leaveService.create(workspaceId, req.membershipId, body);
+    const isOwnerOrAdmin =
+      req.user?.role === 'ADMIN' ||
+      req.user?.role === 'OWNER' ||
+      req.membership?.accessRole === 'ADMIN' ||
+      req.membership?.accessRole === 'OWNER';
+
+    const targetMembershipId = (isOwnerOrAdmin && body.membershipId)
+      ? body.membershipId
+      : req.membershipId;
+
+    return this.leaveService.create(workspaceId, targetMembershipId, body, req.membershipId);
   }
 
   @Patch(':id/status')

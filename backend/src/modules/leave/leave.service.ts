@@ -164,7 +164,15 @@ export class LeaveService {
   async create(
     workspaceId: string,
     membershipId: string,
-    data: { leaveType: LeaveType; startDate: Date | string; endDate: Date | string; totalDays: number; reason?: string },
+    data: {
+      leaveType: LeaveType;
+      startDate: Date | string;
+      endDate: Date | string;
+      totalDays?: number;
+      reason?: string;
+      status?: LeaveStatus;
+    },
+    creatorMembershipId?: string,
   ) {
     const start = new Date(data.startDate);
     const end = new Date(data.endDate);
@@ -201,7 +209,7 @@ export class LeaveService {
     });
 
     const currentYear = start.getFullYear();
-    const balance = await this.prisma.leaveBalance.findUnique({
+    let balance = await this.prisma.leaveBalance.findUnique({
       where: {
         membershipId_leaveType_year: {
           membershipId,
@@ -211,15 +219,33 @@ export class LeaveService {
       },
     });
 
+    if (!balance && policy) {
+      try {
+        balance = await this.prisma.leaveBalance.create({
+          data: {
+            workspaceId,
+            membershipId,
+            leaveType: data.leaveType,
+            year: currentYear,
+            allocated: policy.annualAllocation,
+          },
+        });
+      } catch {}
+    }
+
+    const isDirectApproval = data.status === 'APPROVED';
+    const initialStatus: LeaveStatus = data.status || 'PENDING';
+
     const available = (balance ? balance.allocated + balance.carriedOver - balance.used - balance.pending : (policy?.annualAllocation || 0));
 
-    if (available < totalDays && !policy?.allowNegativeBalance && data.leaveType !== 'UNPAID') {
+    // For employee self-service (not direct admin approval), enforce balance check
+    if (!isDirectApproval && available < totalDays && !policy?.allowNegativeBalance && data.leaveType !== 'UNPAID') {
       throw new BadRequestException(
         `Insufficient leave balance. Requested ${totalDays} days, but only ${available} days available.`,
       );
     }
 
-    // Create request and update pending balance in transaction
+    // Create request and update balance in transaction
     const createdRequest = await this.prisma.$transaction(async (tx) => {
       const request = await tx.leaveRequest.create({
         data: {
@@ -230,24 +256,33 @@ export class LeaveService {
           endDate: end,
           totalDays,
           reason: data.reason,
-          status: 'PENDING',
+          status: initialStatus,
+          approvedByMembershipId: isDirectApproval ? (creatorMembershipId || membershipId) : undefined,
         },
       });
 
       if (balance) {
-        await tx.leaveBalance.update({
-          where: { id: balance.id },
-          data: { pending: { increment: totalDays } },
-        });
+        if (isDirectApproval) {
+          await tx.leaveBalance.update({
+            where: { id: balance.id },
+            data: { used: { increment: totalDays } },
+          });
+        } else {
+          await tx.leaveBalance.update({
+            where: { id: balance.id },
+            data: { pending: { increment: totalDays } },
+          });
+        }
       }
 
       return request;
     });
 
-    // Notify appropriate approvers
-    try {
-      const applicant = await this.prisma.membership.findUnique({
-        where: { id: membershipId },
+    // Notify appropriate approvers if PENDING
+    if (initialStatus === 'PENDING') {
+      try {
+        const applicant = await this.prisma.membership.findUnique({
+          where: { id: membershipId },
         include: { user: true, designation: true },
       });
       const applicantName = applicant?.user
@@ -287,8 +322,9 @@ export class LeaveService {
     } catch {
       // Non-blocking notification
     }
+  }
 
-    return createdRequest;
+  return createdRequest;
   }
 
   async updateStatus(

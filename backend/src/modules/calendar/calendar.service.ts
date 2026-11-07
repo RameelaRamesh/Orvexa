@@ -470,7 +470,7 @@ export class CalendarService {
             type: 'HOLIDAY',
             layer: 'HOLIDAYS',
             startDate: `${h.date}T00:00:00.000Z`,
-            endDate: `${h.date}T23:59:59.999Z`,
+            endDate: `${h.date}T00:00:00.000Z`,
             allDay: true,
             status: 'OFFICIAL',
             color: '#10b981',
@@ -500,13 +500,20 @@ export class CalendarService {
     for (const ch of cleanCompanyHolidays) {
       const cDate = new Date(ch.date);
       if (cDate >= start && cDate <= end) {
+        const startStr = typeof ch.date === 'string'
+          ? (ch.date.includes('T') ? ch.date : `${ch.date}T00:00:00.000Z`)
+          : cDate.toISOString();
+        const endStr = ch.endDate
+          ? (typeof ch.endDate === 'string' && !ch.endDate.includes('T') ? `${ch.endDate}T00:00:00.000Z` : ch.endDate)
+          : startStr;
+
         events.push({
           id: `comp_hol_${ch.id}`,
           title: ch.name,
           type: 'HOLIDAY',
           layer: 'HOLIDAYS',
-          startDate: typeof ch.date === 'string' ? ch.date : cDate.toISOString(),
-          endDate: ch.endDate ? ch.endDate : (typeof ch.date === 'string' ? ch.date : cDate.toISOString()),
+          startDate: startStr,
+          endDate: endStr,
           allDay: true,
           status: 'COMPANY',
           color: '#059669',
