@@ -64,10 +64,11 @@ export class TasksService implements OnModuleInit {
     filter?: {
       projectId?: string;
       assigneeMembershipId?: string;
-      status?: TaskStatus;
+      status?: string;
       priority?: PriorityLevel;
       clientId?: string;
       search?: string;
+      scope?: string;
     },
     userContext?: any,
   ) {
@@ -76,8 +77,23 @@ export class TasksService implements OnModuleInit {
 
     if (filter?.projectId) where.projectId = filter.projectId;
     if (filter?.assigneeMembershipId) where.assigneeMembershipId = filter.assigneeMembershipId;
-    if (filter?.status) where.status = filter.status;
     if (filter?.priority) where.priority = filter.priority;
+
+    let filterStatus = filter?.status;
+    let filterOverdue = false;
+    let filterBlocked = false;
+
+    if (filterStatus) {
+      if (filterStatus === 'OVERDUE') {
+        filterOverdue = true;
+      } else if (filterStatus === 'BLOCKED') {
+        filterBlocked = true;
+      } else if (filterStatus === 'DONE') {
+        where.status = TaskStatus.COMPLETED;
+      } else if (filterStatus !== 'ALL') {
+        where.status = filterStatus as TaskStatus;
+      }
+    }
 
     if (filter?.search) {
       where.OR = [
@@ -86,8 +102,22 @@ export class TasksService implements OnModuleInit {
       ];
     }
 
-    // Record-Level Data Scope Enforcement
-    if (
+    // Explicit filter.scope handling
+    if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
+      where.assigneeMembershipId = userContext.membershipId;
+    } else if (filter?.scope === 'TEAM_WORK') {
+      if (userContext?.accessRole === 'MANAGER' || userContext?.accessRole === 'ADMIN' || userContext?.accessRole === 'OWNER') {
+        if (userContext.teamId && userContext.accessRole === 'MANAGER') {
+          where.assignee = {
+            OR: [
+              { id: userContext.membershipId },
+              { teamId: userContext.teamId },
+              { reportsToId: userContext.membershipId },
+            ],
+          };
+        }
+      }
+    } else if (
       userContext &&
       userContext.accessRole !== 'OWNER' &&
       userContext.accessRole !== 'ADMIN'
@@ -111,7 +141,7 @@ export class TasksService implements OnModuleInit {
       }
     }
 
-    const tasks = await this.prisma.task.findMany({
+    let tasks = await this.prisma.task.findMany({
       where,
       include: {
         project: {
@@ -127,6 +157,12 @@ export class TasksService implements OnModuleInit {
       },
       orderBy: { updatedAt: 'desc' },
     });
+
+    if (filterOverdue) {
+      tasks = tasks.filter((t: any) => t.status !== TaskStatus.COMPLETED && t.dueDate && new Date(t.dueDate).getTime() < Date.now());
+    } else if (filterBlocked) {
+      tasks = tasks.filter((t: any) => (t.sla as any)?.isBlocked || (t.sla as any)?.dependsOnTaskIds?.length > 0);
+    }
 
     return tasks.map((t) => this.enrichTaskPayload(t));
   }
@@ -195,6 +231,10 @@ export class TasksService implements OnModuleInit {
       customFields?: Record<string, any>;
       dependsOnTaskIds?: string[];
       collaboratorIds?: string[];
+      reviewRequired?: boolean;
+      subtasks?: Array<{ title: string } | string>;
+      progressMode?: 'MANUAL' | 'SUBTASK';
+      attachments?: any[];
     },
     creatorMembershipId?: string,
   ) {
@@ -231,10 +271,23 @@ export class TasksService implements OnModuleInit {
       ...assigneeIds,
     ]));
 
+    const initialSubtasks = Array.isArray(data.subtasks)
+      ? data.subtasks.map((s: any) => ({
+          id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          title: typeof s === 'string' ? s.trim() : (s.title || '').trim(),
+          isCompleted: false,
+          createdAt: new Date().toISOString(),
+        })).filter((s) => s.title)
+      : [];
+
     const initialMetadata: any = {
       creatorMembershipId: creatorMembershipId || null,
       startDate: data.startDate ? new Date(data.startDate) : null,
       progress: initialProgress,
+      progressMode: data.progressMode || (initialSubtasks.length > 0 ? 'SUBTASK' : 'MANUAL'),
+      reviewRequired: Boolean(data.reviewRequired),
+      subtasks: initialSubtasks,
+      progressUpdates: [],
       clientId: data.clientId || null,
       departmentId: data.departmentId || null,
       assetId: data.assetId || null,
@@ -243,7 +296,7 @@ export class TasksService implements OnModuleInit {
       collaboratorIds: allCollaboratorIds,
       assigneeMembershipIds: assigneeIds,
       comments: [],
-      attachments: [],
+      attachments: data.attachments || [],
       activityLog: [
         {
           action: 'CREATED',
@@ -364,7 +417,9 @@ export class TasksService implements OnModuleInit {
         action: 'REASSIGNED',
         actorId: actorMembershipId || 'SYSTEM',
         timestamp: new Date(),
-        details: `Assignees updated (${newAssigneeIds ? newAssigneeIds.length : (primaryAssigneeId ? 1 : 0)} member(s) assigned)`,
+        details: primaryAssigneeId
+          ? `Reassigned to membership ${primaryAssigneeId}`
+          : `Assignees updated (${newAssigneeIds ? newAssigneeIds.length : 0} member(s) assigned)`,
       });
     }
 
@@ -486,7 +541,7 @@ export class TasksService implements OnModuleInit {
         ],
       },
     });
-    for (const m of managersToAlert) {
+    for (const m of (managersToAlert || [])) {
       if (m.id === actorMembershipId) continue;
       await this.sendNotification(
         workspaceId,
@@ -757,6 +812,330 @@ export class TasksService implements OnModuleInit {
     });
 
     return this.getById(workspaceId, id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SUBTASKS, PROGRESS & EXTENSIONS
+  // ---------------------------------------------------------------------------
+
+  async addSubtask(id: string, workspaceId: string, title: string, actorMembershipId?: string) {
+    if (!title || !title.trim()) {
+      throw new BadRequestException('Subtask title is required');
+    }
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const subtasks = metadata.subtasks || [];
+    const newSub = {
+      id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      title: title.trim(),
+      isCompleted: false,
+      createdAt: new Date().toISOString(),
+    };
+    const updatedSubtasks = [...subtasks, newSub];
+
+    const activityLog = metadata.activityLog || [];
+    activityLog.push({
+      action: 'SUBTASK_ADDED',
+      actorId: actorMembershipId || 'SYSTEM',
+      timestamp: new Date(),
+      details: `Added subtask: "${title.trim()}"`,
+    });
+
+    let newProgress = metadata.progress;
+    if (metadata.progressMode === 'SUBTASK') {
+      const completed = updatedSubtasks.filter((s: any) => s.isCompleted).length;
+      newProgress = Math.round((completed / updatedSubtasks.length) * 100);
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        sla: {
+          ...metadata,
+          subtasks: updatedSubtasks,
+          progress: newProgress,
+          activityLog,
+        },
+      },
+    });
+
+    return this.getById(workspaceId, id);
+  }
+
+  async toggleSubtask(id: string, workspaceId: string, subtaskId: string, isCompleted: boolean, actorMembershipId?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const subtasks = metadata.subtasks || [];
+    const updatedSubtasks = subtasks.map((s: any) =>
+      s.id === subtaskId ? { ...s, isCompleted: Boolean(isCompleted), completedAt: isCompleted ? new Date().toISOString() : null } : s
+    );
+
+    const targetSub = subtasks.find((s: any) => s.id === subtaskId);
+    const activityLog = metadata.activityLog || [];
+    activityLog.push({
+      action: isCompleted ? 'SUBTASK_COMPLETED' : 'SUBTASK_REOPENED',
+      actorId: actorMembershipId || 'SYSTEM',
+      timestamp: new Date(),
+      details: `Subtask "${targetSub?.title || subtaskId}" marked as ${isCompleted ? 'completed' : 'incomplete'}`,
+    });
+
+    let newProgress = metadata.progress;
+    if (metadata.progressMode === 'SUBTASK' || metadata.subtaskProgressEnabled) {
+      const completed = updatedSubtasks.filter((s: any) => s.isCompleted).length;
+      newProgress = updatedSubtasks.length > 0 ? Math.round((completed / updatedSubtasks.length) * 100) : 0;
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        sla: {
+          ...metadata,
+          subtasks: updatedSubtasks,
+          progress: newProgress,
+          activityLog,
+        },
+      },
+    });
+
+    return this.getById(workspaceId, id);
+  }
+
+  async deleteSubtask(id: string, workspaceId: string, subtaskId: string, actorMembershipId?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const subtasks = metadata.subtasks || [];
+    const updatedSubtasks = subtasks.filter((s: any) => s.id !== subtaskId);
+
+    const activityLog = metadata.activityLog || [];
+    activityLog.push({
+      action: 'SUBTASK_DELETED',
+      actorId: actorMembershipId || 'SYSTEM',
+      timestamp: new Date(),
+      details: `Deleted subtask ${subtaskId}`,
+    });
+
+    let newProgress = metadata.progress;
+    if (metadata.progressMode === 'SUBTASK') {
+      const completed = updatedSubtasks.filter((s: any) => s.isCompleted).length;
+      newProgress = updatedSubtasks.length > 0 ? Math.round((completed / updatedSubtasks.length) * 100) : 0;
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        sla: {
+          ...metadata,
+          subtasks: updatedSubtasks,
+          progress: newProgress,
+          activityLog,
+        },
+      },
+    });
+
+    return this.getById(workspaceId, id);
+  }
+
+  async updateProgress(id: string, workspaceId: string, progress: number, comment?: string, actorMembershipId?: string, authorName?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const prevProgress = metadata.progress !== undefined ? metadata.progress : 0;
+    const clampedProgress = Math.max(0, Math.min(100, Math.round(Number(progress))));
+
+    const progressUpdates = metadata.progressUpdates || [];
+    const updateRecord = {
+      id: `prog_${Date.now()}`,
+      previousProgress: prevProgress,
+      newProgress: clampedProgress,
+      updatedBy: authorName || 'Team Member',
+      actorMembershipId: actorMembershipId || 'SYSTEM',
+      updatedAt: new Date().toISOString(),
+      comment: comment ? comment.trim() : null,
+    };
+    progressUpdates.push(updateRecord);
+
+    const activityLog = metadata.activityLog || [];
+    activityLog.push({
+      action: 'PROGRESS_UPDATED',
+      actorId: actorMembershipId || 'SYSTEM',
+      timestamp: new Date(),
+      details: `Progress updated from ${prevProgress}% to ${clampedProgress}%${comment ? `: "${comment.trim()}"` : ''}`,
+    });
+
+    let status = task.status;
+    if (clampedProgress === 100 && !metadata.reviewRequired) {
+      status = TaskStatus.COMPLETED;
+    } else if (clampedProgress > 0 && status === TaskStatus.TODO) {
+      status = TaskStatus.IN_PROGRESS;
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        status,
+        sla: {
+          ...metadata,
+          progress: clampedProgress,
+          progressMode: 'MANUAL',
+          progressUpdates,
+          activityLog,
+        },
+      },
+    });
+
+    return this.getById(workspaceId, id);
+  }
+
+  async requestExtension(id: string, workspaceId: string, proposedDeadline: Date | string, reason: string, actorMembershipId?: string) {
+    if (!reason || !reason.trim()) {
+      throw new BadRequestException('Reason is required for deadline extension');
+    }
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const extensionRequest = {
+      id: `ext_${Date.now()}`,
+      proposedDeadline: new Date(proposedDeadline).toISOString(),
+      currentDeadline: task.dueDate ? new Date(task.dueDate).toISOString() : null,
+      reason: reason.trim(),
+      requestedByMembershipId: actorMembershipId || 'SYSTEM',
+      requestedAt: new Date().toISOString(),
+      status: 'PENDING',
+    };
+
+    const activityLog = metadata.activityLog || [];
+    activityLog.push({
+      action: 'EXTENSION_REQUESTED',
+      actorId: actorMembershipId || 'SYSTEM',
+      timestamp: new Date(),
+      details: `Extension requested to ${new Date(proposedDeadline).toLocaleDateString()}: "${reason.trim()}"`,
+    });
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        sla: {
+          ...metadata,
+          extensionRequest,
+          activityLog,
+        },
+      },
+    });
+
+    const managers = await this.prisma.membership.findMany({
+      where: {
+        workspaceId,
+        status: 'ACTIVE',
+        accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] },
+      },
+    });
+    for (const m of managers) {
+      if (m.id === actorMembershipId) continue;
+      await this.sendNotification(
+        workspaceId,
+        m.id,
+        'Deadline Extension Request',
+        `Extension requested for "${task.title}" to ${new Date(proposedDeadline).toLocaleDateString()}. Reason: ${reason.trim()}`,
+        `/app/projects?taskId=${task.id}`,
+      );
+    }
+
+    return this.getById(workspaceId, id);
+  }
+
+  async reviewExtension(id: string, workspaceId: string, action: 'APPROVE' | 'REJECT', feedback?: string, actorMembershipId?: string) {
+    const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
+    if (!task) throw new NotFoundException('Task not found');
+
+    const metadata = (task.sla as any) || {};
+    const ext = metadata.extensionRequest;
+    if (!ext || ext.status !== 'PENDING') {
+      throw new BadRequestException('No pending extension request found for this task');
+    }
+
+    const activityLog = metadata.activityLog || [];
+    let updatedDueDate = task.dueDate;
+
+    if (action === 'APPROVE') {
+      const oldDue = task.dueDate ? new Date(task.dueDate).toLocaleDateString() : 'None';
+      const newDue = new Date(ext.proposedDeadline);
+      updatedDueDate = newDue;
+
+      activityLog.push({
+        action: 'EXTENSION_APPROVED',
+        actorId: actorMembershipId || 'SYSTEM',
+        timestamp: new Date(),
+        details: `Extension approved. Deadline updated from ${oldDue} to ${newDue.toLocaleDateString()}.${feedback ? ` Feedback: "${feedback.trim()}"` : ''}`,
+      });
+
+      ext.status = 'APPROVED';
+      ext.reviewedByMembershipId = actorMembershipId;
+      ext.reviewedAt = new Date().toISOString();
+      ext.feedback = feedback || null;
+
+      if (task.assigneeMembershipId) {
+        await this.sendNotification(
+          workspaceId,
+          task.assigneeMembershipId,
+          'Deadline Extension Approved',
+          `Your extension request for "${task.title}" was approved. New deadline: ${newDue.toLocaleDateString()}.`,
+          `/app/projects?taskId=${task.id}`,
+        );
+      }
+    } else {
+      activityLog.push({
+        action: 'EXTENSION_REJECTED',
+        actorId: actorMembershipId || 'SYSTEM',
+        timestamp: new Date(),
+        details: `Extension rejected.${feedback ? ` Reason: "${feedback.trim()}"` : ''}`,
+      });
+
+      ext.status = 'REJECTED';
+      ext.reviewedByMembershipId = actorMembershipId;
+      ext.reviewedAt = new Date().toISOString();
+      ext.feedback = feedback || null;
+
+      if (task.assigneeMembershipId) {
+        await this.sendNotification(
+          workspaceId,
+          task.assigneeMembershipId,
+          'Deadline Extension Rejected',
+          `Your extension request for "${task.title}" was rejected.${feedback ? ` Feedback: "${feedback.trim()}"` : ''}`,
+          `/app/projects?taskId=${task.id}`,
+        );
+      }
+    }
+
+    await this.prisma.task.update({
+      where: { id },
+      data: {
+        dueDate: updatedDueDate,
+        sla: {
+          ...metadata,
+          extensionRequest: ext,
+          activityLog,
+          isOverdue: updatedDueDate && new Date(updatedDueDate).getTime() > Date.now() ? false : metadata.isOverdue,
+        },
+      },
+    });
+
+    return this.getById(workspaceId, id);
+  }
+
+  async reviewDecision(id: string, workspaceId: string, approved: boolean, feedback?: string, actorMembershipId?: string) {
+    if (approved) {
+      return this.complete(id, workspaceId, actorMembershipId);
+    } else {
+      return this.rejectToRework(id, workspaceId, feedback || 'Changes requested during review', actorMembershipId);
+    }
   }
 
   /**
@@ -1035,10 +1414,23 @@ export class TasksService implements OnModuleInit {
     const dependsOnTaskIds = metadata.dependsOnTaskIds || [];
     const reworkCount = metadata.reworkCount || 0;
 
+    const isOverdue =
+      task.status !== 'COMPLETED' &&
+      task.status !== 'CANCELLED' &&
+      task.dueDate
+        ? new Date(task.dueDate).getTime() < Date.now()
+        : false;
+
     return {
       ...task,
       creatorMembershipId: metadata.creatorMembershipId || null,
       progress: metadata.progress !== undefined ? metadata.progress : task.status === 'COMPLETED' ? 100 : task.status === 'IN_PROGRESS' ? 25 : 0,
+      progressMode: metadata.progressMode || 'MANUAL',
+      progressUpdates: metadata.progressUpdates || [],
+      subtasks: metadata.subtasks || [],
+      reviewRequired: Boolean(metadata.reviewRequired),
+      extensionRequest: metadata.extensionRequest || null,
+      attachments: metadata.attachments || [],
       startDate: metadata.startDate || null,
       commentsCount: comments.length,
       comments,
@@ -1046,6 +1438,8 @@ export class TasksService implements OnModuleInit {
       dependsOnTaskIds,
       reworkCount,
       isRework: !!metadata.isRework,
+      isOverdue,
+      isBlocked: Boolean(metadata.isBlocked),
       customFields: metadata.customFields || {},
       collaboratorIds: metadata.collaboratorIds || [],
       assigneeMembershipIds: Array.isArray(metadata.assigneeMembershipIds) && metadata.assigneeMembershipIds.length > 0

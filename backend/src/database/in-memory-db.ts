@@ -539,6 +539,23 @@ export class InMemoryDatabase {
         return { count };
       },
 
+      updateMany: async (args: any) => {
+        const col = getCollection();
+        const where = args?.where || {};
+        let count = 0;
+        for (let i = 0; i < col.length; i++) {
+          if (this.matchWhere(col[i], where)) {
+            col[i] = {
+              ...col[i],
+              ...args.data,
+              updatedAt: new Date(),
+            };
+            count++;
+          }
+        }
+        return { count };
+      },
+
       deleteMany: async (args: any) => {
         const col = getCollection();
         const where = args?.where;
@@ -577,9 +594,53 @@ export class InMemoryDatabase {
         if (!val.some((clause) => this.matchWhere(item, clause))) return false;
       } else if (key === 'NOT') {
         if (this.matchWhere(item, val)) return false;
+      } else if (key === 'assignee' && typeof val === 'object') {
+        const assignee = this.memberships.find((m) => m.id === item.assigneeMembershipId);
+        if (!assignee) return false;
+        if (!this.matchWhere(assignee, val)) return false;
+      } else if (key === 'project' && typeof val === 'object') {
+        const project = this.projects.find((p) => p.id === item.projectId);
+        if (!project) return false;
+        if (!this.matchWhere(project, val)) return false;
       } else if (val && typeof val === 'object') {
         if (val.in && Array.isArray(val.in)) {
           if (!val.in.includes(item[key])) return false;
+        } else if (val.notIn && Array.isArray(val.notIn)) {
+          if (val.notIn.includes(item[key])) return false;
+        } else if (val.not !== undefined) {
+          if (item[key] === val.not) return false;
+        } else if (val.lt !== undefined) {
+          const t1 = item[key] ? new Date(item[key]).getTime() : NaN;
+          const t2 = new Date(val.lt).getTime();
+          if (isNaN(t1) || isNaN(t2)) {
+            if (item[key] >= val.lt) return false;
+          } else {
+            if (t1 >= t2) return false;
+          }
+        } else if (val.lte !== undefined) {
+          const t1 = item[key] ? new Date(item[key]).getTime() : NaN;
+          const t2 = new Date(val.lte).getTime();
+          if (isNaN(t1) || isNaN(t2)) {
+            if (item[key] > val.lte) return false;
+          } else {
+            if (t1 > t2) return false;
+          }
+        } else if (val.gt !== undefined) {
+          const t1 = item[key] ? new Date(item[key]).getTime() : NaN;
+          const t2 = new Date(val.gt).getTime();
+          if (isNaN(t1) || isNaN(t2)) {
+            if (item[key] <= val.gt) return false;
+          } else {
+            if (t1 <= t2) return false;
+          }
+        } else if (val.gte !== undefined) {
+          const t1 = item[key] ? new Date(item[key]).getTime() : NaN;
+          const t2 = new Date(val.gte).getTime();
+          if (isNaN(t1) || isNaN(t2)) {
+            if (item[key] < val.gte) return false;
+          } else {
+            if (t1 < t2) return false;
+          }
         } else if (val.equals !== undefined) {
           if (val.mode === 'insensitive') {
             if (String(item[key]).toLowerCase() !== String(val.equals).toLowerCase()) return false;
@@ -684,6 +745,30 @@ export class InMemoryDatabase {
       }
       if (include?.role) {
         cloned.role = this.roles.find((r) => r.id === item.roleId);
+      }
+    } else if (collection === 'tasks') {
+      if (include?.project) {
+        cloned.project = this.projects.find((p) => p.id === item.projectId) || null;
+      }
+      if (include?.assignee) {
+        const mem = this.memberships.find((m) => m.id === item.assigneeMembershipId);
+        cloned.assignee = mem ? this.hydrate(mem, 'memberships', include.assignee.include) : null;
+      }
+    } else if (collection === 'projects') {
+      if (include?.client) {
+        cloned.client = (this as any).clients?.find((c: any) => c.id === item.clientId) || null;
+      }
+      if (include?.tasks) {
+        cloned.tasks = this.tasks.filter((t) => t.projectId === item.id);
+      }
+      if (include?._count?.select?.tasks) {
+        cloned._count = cloned._count || {};
+        cloned._count.tasks = this.tasks.filter((t) => t.projectId === item.id).length;
+      }
+    } else if (collection === 'notifications') {
+      if (include?.recipient) {
+        const mem = this.memberships.find((m) => m.id === item.recipientMembershipId);
+        cloned.recipient = mem ? this.hydrate(mem, 'memberships', include.recipient.include) : null;
       }
     }
 

@@ -29,6 +29,7 @@ export class AnalyticsController {
     @Query('memberId') memberId?: string,
     @Query('status') status?: string,
     @Query('priority') priority?: string,
+    @Query('scope') scope?: string,
   ) {
     const membershipId = req.membership?.id || req.membershipId;
     const userRole = req.membership?.accessRole || 'MEMBER';
@@ -41,6 +42,7 @@ export class AnalyticsController {
       memberId,
       status,
       priority,
+      scope,
     });
   }
 
@@ -83,6 +85,7 @@ export class AnalyticsController {
     @Query('priority') priority?: string,
     @Query('memberId') memberId?: string,
     @Query('search') search?: string,
+    @Query('scope') scope?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
@@ -96,6 +99,7 @@ export class AnalyticsController {
       priority,
       memberId,
       search,
+      scope,
       limit: limit ? parseInt(limit, 10) : undefined,
       offset: offset ? parseInt(offset, 10) : undefined,
     });
@@ -113,6 +117,7 @@ export class AnalyticsController {
     @Query('status') status?: string,
     @Query('priority') priority?: string,
     @Query('memberId') memberId?: string,
+    @Query('scope') scope?: string,
   ) {
     const membershipId = req.membership?.id || req.membershipId;
     const userRole = req.membership?.accessRole || 'MEMBER';
@@ -123,7 +128,7 @@ export class AnalyticsController {
       userRole,
       category,
       format,
-      { startDate, endDate, status, priority, memberId },
+      { startDate, endDate, status, priority, memberId, scope },
     );
 
     if (format === 'csv') {

@@ -38,6 +38,8 @@ export class CalendarController {
     @Query('teamId') teamId?: string,
     @Query('status') status?: string,
     @Query('layers') layers?: string,
+    @Query('scope') scope?: string,
+    @Query('memberIds') memberIds?: string,
   ) {
     const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
     const userRole = (
@@ -49,6 +51,7 @@ export class CalendarController {
     ).toString();
 
     const parsedLayers = layers ? layers.split(',') : undefined;
+    const parsedMemberIds = memberIds ? memberIds.split(',').filter(Boolean) : undefined;
 
     return this.calendarService.getEvents(workspaceId, membershipId, userRole, {
       startDate,
@@ -59,6 +62,8 @@ export class CalendarController {
       teamId,
       status,
       layers: parsedLayers,
+      scope,
+      memberIds: parsedMemberIds,
     });
   }
 

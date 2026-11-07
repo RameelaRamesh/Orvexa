@@ -73,6 +73,9 @@ interface CalendarEvent {
   reminderMinutes?: number;
   canEdit?: boolean;
   details?: Record<string, any>;
+  _isFirstDay?: boolean;
+  _isLastDay?: boolean;
+  _isMultiDay?: boolean;
 }
 
 export default function UnifiedCalendarPage() {
@@ -172,6 +175,18 @@ export default function UnifiedCalendarPage() {
   const [teams, setTeams] = useState<any[]>([]);
   const [members, setMembers] = useState<any[]>([]);
 
+  // Schedule Scopes & User Permission Context
+  const [selectedScope, setSelectedScope] = useState<'MY_SCHEDULE' | 'MY_TEAM' | 'MY_DEPARTMENT' | 'SELECT_PEOPLE' | 'ENTIRE_WORKSPACE'>('MY_SCHEDULE');
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]);
+  const [userDepartmentId, setUserDepartmentId] = useState<string>('');
+  const [userTeamId, setUserTeamId] = useState<string>('');
+
+  const roleUpper = (currentUserRole || 'MEMBER').toUpperCase();
+  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
+  const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
+  const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
+  const canSelectPeople = canViewWorkspace || roleUpper.includes('LEAD');
+
   // Create Event Form State
   const [formTitle, setFormTitle] = useState('');
   const [formType, setFormType] = useState<'MEETING' | 'COMPANY_EVENT' | 'TASK' | 'SHIFT'>('MEETING');
@@ -262,6 +277,10 @@ export default function UnifiedCalendarPage() {
       if (searchQuery.trim()) params.append('search', searchQuery.trim());
       if (selectedTypeFilter !== 'ALL') params.append('type', selectedTypeFilter);
       if (selectedDeptFilter !== 'ALL') params.append('departmentId', selectedDeptFilter);
+      params.append('scope', selectedScope);
+      if (selectedScope === 'SELECT_PEOPLE' && selectedMemberIds.length > 0) {
+        params.append('memberIds', selectedMemberIds.join(','));
+      }
 
       const headers = {
         Authorization: `Bearer ${activeToken}`,
@@ -270,10 +289,17 @@ export default function UnifiedCalendarPage() {
       if (!token) setToken(activeToken);
       if (!wsId) setWsId(activeWs);
 
+      const taskParams = new URLSearchParams();
+      if (selectedScope === 'MY_SCHEDULE') {
+        taskParams.append('scope', 'MY_WORK');
+      } else if (selectedScope === 'MY_TEAM') {
+        taskParams.append('scope', 'TEAM_WORK');
+      }
+
       // Query both the unified calendar API and tasks API concurrently to ensure all assigned tasks are visible
       const [calRes, tasksRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/calendar/events?${params.toString()}`, { headers }).catch(() => null),
-        fetch(`${BRANDING.apiUrl}/tasks`, { headers }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/tasks${taskParams.toString() ? `?${taskParams.toString()}` : ''}`, { headers }).catch(() => null),
       ]);
 
       // Ensure live members list is available for accurate assigner name resolution
@@ -327,17 +353,22 @@ export default function UnifiedCalendarPage() {
         for (const t of taskList) {
           if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
           const tId = `task-${t.id}`;
-          const rawDate = t.dueDate || t.startDate || t.createdAt || new Date();
-          const taskDate = new Date(rawDate);
-          if (isNaN(taskDate.getTime())) continue;
+          const sla = (t.sla as any) || {};
+          const rawStart = sla.startDate || t.startDate || t.createdAt || t.dueDate || new Date();
+          const rawEnd = t.dueDate || sla.endDate || rawStart;
+          const taskStartDate = new Date(rawStart);
+          const taskEndDate = new Date(rawEnd);
+          if (isNaN(taskStartDate.getTime())) continue;
 
-          const isMid = isMidnightUtc(rawDate);
+          const isMid = isMidnightUtc(rawEnd);
           const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+          const isOverdue = t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && t.dueDate && new Date(t.dueDate).getTime() < Date.now();
+          const progress = sla.progress !== undefined ? sla.progress : (t.status === 'COMPLETED' ? 100 : t.status === 'IN_PROGRESS' ? 25 : 0);
+
           const aName = t.assignee?.user
             ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
             : t.assigneeName || (t.assignee?.name) || 'Assigned to you';
 
-          const sla = (t.sla as any) || {};
           const creatorId = t.creatorMembershipId || sla.creatorMembershipId || (t as any).createdByMembershipId;
           let assignerName = t.assignerName || t.details?.assignerName;
           if (!assignerName && creatorId) {
@@ -365,13 +396,18 @@ export default function UnifiedCalendarPage() {
           }
 
           const taskDetails = {
+            taskId: t.id,
+            projectId: t.projectId,
             projectName: t.project?.name || t.projectName || "General",
             priority: t.priority || 'MEDIUM',
             assigneeName: aName,
             assigneeId: t.assigneeMembershipId,
             assignerName,
             creatorMembershipId: creatorId,
+            startDate: taskStartDate.toISOString(),
             dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : new Date(t.dueDate).toISOString()) : null,
+            progress,
+            isOverdue,
             isMyTask: true,
             hasDueDate: Boolean(t.dueDate),
           };
@@ -380,6 +416,8 @@ export default function UnifiedCalendarPage() {
           if (existingIdx >= 0) {
             allEvents[existingIdx] = {
               ...allEvents[existingIdx],
+              startDate: allEvents[existingIdx].startDate || taskStartDate.toISOString(),
+              endDate: allEvents[existingIdx].endDate || taskEndDate.toISOString(),
               allDay: isMid || allEvents[existingIdx].allDay,
               details: {
                 ...allEvents[existingIdx].details,
@@ -392,11 +430,11 @@ export default function UnifiedCalendarPage() {
               title: t.title,
               type: 'TASK',
               layer: 'TASKS',
-              startDate: taskDate.toISOString(),
-              endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
+              startDate: taskStartDate.toISOString(),
+              endDate: taskEndDate.toISOString(),
               allDay: isMid || !t.dueDate,
               status: t.status || 'TODO',
-              color: isUrgent ? '#ef4444' : '#8b5cf6',
+              color: isOverdue ? '#ef4444' : isUrgent ? '#f59e0b' : '#8b5cf6',
               description: t.description,
               details: taskDetails,
             });
@@ -462,6 +500,11 @@ export default function UnifiedCalendarPage() {
             team: m.team,
           }));
           setMembers(mapped);
+          const myMem = mapped.find((m: any) => m.id === currentMembershipId || m.user?.id === currentMembershipId);
+          if (myMem) {
+            if (myMem.department?.id) setUserDepartmentId(myMem.department.id);
+            if (myMem.team?.id) setUserTeamId(myMem.team.id);
+          }
         }
       }
     } catch {}
@@ -472,7 +515,7 @@ export default function UnifiedCalendarPage() {
       fetchEvents();
       fetchWorkspaceMeta();
     }
-  }, [token, wsId, currentDate.getFullYear(), currentDate.getMonth(), selectedTypeFilter, selectedDeptFilter]);
+  }, [token, wsId, currentDate.getFullYear(), currentDate.getMonth(), selectedTypeFilter, selectedDeptFilter, selectedScope, selectedMemberIds]);
 
   // Navigate Months / Weeks / Days
   const handlePrevMonth = () => {
@@ -534,16 +577,58 @@ export default function UnifiedCalendarPage() {
     );
   };
 
-  // Group events by day string (YYYY-MM-DD)
+  // Group events by day string (YYYY-MM-DD) with Multi-Day Task Continuity
   const eventsByDay = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
 
+    const parseDayKey = (iso?: string | null) => {
+      if (!iso) return '';
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return '';
+      const isUtcMidnight = d.getUTCHours() === 0 && d.getUTCMinutes() === 0 && d.getUTCSeconds() === 0;
+      if (isUtcMidnight) {
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      }
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+
+    const keyToDate = (key: string) => {
+      const [y, m, d] = key.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    };
+
     for (const evt of events) {
       if (!evt.startDate) continue;
-      const d = new Date(evt.startDate);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-      if (!map[key]) map[key] = [];
-      map[key].push(evt);
+      const startKey = parseDayKey(evt.startDate);
+      const endKey = parseDayKey(evt.endDate || evt.startDate);
+      if (!startKey) continue;
+
+      const startDateObj = keyToDate(startKey);
+      const endDateObj = keyToDate(endKey || startKey);
+      const validStart = startDateObj <= endDateObj ? startDateObj : endDateObj;
+      const validEnd = startDateObj <= endDateObj ? endDateObj : startDateObj;
+
+      const isMultiDay = validStart.getTime() !== validEnd.getTime();
+      const runner = new Date(validStart);
+      let guard = 0;
+
+      while (runner <= validEnd && guard < 60) {
+        const curKey = `${runner.getFullYear()}-${String(runner.getMonth() + 1).padStart(2, '0')}-${String(runner.getDate()).padStart(2, '0')}`;
+        if (!map[curKey]) map[curKey] = [];
+
+        const isFirst = runner.getTime() === validStart.getTime();
+        const isLast = runner.getTime() === validEnd.getTime();
+
+        map[curKey].push({
+          ...evt,
+          _isFirstDay: isFirst,
+          _isLastDay: isLast,
+          _isMultiDay: isMultiDay,
+        });
+
+        runner.setDate(runner.getDate() + 1);
+        guard++;
+      }
     }
 
     return map;
@@ -959,8 +1044,154 @@ export default function UnifiedCalendarPage() {
                 Day
               </button>
             </div>
+
+            {/* Quick Action Buttons */}
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                onClick={() => {
+                  setFormType('MEETING');
+                  handleOpenCreateModal();
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 gap-1.5 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New Meeting
+              </Button>
+              {canViewWorkspace && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setFormType('COMPANY_EVENT');
+                    setFormAudience('ALL');
+                    handleOpenCreateModal();
+                  }}
+                  className="text-xs h-8 gap-1.5 border-slate-300 hover:bg-slate-50 text-slate-700"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                  New Event / Holiday
+                </Button>
+              )}
+            </div>
           </div>
         </div>
+
+        {/* Top Schedule Scope Selector (Permission-Based Scoping) */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mt-4 pt-3 border-t border-slate-100">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-semibold text-slate-500 mr-1 flex items-center gap-1">
+              <CalendarIcon className="w-3.5 h-3.5" /> Schedule Scope:
+            </span>
+            <button
+              onClick={() => setSelectedScope('MY_SCHEDULE')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                selectedScope === 'MY_SCHEDULE'
+                  ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                  : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              <User className="w-3.5 h-3.5" />
+              My Schedule
+            </button>
+            {canViewTeam && (
+              <button
+                onClick={() => setSelectedScope('MY_TEAM')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                  selectedScope === 'MY_TEAM'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                My Team
+              </button>
+            )}
+            {canViewDept && (
+              <button
+                onClick={() => setSelectedScope('MY_DEPARTMENT')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                  selectedScope === 'MY_DEPARTMENT'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Building className="w-3.5 h-3.5" />
+                My Department
+              </button>
+            )}
+            {canSelectPeople && (
+              <button
+                onClick={() => setSelectedScope('SELECT_PEOPLE')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                  selectedScope === 'SELECT_PEOPLE'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Users className="w-3.5 h-3.5" />
+                Select People {selectedMemberIds.length > 0 && `(${selectedMemberIds.length})`}
+              </button>
+            )}
+            {canViewWorkspace && (
+              <button
+                onClick={() => setSelectedScope('ENTIRE_WORKSPACE')}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                  selectedScope === 'ENTIRE_WORKSPACE'
+                    ? 'bg-blue-600 text-white shadow-xs font-semibold'
+                    : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                <Globe className="w-3.5 h-3.5" />
+                Entire Workspace
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Dynamic Member Multi-Selector (When SELECT_PEOPLE is active) */}
+        {selectedScope === 'SELECT_PEOPLE' && (
+          <div className="mt-3 p-3 bg-blue-50/50 border border-blue-100 rounded-xl space-y-2 animate-in fade-in duration-150">
+            <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+              <span>Filter view to specific colleagues:</span>
+              {selectedMemberIds.length > 0 && (
+                <button
+                  onClick={() => setSelectedMemberIds([])}
+                  className="text-blue-600 hover:underline text-[11px]"
+                >
+                  Clear all selected ({selectedMemberIds.length})
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+              {availableMembers.map((m) => {
+                const isSelected = selectedMemberIds.includes(m.id);
+                const name = `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || 'Member';
+                return (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      if (isSelected) {
+                        setSelectedMemberIds(selectedMemberIds.filter((id) => id !== m.id));
+                      } else {
+                        setSelectedMemberIds([...selectedMemberIds, m.id]);
+                      }
+                    }}
+                    className={`px-2.5 py-1 text-xs rounded-full border transition-all flex items-center gap-1.5 ${
+                      isSelected
+                        ? 'bg-blue-600 text-white border-blue-600 shadow-2xs font-medium'
+                        : 'bg-white text-slate-700 border-slate-200 hover:border-blue-300'
+                    }`}
+                  >
+                    <User className="w-3 h-3" />
+                    <span>{name}</span>
+                    {isSelected && <Check className="w-3 h-3" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Sub-bar: Navigation (< > on left, Date & Calendar Picker on right) */}
         <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-100">
@@ -1249,7 +1480,7 @@ export default function UnifiedCalendarPage() {
                         )}
                       </div>
 
-                      {/* Event Chips (Compact representation matching screenshot) */}
+                      {/* Event Chips (Compact representation with Multi-Day Continuity) */}
                       <div className="space-y-1 flex-1 overflow-hidden">
                         {dayEvents.slice(0, 3).map((evt) => {
                           const isMeeting = evt.layer === 'MEETINGS' || evt.type === 'MEETING';
@@ -1257,6 +1488,19 @@ export default function UnifiedCalendarPage() {
                           const isLeave = evt.layer === 'LEAVE' || evt.type === 'LEAVE';
                           const isTask = evt.layer === 'TASKS' || evt.type === 'TASK';
                           const isUrgent = evt.details?.priority === 'HIGH' || evt.details?.priority === 'URGENT';
+                          const isOverdue = evt.details?.isOverdue;
+                          const progress = evt.details?.progress !== undefined ? evt.details.progress : null;
+
+                          let shapeClasses = 'rounded-md';
+                          if (evt._isMultiDay) {
+                            if (evt._isFirstDay && !evt._isLastDay) {
+                              shapeClasses = 'rounded-l-md rounded-r-none border-r-0';
+                            } else if (!evt._isFirstDay && !evt._isLastDay) {
+                              shapeClasses = 'rounded-none border-x-0';
+                            } else if (!evt._isFirstDay && evt._isLastDay) {
+                              shapeClasses = 'rounded-r-md rounded-l-none border-l-0';
+                            }
+                          }
 
                           let badgeClasses = 'bg-slate-100 text-slate-800 border-slate-200';
                           if (isMeeting) {
@@ -1266,39 +1510,65 @@ export default function UnifiedCalendarPage() {
                           } else if (isLeave) {
                             badgeClasses = 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100';
                           } else if (isTask) {
-                            badgeClasses = isUrgent
-                              ? 'bg-rose-50 text-rose-800 border-rose-200 hover:bg-rose-100'
-                              : 'bg-purple-50 text-purple-800 border-purple-200 hover:bg-purple-100';
+                            if (isOverdue) {
+                              badgeClasses = 'bg-rose-50 text-rose-900 border-rose-300 ring-1 ring-rose-400 hover:bg-rose-100';
+                            } else if (isUrgent) {
+                              badgeClasses = 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100';
+                            } else {
+                              badgeClasses = 'bg-purple-50 text-purple-900 border-purple-200 hover:bg-purple-100';
+                            }
                           }
 
                           return (
                             <div
-                              key={evt.id}
+                              key={`${evt.id}-${dayKey}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setSelectedEvent(evt);
                                 setIsEventDetailOpen(true);
                               }}
-                              className={`px-2 py-1 rounded-md text-[11px] leading-tight border transition-shadow truncate shadow-2xs ${badgeClasses}`}
+                              className={`px-2 py-1 text-[11px] leading-tight border transition-shadow truncate shadow-2xs ${shapeClasses} ${badgeClasses}`}
                               title={`${evt.title} (${evt.startDate ? formatShortTime(evt.startDate) : ''})`}
                             >
-                              <div className="flex items-center gap-1 truncate">
-                                {isMeeting && <Video className="w-3 h-3 text-blue-600 shrink-0" />}
-                                {isTask && (
-                                  <span
-                                    className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                                      isUrgent ? 'bg-rose-500' : 'bg-purple-500'
-                                    }`}
-                                  />
-                                )}
-                                {isHoliday && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />}
-                                {isLeave && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
+                              <div className="flex items-center justify-between gap-1 truncate">
+                                <div className="flex items-center gap-1 truncate">
+                                  {isMeeting && <Video className="w-3 h-3 text-blue-600 shrink-0" />}
+                                  {isTask && (
+                                    <span
+                                      className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                                        isOverdue ? 'bg-rose-600' : isUrgent ? 'bg-amber-500' : 'bg-purple-600'
+                                      }`}
+                                    />
+                                  )}
+                                  {isHoliday && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />}
+                                  {isLeave && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />}
 
-                                <span className="font-semibold truncate">{evt.title}</span>
+                                  <span className="font-semibold truncate">{evt.title}</span>
+                                </div>
+
+                                {isTask && (
+                                  <div className="flex items-center gap-1 shrink-0">
+                                    {progress !== null && (
+                                      <span className="text-[9px] font-bold px-1 rounded bg-white/70 text-purple-800">
+                                        {progress}%
+                                      </span>
+                                    )}
+                                    {evt._isLastDay && (
+                                      <span title={isOverdue ? 'Overdue Deadline' : 'Deadline'}>
+                                        <Clock className={`w-3 h-3 ${isOverdue ? 'text-rose-600 font-bold' : 'text-purple-600'}`} />
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
 
-                              {/* Time or Subtitle */}
-                              {!evt.allDay && evt.startDate && (
+                              {/* Multi-day / Single-day Subtitle */}
+                              {isTask && evt.details?.assigneeName && (
+                                <div className="text-[10px] text-slate-500 truncate mt-0.5">
+                                  {evt.details.assigneeName}
+                                </div>
+                              )}
+                              {!isTask && !evt.allDay && evt.startDate && (
                                 <div className="text-[10px] opacity-80 mt-0.5 truncate">
                                   {evt.endDate ? formatTimeRange(evt.startDate, evt.endDate) : formatShortTime(evt.startDate)}
                                 </div>
@@ -2098,6 +2368,40 @@ export default function UnifiedCalendarPage() {
                       </span>
                     </div>
                   </div>
+
+                  {selectedEvent.details?.progress !== undefined && (
+                    <div className="pt-2 border-t border-slate-200/60">
+                      <div className="flex items-center justify-between text-xs mb-1">
+                        <span className="font-semibold text-slate-700">Completion Progress</span>
+                        <span className="font-bold text-purple-700">{selectedEvent.details.progress}%</span>
+                      </div>
+                      <div className="h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-purple-600 rounded-full transition-all"
+                          style={{ width: `${selectedEvent.details.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedEvent.details?.isOverdue && (
+                    <div className="p-2 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 text-xs flex items-center gap-1.5 font-semibold">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                      Task is overdue and requires prompt completion
+                    </div>
+                  )}
+
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      const tId = selectedEvent.details?.taskId || selectedEvent.id.replace('task-', '');
+                      router.push(`/app/projects?taskId=${tId}`);
+                    }}
+                    className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs gap-1.5 mt-2"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Open Task in Workspace
+                  </Button>
                 </div>
               )}
 

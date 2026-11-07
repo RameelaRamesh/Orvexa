@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Patch,
+  Delete,
   Body,
   Param,
   Query,
@@ -32,15 +33,24 @@ export class TasksController {
     @Request() req: any,
     @Query('projectId') projectId?: string,
     @Query('assigneeMembershipId') assigneeMembershipId?: string,
-    @Query('status') status?: TaskStatus,
+    @Query('status') status?: string,
     @Query('priority') priority?: PriorityLevel,
     @Query('clientId') clientId?: string,
     @Query('search') search?: string,
+    @Query('scope') scope?: string,
   ) {
+    const userContext = req.userContext || {
+      membershipId: req.membershipId || req.membership?.id,
+      accessRole: req.membership?.accessRole || 'MEMBER',
+      dataScope: req.membership?.dataScope || 'ASSIGNED',
+      teamId: req.membership?.teamId,
+      departmentId: req.membership?.departmentId,
+    };
+
     return this.tasksService.list(
       workspaceId,
-      { projectId, assigneeMembershipId, status, priority, clientId, search },
-      req.userContext,
+      { projectId, assigneeMembershipId, status: status as any, priority, clientId, search, scope },
+      userContext,
     );
   }
 
@@ -118,6 +128,10 @@ export class TasksController {
       customFields?: Record<string, any>;
       dependsOnTaskIds?: string[];
       collaboratorIds?: string[];
+      reviewRequired?: boolean;
+      subtasks?: any[];
+      progressMode?: 'MANUAL' | 'SUBTASK';
+      attachments?: any[];
     },
   ) {
     return this.tasksService.create(workspaceId, body, req.membershipId);
@@ -232,5 +246,85 @@ export class TasksController {
     @Body('dependsOnTaskIds') dependsOnTaskIds: string[],
   ) {
     return this.tasksService.setDependencies(id, workspaceId, dependsOnTaskIds);
+  }
+
+  // ---------------------------------------------------------------------------
+  // SUBTASKS, PROGRESS & EXTENSIONS
+  // ---------------------------------------------------------------------------
+
+  @Post(':id/subtasks')
+  async addSubtask(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('title') title: string,
+  ) {
+    return this.tasksService.addSubtask(id, workspaceId, title, req.membershipId);
+  }
+
+  @Patch(':id/subtasks/:subtaskId')
+  async toggleSubtask(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('subtaskId') subtaskId: string,
+    @Body('isCompleted') isCompleted: boolean,
+  ) {
+    return this.tasksService.toggleSubtask(id, workspaceId, subtaskId, isCompleted, req.membershipId);
+  }
+
+  @Delete(':id/subtasks/:subtaskId')
+  async deleteSubtask(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('subtaskId') subtaskId: string,
+  ) {
+    return this.tasksService.deleteSubtask(id, workspaceId, subtaskId, req.membershipId);
+  }
+
+  @Post(':id/progress')
+  async updateProgress(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('progress') progress: number,
+    @Body('comment') comment?: string,
+  ) {
+    const authorName = req.user ? `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() : 'Team Member';
+    return this.tasksService.updateProgress(id, workspaceId, progress, comment, req.membershipId, authorName);
+  }
+
+  @Post(':id/extension-request')
+  async requestExtension(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('proposedDeadline') proposedDeadline: Date,
+    @Body('reason') reason: string,
+  ) {
+    return this.tasksService.requestExtension(id, workspaceId, proposedDeadline, reason, req.membershipId);
+  }
+
+  @Post(':id/extension-review')
+  async reviewExtension(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('action') action: 'APPROVE' | 'REJECT',
+    @Body('feedback') feedback?: string,
+  ) {
+    return this.tasksService.reviewExtension(id, workspaceId, action, feedback, req.membershipId);
+  }
+
+  @Post(':id/review-decision')
+  async reviewDecision(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('approved') approved: boolean,
+    @Body('feedback') feedback?: string,
+  ) {
+    return this.tasksService.reviewDecision(id, workspaceId, approved, feedback, req.membershipId);
   }
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -23,15 +24,29 @@ import {
   Info,
   Layers,
   ArrowUpRight,
+  ArrowRight,
   HelpCircle,
   FileSpreadsheet,
   FileCode,
   X,
+  Briefcase,
+  FolderKanban,
+  Building2,
+  Users,
+  User,
+  Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function AnalyticsPage() {
-  const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'attendance' | 'leave' | 'quality' | 'assets'>('overview');
+  const router = useRouter();
+  const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'projects' | 'attendance' | 'leave' | 'quality' | 'assets'>('overview');
+
+  // Scope State (Permission-Based Scoping)
+  const [selectedScope, setSelectedScope] = useState<'MY_DATA' | 'MY_TEAM' | 'MY_DEPARTMENT' | 'ENTIRE_WORKSPACE'>('ENTIRE_WORKSPACE');
+  const [userRole, setUserRole] = useState<string>('MEMBER');
+  const [userDepartmentId, setUserDepartmentId] = useState<string>('');
+  const [userTeamId, setUserTeamId] = useState<string>('');
 
   // Date Range State
   const [dateRange, setDateRange] = useState<DateRange>(() => {
@@ -64,6 +79,43 @@ export default function AnalyticsPage() {
   const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
   const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const cachedWs = localStorage.getItem('orvexa_cached_workspace');
+    const p = localStorage.getItem('orvexa_cached_profile') || localStorage.getItem('user');
+    let role = 'MEMBER';
+    if (cachedWs) {
+      try {
+        const wsObj = JSON.parse(cachedWs);
+        if (wsObj?.accessRole || wsObj?.role) role = wsObj.accessRole || wsObj.role;
+      } catch {}
+    }
+    if (p) {
+      try {
+        const prof = JSON.parse(p);
+        if (prof?.memberships && prof.memberships[0]?.accessRole) {
+          role = prof.memberships[0].accessRole;
+        }
+        if (prof?.memberships && prof.memberships[0]?.departmentId) {
+          setUserDepartmentId(prof.memberships[0].departmentId);
+        }
+        if (prof?.memberships && prof.memberships[0]?.teamId) {
+          setUserTeamId(prof.memberships[0].teamId);
+        }
+      } catch {}
+    }
+    setUserRole(role);
+    const rUpper = role.toUpperCase();
+    if (!['OWNER', 'ADMIN', 'MANAGER'].includes(rUpper)) {
+      setSelectedScope('MY_DATA');
+    }
+  }, []);
+
+  const roleUpper = (userRole || 'MEMBER').toUpperCase();
+  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
+  const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
+  const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
+
   // Load Overview Data
   const fetchOverview = async () => {
     if (!token || !wsId) return;
@@ -73,6 +125,7 @@ export default function AnalyticsPage() {
       const params = new URLSearchParams({
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
+        scope: selectedScope,
       });
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
       if (priorityFilter !== 'ALL') params.append('priority', priorityFilter);
@@ -105,6 +158,7 @@ export default function AnalyticsPage() {
       const params = new URLSearchParams({
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
+        scope: selectedScope,
       });
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
       if (priorityFilter !== 'ALL') params.append('priority', priorityFilter);
@@ -134,7 +188,7 @@ export default function AnalyticsPage() {
     if (activeTab !== 'overview') {
       fetchDrilldown(activeTab);
     }
-  }, [dateRange, statusFilter, priorityFilter]);
+  }, [dateRange, statusFilter, priorityFilter, selectedScope]);
 
   useEffect(() => {
     if (activeTab !== 'overview') {
@@ -204,7 +258,7 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Topics (Tabs) & Controls - Single Unified Aligned Row */}
+{/* Topics (Tabs) & Controls - Single Unified Aligned Row */}
       <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between border-b border-border gap-2.5 pb-2.5">
         <div className="flex flex-wrap items-center gap-1.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
           <Button
@@ -217,13 +271,13 @@ export default function AnalyticsPage() {
             Overview & KPIs
           </Button>
           <Button
-            variant={activeTab === 'tasks' ? 'default' : 'ghost'}
+            variant={activeTab === 'tasks' || activeTab === 'projects' ? 'default' : 'ghost'}
             size="sm"
             onClick={() => setActiveTab('tasks')}
             className="text-xs gap-1.5 h-8 font-medium rounded-lg"
           >
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            Work Items & Tasks
+            <Briefcase className="h-3.5 w-3.5" />
+            Work & Projects
           </Button>
           <Button
             variant={activeTab === 'attendance' ? 'default' : 'ghost'}
@@ -241,7 +295,7 @@ export default function AnalyticsPage() {
             className="text-xs gap-1.5 h-8 font-medium rounded-lg"
           >
             <Calendar className="h-3.5 w-3.5" />
-            Leave Requests
+            Leave
           </Button>
           <Button
             variant={activeTab === 'quality' ? 'default' : 'ghost'}
@@ -250,7 +304,7 @@ export default function AnalyticsPage() {
             className="text-xs gap-1.5 h-8 font-medium rounded-lg"
           >
             <Award className="h-3.5 w-3.5" />
-            Quality & SLAs
+            Quality & SLA
           </Button>
           <Button
             variant={activeTab === 'assets' ? 'default' : 'ghost'}
@@ -259,7 +313,7 @@ export default function AnalyticsPage() {
             className="text-xs gap-1.5 h-8 font-medium rounded-lg"
           >
             <Package className="h-3.5 w-3.5" />
-            Physical Resources
+            Resources
           </Button>
         </div>
         <div className="flex flex-wrap items-center gap-2 justify-end shrink-0 self-end xl:self-center">
@@ -281,6 +335,62 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
+      {/* Scope Selector (My Data, My Team, My Department, Entire Workspace) */}
+      <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-border/60">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-xs font-semibold text-muted-foreground mr-1">Report Scope:</span>
+          <button
+            onClick={() => setSelectedScope('MY_DATA')}
+            className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+              selectedScope === 'MY_DATA'
+                ? 'bg-primary text-primary-foreground shadow-xs font-semibold'
+                : 'bg-card text-foreground border border-border hover:bg-muted'
+            }`}
+          >
+            <User className="h-3.5 w-3.5" />
+            My Data
+          </button>
+          {canViewTeam && (
+            <button
+              onClick={() => setSelectedScope('MY_TEAM')}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                selectedScope === 'MY_TEAM'
+                  ? 'bg-primary text-primary-foreground shadow-xs font-semibold'
+                  : 'bg-card text-foreground border border-border hover:bg-muted'
+              }`}
+            >
+              <Users className="h-3.5 w-3.5" />
+              My Team
+            </button>
+          )}
+          {canViewDept && (
+            <button
+              onClick={() => setSelectedScope('MY_DEPARTMENT')}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                selectedScope === 'MY_DEPARTMENT'
+                  ? 'bg-primary text-primary-foreground shadow-xs font-semibold'
+                  : 'bg-card text-foreground border border-border hover:bg-muted'
+              }`}
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              My Department
+            </button>
+          )}
+          {canViewWorkspace && (
+            <button
+              onClick={() => setSelectedScope('ENTIRE_WORKSPACE')}
+              className={`px-3 py-1 text-xs font-medium rounded-lg transition-all flex items-center gap-1.5 ${
+                selectedScope === 'ENTIRE_WORKSPACE'
+                  ? 'bg-primary text-primary-foreground shadow-xs font-semibold'
+                  : 'bg-card text-foreground border border-border hover:bg-muted'
+              }`}
+            >
+              <Globe className="h-3.5 w-3.5" />
+              Entire Workspace
+            </button>
+          )}
+        </div>
+      </div>
       {/* Error Banner with Retry */}
       {error && (
         <div className="p-4 rounded-lg border border-destructive/30 bg-destructive/10 flex items-center justify-between">
@@ -297,72 +407,187 @@ export default function AnalyticsPage() {
       {/* OVERVIEW TAB CONTENT */}
       {activeTab === 'overview' && (
         <div className="space-y-6">
-          {/* Real KPI Summary Cards */}
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {/* Top 5 Primary KPI Summary Cards (Interactive Drill-Downs) */}
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
             {/* 1. Task Completion Rate */}
-            <Card className="relative overflow-hidden">
+            <Card
+              onClick={() => {
+                setActiveTab('tasks');
+                setStatusFilter('COMPLETED');
+              }}
+              className="relative overflow-hidden cursor-pointer hover:border-primary/60 hover:shadow-md transition-all group"
+            >
               <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-primary transition-colors">
                   Task Completion Rate
                 </CardTitle>
                 <button
                   type="button"
-                  onClick={() => setSelectedFormulaKey('taskCompletionRate')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFormulaKey('taskCompletionRate');
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                   title="Formula Breakdown"
                 >
-                  <HelpCircle className="h-4 w-4" />
+                  <HelpCircle className="h-3.5 w-3.5" />
                 </button>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-foreground">
                   {loadingOverview ? '—' : `${kpis?.tasks?.completionRate || 0}%`}
                 </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
-                  <span>
-                    {kpis?.tasks?.completed || 0} completed of {kpis?.tasks?.total || 0} tasks
-                  </span>
-                  {kpis?.tasks?.overdue > 0 && (
-                    <Badge variant="destructive" className="text-[10px]">
-                      {kpis?.tasks?.overdue} overdue
-                    </Badge>
-                  )}
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-2">
+                  <span>{kpis?.tasks?.completed || 0} of {kpis?.tasks?.total || 0} tasks</span>
                 </div>
-                <div className="mt-3 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="mt-2.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-primary rounded-full transition-all duration-300"
                     style={{ width: `${Math.min(100, kpis?.tasks?.completionRate || 0)}%` }}
                   />
                 </div>
+                <div className="mt-2 text-[10px] text-primary flex items-center gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
+                  View completed tasks <ArrowRight className="h-3 w-3" />
+                </div>
               </CardContent>
             </Card>
 
-            {/* 2. Daily Productive Hours */}
-            <Card className="relative overflow-hidden">
+            {/* 2. Active Projects */}
+            <Card
+              onClick={() => {
+                setActiveTab('projects');
+                setStatusFilter('ACTIVE');
+              }}
+              className="relative overflow-hidden cursor-pointer hover:border-blue-500/60 hover:shadow-md transition-all group"
+            >
               <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Avg Daily Work Hours
+                <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-blue-600 transition-colors">
+                  Active Projects
                 </CardTitle>
                 <button
                   type="button"
-                  onClick={() => setSelectedFormulaKey('averageWorkHours')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFormulaKey('activeProjects');
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                   title="Formula Breakdown"
                 >
-                  <HelpCircle className="h-4 w-4" />
+                  <HelpCircle className="h-3.5 w-3.5" />
+                </button>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-foreground">
+                  {loadingOverview ? '—' : (kpis?.projects?.active || 0)}
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-2">
+                  <span>{kpis?.projects?.total || 0} total projects</span>
+                  <Badge variant="outline" className="text-[10px] bg-blue-50 text-blue-700 border-blue-200">
+                    Active
+                  </Badge>
+                </div>
+                <div className="mt-2.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${kpis?.projects?.total > 0 ? ((kpis.projects.active || 0) / kpis.projects.total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <div className="mt-2 text-[10px] text-blue-600 flex items-center gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
+                  View active projects <ArrowRight className="h-3 w-3" />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 3. Overdue Tasks */}
+            <Card
+              onClick={() => {
+                setActiveTab('tasks');
+                setStatusFilter('OVERDUE');
+              }}
+              className={`relative overflow-hidden cursor-pointer transition-all group ${
+                (kpis?.tasks?.overdue || 0) > 0
+                  ? 'border-rose-200 bg-rose-50/20 hover:border-rose-400 hover:shadow-md'
+                  : 'hover:border-primary/60 hover:shadow-md'
+              }`}
+            >
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-rose-600 transition-colors">
+                  Overdue Tasks
+                </CardTitle>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFormulaKey('overdueTasksCount');
+                  }}
+                  className="text-muted-foreground hover:text-foreground"
+                  title="Formula Breakdown"
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
+                </button>
+              </CardHeader>
+              <CardContent>
+                <div className={`text-2xl font-bold ${(kpis?.tasks?.overdue || 0) > 0 ? 'text-rose-600' : 'text-foreground'}`}>
+                  {loadingOverview ? '—' : (kpis?.tasks?.overdue || 0)}
+                </div>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-2">
+                  <span>Incomplete past deadline</span>
+                  {(kpis?.tasks?.overdue || 0) > 0 && (
+                    <Badge variant="destructive" className="text-[10px]">
+                      Action Required
+                    </Badge>
+                  )}
+                </div>
+                <div className="mt-2.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-rose-500 rounded-full transition-all duration-300"
+                    style={{
+                      width: `${kpis?.tasks?.total > 0 ? ((kpis.tasks.overdue || 0) / kpis.tasks.total) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <div className="mt-2 text-[10px] text-rose-600 flex items-center gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
+                  View overdue tasks <ArrowRight className="h-3 w-3" />
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* 4. Average Daily Work Hours */}
+            <Card
+              onClick={() => {
+                setActiveTab('attendance');
+              }}
+              className="relative overflow-hidden cursor-pointer hover:border-emerald-500/60 hover:shadow-md transition-all group"
+            >
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-emerald-600 transition-colors">
+                  Avg Work Hours
+                </CardTitle>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFormulaKey('averageWorkHours');
+                  }}
+                  className="text-muted-foreground hover:text-foreground"
+                  title="Formula Breakdown"
+                >
+                  <HelpCircle className="h-3.5 w-3.5" />
                 </button>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-foreground">
                   {loadingOverview ? '—' : `${kpis?.attendance?.averageDailyHours || 0}h`}
                 </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
-                  <span>Total {kpis?.attendance?.totalWorkHours || 0}h logged</span>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-2">
+                  <span>{kpis?.attendance?.totalWorkHours || 0}h logged</span>
                   <Badge variant="outline" className="text-[10px]">
                     {kpis?.attendance?.totalSessions || 0} sessions
                   </Badge>
                 </div>
-                <div className="mt-3 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="mt-2.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-emerald-500 rounded-full transition-all duration-300"
                     style={{
@@ -370,50 +595,63 @@ export default function AnalyticsPage() {
                     }}
                   />
                 </div>
+                <div className="mt-2 text-[10px] text-emerald-600 flex items-center gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
+                  View attendance records <ArrowRight className="h-3 w-3" />
+                </div>
               </CardContent>
             </Card>
 
-            {/* 3. Today's Presence */}
-            <Card className="relative overflow-hidden">
+            {/* 5. Attendance Rate */}
+            <Card
+              onClick={() => {
+                setActiveTab('attendance');
+              }}
+              className="relative overflow-hidden cursor-pointer hover:border-sky-500/60 hover:shadow-md transition-all group"
+            >
               <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Today's Active Presence
+                <CardTitle className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground group-hover:text-sky-600 transition-colors">
+                  Attendance Rate
                 </CardTitle>
                 <button
                   type="button"
-                  onClick={() => setSelectedFormulaKey('attendanceRate')}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedFormulaKey('attendanceRate');
+                  }}
                   className="text-muted-foreground hover:text-foreground"
                   title="Formula Breakdown"
                 >
-                  <HelpCircle className="h-4 w-4" />
+                  <HelpCircle className="h-3.5 w-3.5" />
                 </button>
               </CardHeader>
               <CardContent>
                 <div className="text-2xl font-bold text-foreground">
-                  {loadingOverview ? '—' : `${kpis?.attendance?.presentToday || 0} Present`}
+                  {loadingOverview ? '—' : `${kpis?.attendance?.attendanceRate || 0}%`}
                 </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground mt-2">
-                  <span>{kpis?.attendance?.activeClockedIn || 0} currently clocked in</span>
+                <div className="flex items-center justify-between text-[11px] text-muted-foreground mt-2">
+                  <span>{kpis?.attendance?.presentToday || 0} present today</span>
                   <Badge variant="secondary" className="text-[10px]">
-                    {kpis?.attendance?.totalMembers || 0} total active
+                    {kpis?.attendance?.totalMembers || 0} members
                   </Badge>
                 </div>
-                <div className="mt-3 h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div className="mt-2.5 h-1.5 w-full bg-muted rounded-full overflow-hidden">
                   <div
                     className="h-full bg-sky-500 rounded-full transition-all duration-300"
                     style={{
-                      width: `${
-                        kpis?.attendance?.totalMembers > 0
-                          ? Math.min(100, (kpis.attendance.presentToday / kpis.attendance.totalMembers) * 100)
-                          : 0
-                      }%`,
+                      width: `${Math.min(100, kpis?.attendance?.attendanceRate || 0)}%`,
                     }}
                   />
                 </div>
+                <div className="mt-2 text-[10px] text-sky-600 flex items-center gap-1 font-medium group-hover:translate-x-0.5 transition-transform">
+                  View daily presence <ArrowRight className="h-3 w-3" />
+                </div>
               </CardContent>
             </Card>
+          </div>
 
-            {/* 4. Quality Audit Score */}
+          {/* Secondary Operational Scorecards */}
+          <div className="grid gap-4 sm:grid-cols-3">
+            {/* Quality Audit Score */}
             <Card className="relative overflow-hidden">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -453,7 +691,7 @@ export default function AnalyticsPage() {
               </CardContent>
             </Card>
 
-            {/* 5. SLA Adherence Health */}
+            {/* SLA Adherence Health */}
             <Card className="relative overflow-hidden">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -490,7 +728,7 @@ export default function AnalyticsPage() {
               </CardContent>
             </Card>
 
-            {/* 6. Physical Asset Utilization */}
+            {/* Physical Asset Utilization */}
             <Card className="relative overflow-hidden">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -735,10 +973,42 @@ export default function AnalyticsPage() {
       {activeTab !== 'overview' && (
         <Card>
           <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-4">
-            <div>
+            <div className="space-y-2">
+              {(activeTab === 'tasks' || activeTab === 'projects') && (
+                <div className="inline-flex rounded-lg border border-border bg-muted p-0.5 text-xs">
+                  <button
+                    onClick={() => {
+                      setActiveTab('tasks');
+                      fetchDrilldown('tasks');
+                    }}
+                    className={`px-3 py-1 rounded-md transition-all ${
+                      activeTab === 'tasks'
+                        ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Tasks ({kpis?.tasks?.total || 0})
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveTab('projects');
+                      fetchDrilldown('projects');
+                    }}
+                    className={`px-3 py-1 rounded-md transition-all ${
+                      activeTab === 'projects'
+                        ? 'bg-primary text-primary-foreground font-semibold shadow-2xs'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Projects ({kpis?.projects?.total || 0})
+                  </button>
+                </div>
+              )}
               <CardTitle className="text-lg capitalize">
                 {activeTab === 'tasks'
                   ? 'Tasks & Work Items Drilldown'
+                  : activeTab === 'projects'
+                  ? 'Projects Registry & Progress Drilldown'
                   : activeTab === 'attendance'
                   ? 'Attendance Sessions Drilldown'
                   : activeTab === 'leave'
@@ -776,6 +1046,22 @@ export default function AnalyticsPage() {
                   <option value="IN_PROGRESS">In Progress</option>
                   <option value="IN_REVIEW">In Review</option>
                   <option value="COMPLETED">Completed</option>
+                  <option value="OVERDUE">Overdue Tasks</option>
+                </select>
+              )}
+
+              {activeTab === 'projects' && (
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="text-xs bg-background border border-border rounded-lg px-2.5 py-1.5 text-foreground"
+                >
+                  <option value="ALL">All Statuses</option>
+                  <option value="ACTIVE">Active Projects</option>
+                  <option value="PLANNING">Planning</option>
+                  <option value="ON_HOLD">On Hold</option>
+                  <option value="COMPLETED">Completed</option>
+                  <option value="CANCELLED">Cancelled</option>
                 </select>
               )}
 
@@ -849,6 +1135,20 @@ export default function AnalyticsPage() {
                             <th className="py-3 px-4 font-semibold">Priority</th>
                             <th className="py-3 px-4 font-semibold">Status</th>
                             <th className="py-3 px-4 font-semibold">Due Date</th>
+                            <th className="py-3 px-4 font-semibold text-right">Action</th>
+                          </>
+                        )}
+                        {activeTab === 'projects' && (
+                          <>
+                            <th className="py-3 px-4 font-semibold">Project Name</th>
+                            <th className="py-3 px-4 font-semibold">Key</th>
+                            <th className="py-3 px-4 font-semibold">Client</th>
+                            <th className="py-3 px-4 font-semibold">Status</th>
+                            <th className="py-3 px-4 font-semibold">Priority</th>
+                            <th className="py-3 px-4 font-semibold">Progress</th>
+                            <th className="py-3 px-4 font-semibold">Tasks</th>
+                            <th className="py-3 px-4 font-semibold">Target Date</th>
+                            <th className="py-3 px-4 font-semibold text-right">Action</th>
                           </>
                         )}
                         {activeTab === 'attendance' && (
@@ -922,6 +1222,66 @@ export default function AnalyticsPage() {
                             </td>
                             <td className="py-3 px-4 text-muted-foreground font-mono">
                               {row.dueDate ? new Date(row.dueDate).toLocaleDateString() : 'None'}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => router.push(`/app/projects?taskId=${row.id}`)}
+                                className="h-7 text-xs text-primary hover:text-primary gap-1"
+                              >
+                                Open <ArrowUpRight className="h-3 w-3" />
+                              </Button>
+                            </td>
+                          </>
+                        )}
+
+                        {activeTab === 'projects' && (
+                          <>
+                            <td className="py-3 px-4 font-medium text-foreground">
+                              <div className="flex items-center gap-2">
+                                <FolderKanban className="h-4 w-4 text-blue-600 shrink-0" />
+                                <span className="font-semibold">{row.name}</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 font-mono text-muted-foreground">{row.key}</td>
+                            <td className="py-3 px-4 text-muted-foreground">{row.clientName || 'Internal'}</td>
+                            <td className="py-3 px-4">
+                              <Badge
+                                variant={row.status === 'COMPLETED' ? 'success' : row.status === 'ACTIVE' ? 'default' : 'secondary'}
+                                className="text-[10px]"
+                              >
+                                {row.status}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4">
+                              <Badge variant="outline" className="text-[10px]">
+                                {row.priority}
+                              </Badge>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2">
+                                <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+                                  <div className="h-full bg-primary rounded-full" style={{ width: `${row.progress || 0}%` }} />
+                                </div>
+                                <span className="text-[11px] font-semibold">{row.progress || 0}%</span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground font-mono">
+                              {row.completedTasks} / {row.totalTasks}
+                            </td>
+                            <td className="py-3 px-4 text-muted-foreground font-mono">
+                              {row.targetDate ? new Date(row.targetDate).toLocaleDateString() : 'None'}
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => router.push(`/app/projects?projectId=${row.id}`)}
+                                className="h-7 text-xs text-primary hover:text-primary gap-1"
+                              >
+                                Open <ArrowUpRight className="h-3 w-3" />
+                              </Button>
                             </td>
                           </>
                         )}
