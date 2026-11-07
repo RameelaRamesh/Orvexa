@@ -245,7 +245,7 @@ export class CalendarService {
       } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
         isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||
           (evt.participants && evt.participants.some((p: any) => filters.memberIds!.includes(p.membershipId)));
-      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin)) {
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
         isVisible = true;
       } else {
         isVisible = evt.organizerMembershipId === membershipId ||
@@ -306,7 +306,7 @@ export class CalendarService {
         taskWhere.assignee = { departmentId: userCtx.departmentId };
       } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
         taskWhere.assigneeMembershipId = { in: filters.memberIds };
-      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin)) {
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
         // all workspace tasks
       } else {
         taskWhere.assigneeMembershipId = membershipId;

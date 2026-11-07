@@ -102,12 +102,25 @@ export class TasksService implements OnModuleInit {
       ];
     }
 
+    const roleUpper = (userContext?.accessRole || '').toUpperCase();
+    const roleNameUpper = (userContext?.roleName || '').toUpperCase();
+    const isManagerOrAdmin =
+      roleUpper === 'OWNER' ||
+      roleUpper === 'ADMIN' ||
+      roleUpper === 'MANAGER' ||
+      roleUpper.includes('MANAGER') ||
+      roleUpper.includes('LEAD') ||
+      roleNameUpper.includes('MANAGER') ||
+      roleNameUpper.includes('LEAD') ||
+      roleNameUpper.includes('DIRECTOR') ||
+      roleNameUpper.includes('HEAD');
+
     // Explicit filter.scope handling
     if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
       where.assigneeMembershipId = userContext.membershipId;
     } else if (filter?.scope === 'TEAM_WORK') {
-      if (userContext?.accessRole === 'MANAGER' || userContext?.accessRole === 'ADMIN' || userContext?.accessRole === 'OWNER') {
-        if (userContext.teamId && userContext.accessRole === 'MANAGER') {
+      if (isManagerOrAdmin) {
+        if (userContext?.teamId && userContext.accessRole === 'MANAGER') {
           where.assignee = {
             OR: [
               { id: userContext.membershipId },
@@ -117,16 +130,13 @@ export class TasksService implements OnModuleInit {
           };
         }
       }
-    } else if (
-      userContext &&
-      userContext.accessRole !== 'OWNER' &&
-      userContext.accessRole !== 'ADMIN'
-    ) {
+    } else if (userContext && !isManagerOrAdmin) {
+      // Non-manager members only see their assigned work or permitted dataScope
       const scope = userContext.dataScope || 'ASSIGNED';
       if (scope === 'ASSIGNED' || scope === 'OWN') {
         where.assigneeMembershipId = userContext.membershipId;
       } else if (scope === 'TEAM') {
-        // Manager scope: tasks assigned to self, team members, or direct reports
+        // Team scope: tasks assigned to self, team members, or direct reports
         where.assignee = {
           OR: [
             { id: userContext.membershipId },
