@@ -1765,39 +1765,9 @@ export default function PeoplePage() {
       ) : (
         /* Image 1: People Directory & Lifecycle Management Table View */
         <>
-          {/* Header */}
-          <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-            <div>
-              <h1 className="text-2xl font-bold text-foreground">People Directory & Lifecycle Management</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                Manage organization members, invitation flows, employee profiles, access revocation, and offboarding.
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setShowOrgChartModal(true)}
-                className="gap-2 text-xs font-semibold rounded-xl"
-              >
-                <Network className="h-4 w-4 text-primary" /> View Org Chart <ArrowUpRight className="h-3.5 w-3.5" />
-              </Button>
-              {currentUserRole === 'OWNER' && (
-                <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)} className="text-xs font-semibold rounded-xl">
-                  Transfer Ownership
-                </Button>
-              )}
-              {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-                <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
-                  <UserPlus className="h-4 w-4" /> Invite Member
-                </Button>
-              )}
-            </div>
-          </div>
-
-          {/* Tabs & Search (Matching Image 1) */}
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="flex border-b border-border space-x-4">
+          {/* Topics (Tabs) & Controls - Single Unified Row */}
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-border pb-2">
+            <div className="flex space-x-4">
               <button
                 onClick={() => setActiveTab('members')}
                 className={`flex items-center gap-2 border-b-2 pb-2 text-sm font-semibold transition-colors ${
@@ -1820,12 +1790,12 @@ export default function PeoplePage() {
               </button>
             </div>
 
-            {activeTab === 'members' && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+              {activeTab === 'members' && (
                 <select
                   value={filterRole}
                   onChange={(e) => setFilterRole(e.target.value)}
-                  className="py-1.5 px-2 rounded-md border border-input bg-background text-xs focus:ring-1 focus:ring-primary focus:outline-none cursor-pointer"
+                  className="py-1.5 px-2.5 rounded-xl border border-input bg-background text-xs font-medium focus:ring-1 focus:ring-primary focus:outline-none cursor-pointer"
                 >
                   <option value="">All Roles</option>
                   <option value="OWNER">Owner</option>
@@ -1833,8 +1803,26 @@ export default function PeoplePage() {
                   <option value="MANAGER">Manager</option>
                   <option value="MEMBER">Member</option>
                 </select>
-              </div>
-            )}
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowOrgChartModal(true)}
+                className="gap-2 text-xs font-semibold rounded-xl"
+              >
+                <Network className="h-4 w-4 text-primary" /> View Org Chart <ArrowUpRight className="h-3.5 w-3.5" />
+              </Button>
+              {currentUserRole === 'OWNER' && (
+                <Button variant="outline" size="sm" onClick={() => setShowTransferModal(true)} className="text-xs font-semibold rounded-xl">
+                  Transfer Ownership
+                </Button>
+              )}
+              {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
+                <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
+                  <UserPlus className="h-4 w-4" /> Invite Member
+                </Button>
+              )}
+            </div>
           </div>
 
           {/* TAB 1: Members Directory (Matching Image 1) */}

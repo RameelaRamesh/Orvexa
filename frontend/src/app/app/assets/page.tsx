@@ -629,41 +629,9 @@ export default function AssetsPage() {
 
   return (
     <div className="flex h-[calc(100vh-5rem)] flex-col space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Package className="h-6 w-6 text-primary" />
-            Assets, Inventory & Native Documents
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Hardware lifecycle tracking, multi-location stock movements, low-stock alerts, and secure document vault.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {canMoveInventory && (
-            <Button variant="outline" size="sm" onClick={() => setShowMoveStockModal(true)}>
-              <ArrowRightLeft className="mr-1.5 h-4 w-4" />
-              Move Stock
-            </Button>
-          )}
-          {canUploadDocuments && (
-            <Button variant="outline" size="sm" onClick={() => setShowUploadModal(true)}>
-              <UploadCloud className="mr-1.5 h-4 w-4" />
-              Upload Document
-            </Button>
-          )}
-          {canCreateAssets && (
-            <Button size="sm" onClick={() => setShowCreateAssetModal(true)}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              Register Asset
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Top Nav Tabs - Only display permitted tabs */}
-      <div className="flex items-center gap-4 border-b border-border pb-2 text-sm">
+      {/* Topics (Tabs) & Controls - Single Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border gap-2 pb-2 text-sm">
+        <div className="flex items-center gap-4 flex-wrap">
         {canViewAssets && (
           <button
             onClick={() => setActiveTab('assets')}
@@ -721,6 +689,27 @@ export default function AssetsPage() {
             Document Vault ({files.length})
           </button>
         )}
+      </div>
+        <div className="flex items-center gap-2 justify-end">
+          {canMoveInventory && (
+            <Button variant="outline" size="sm" onClick={() => setShowMoveStockModal(true)}>
+              <ArrowRightLeft className="mr-1.5 h-4 w-4" />
+              Move Stock
+            </Button>
+          )}
+          {canUploadDocuments && (
+            <Button variant="outline" size="sm" onClick={() => setShowUploadModal(true)}>
+              <UploadCloud className="mr-1.5 h-4 w-4" />
+              Upload Document
+            </Button>
+          )}
+          {canCreateAssets && (
+            <Button size="sm" onClick={() => setShowCreateAssetModal(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              Register Asset
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* TAB 1: COMPANY ASSETS */}

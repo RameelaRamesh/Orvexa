@@ -738,27 +738,9 @@ export default function RequestsPage() {
 
   return (
     <div className="flex h-[calc(100vh-5rem)] flex-col space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <Inbox className="h-6 w-6 text-primary" />
-            Internal Requests & Tickets
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Role-based ticket routing, queue claiming, stock fulfillment, and lifecycle tracking.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={openCreateModal}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            Submit Service Request
-          </Button>
-        </div>
-      </div>
-
-      {/* Top Nav Tabs */}
-      <div className="flex items-center gap-4 border-b border-border pb-2 text-sm">
+      {/* Topics (Tabs) & Controls - Single Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border gap-2 pb-2 text-sm">
+        <div className="flex items-center gap-4 flex-wrap">
         <button
           onClick={() => setActiveTab('requests')}
           className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
@@ -792,6 +774,13 @@ export default function RequestsPage() {
           <Tag className="h-4 w-4" />
           Configured Categories ({categories.length})
         </button>
+      </div>
+        <div className="flex items-center gap-2 justify-end">
+          <Button size="sm" onClick={openCreateModal}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            Submit Service Request
+          </Button>
+        </div>
       </div>
 
       {/* Tab: Requests Queue */}

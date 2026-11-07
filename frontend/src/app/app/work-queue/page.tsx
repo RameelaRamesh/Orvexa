@@ -81,18 +81,12 @@ export default function WorkQueuePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Operations Work Queue Engine</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Process high-volume operational batches, transaction pipelines, and execution workflows
-          </p>
-        </div>
-        <Button onClick={() => setShowModal(true)} className="gap-2">
+      {/* Pipeline Stage Columns Overview & Action */}
+      <div className="flex items-center justify-end pb-1">
+        <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
           <Plus className="h-4 w-4" /> Add Batch / Work Queue
         </Button>
       </div>
-
       {/* Pipeline Stage Columns Overview */}
       <div className="grid gap-4 md:grid-cols-4">
         {['PROCESSING', 'QA_REVIEW', 'REWORK', 'COMPLETED'].map((stage) => {

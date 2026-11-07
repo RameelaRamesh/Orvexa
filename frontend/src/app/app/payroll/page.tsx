@@ -243,31 +243,9 @@ export default function PayrollPage() {
 
   return (
     <div className="flex h-[calc(100vh-5rem)] flex-col space-y-4">
-      {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground flex items-center gap-2">
-            <CreditCard className="h-6 w-6 text-primary" />
-            Payroll, Compensation & Payslips
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Configurable salary components, attendance integration, unpaid leave LOP calculations, and auditable payslips.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
-            <Settings className="mr-1.5 h-4 w-4" />
-            Payroll Rules
-          </Button>
-          <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            New Payroll Period
-          </Button>
-        </div>
-      </div>
-
-      {/* Top Nav Tabs */}
-      <div className="flex items-center gap-4 border-b border-border pb-2 text-sm">
+      {/* Topics (Tabs) & Controls - Single Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border gap-2 pb-2 text-sm">
+        <div className="flex items-center gap-4">
         <button
           onClick={() => setActiveTab('periods')}
           className={`flex items-center gap-2 pb-1 font-medium transition-colors ${
@@ -290,6 +268,17 @@ export default function PayrollPage() {
           <FileText className="h-4 w-4" />
           Historical Reports ({reports?.totalRecords || 0})
         </button>
+      </div>
+        <div className="flex items-center gap-2 justify-end">
+          <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
+            <Settings className="mr-1.5 h-4 w-4" />
+            Payroll Rules
+          </Button>
+          <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            New Payroll Period
+          </Button>
+        </div>
       </div>
 
       {/* TAB 1: PERIODS & PROCESSING */}

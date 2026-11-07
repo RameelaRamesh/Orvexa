@@ -787,19 +787,11 @@ export default function UnifiedCalendarPage() {
       {/* =========================================================================
           TOP HEADER SECTION (Clean, Minimal SaaS Design)
          ========================================================================= */}
-      <div className="bg-white border-b border-slate-200/80 px-6 py-4 shadow-xs">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          {/* Title & Legend Pills */}
+      <div className="bg-white border-b border-slate-200/80 px-6 py-2.5 shadow-xs">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+          {/* Legend Pills */}
           <div>
-            <div className="flex items-center gap-3">
-              <h1 className="text-2xl font-bold tracking-tight text-slate-900">Calendar</h1>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              One shared calendar with automatic permission-based visibility.
-            </p>
-
-            {/* Category Legend Pills */}
-            <div className="flex flex-wrap items-center gap-2 mt-3 text-xs font-medium text-slate-600">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-medium text-slate-600">
               <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-50/70 text-blue-700 border border-blue-100">
                 <span className="w-2 h-2 rounded-full bg-blue-600 inline-block" />
                 Meetings

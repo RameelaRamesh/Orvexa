@@ -1649,21 +1649,9 @@ const selectedRoleObj =
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="border-b border-border pb-4 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground tracking-tight">Workspace Settings & Customization</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Configure organization metadata, module entitlements, roles, structure, and subscriptions.
-          </p>
-        </div>
-        <Badge variant="outline" className="px-3 py-1 font-mono text-xs">
-          Workspace ID: {wsId?.slice(0, 8)}...
-        </Badge>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="flex border-b border-border space-x-2">
+      {/* Topics (Tabs) & Badge - Single Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border pb-1 gap-2">
+        <div className="flex flex-wrap gap-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <button
           onClick={() => setActiveTab('details')}
           className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
@@ -1736,6 +1724,12 @@ const selectedRoleObj =
         >
           <KeyRound className="h-4 w-4" /> Security & 2FA
         </button>
+      </div>
+        <div className="flex items-center justify-end shrink-0 pb-1 sm:pb-0">
+        <Badge variant="outline" className="px-3 py-1 font-mono text-xs">
+          Workspace ID: {wsId?.slice(0, 8)}...
+        </Badge>
+      </div>
       </div>
 
       {/* TAB 1: Organization Details */}

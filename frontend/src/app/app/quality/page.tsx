@@ -73,23 +73,16 @@ export default function QualityPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Quality Scorecard & SLA Engine</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Audit work item accuracy, track defects, trigger rework loops, and manage breach thresholds
-          </p>
-        </div>
-        <Button onClick={() => setShowModal(true)} className="gap-2">
-          <Plus className="h-4 w-4" /> Conduct Quality Audit
-        </Button>
-      </div>
-
       {/* Quality Reviews Table */}
       <Card>
-        <CardHeader>
-          <CardTitle>Quality Audit History</CardTitle>
-          <CardDescription>Scorecards submitted across operational work items</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between pb-4">
+          <div>
+            <CardTitle>Quality Audit History</CardTitle>
+            <CardDescription>Scorecards submitted across operational work items</CardDescription>
+          </div>
+          <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
+            <Plus className="h-4 w-4" /> Conduct Quality Audit
+          </Button>
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">

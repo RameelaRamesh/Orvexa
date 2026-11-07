@@ -731,26 +731,9 @@ export default function ProjectsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Universal Work Engine &amp; Tasks</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Configurable work items, independent or project-linked tasks, circular dependency checks, and durable workflows
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button onClick={() => setShowCreateTaskModal(true)} className="gap-2 shadow-sm">
-            <Plus className="h-4 w-4" /> Add Work Item
-          </Button>
-          <Button variant="outline" onClick={() => setShowCreateProjectModal(true)} className="gap-2">
-            <Briefcase className="h-4 w-4" /> New Project
-          </Button>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="flex border-b border-border gap-2 text-sm font-medium">
+      {/* Topics (Tabs) & Controls - Single Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border gap-2 pb-1">
+        <div className="flex gap-2 text-sm font-medium">
         <button
           onClick={() => setActiveTab('work_items')}
           className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
@@ -772,6 +755,15 @@ export default function ProjectsPage() {
           <Layers className="h-4 w-4" /> Workflow Automation Rules ({workflowRules.length})
         </button>
       </div>
+        <div className="flex items-center gap-2 justify-end self-end sm:self-center pb-1 sm:pb-0">
+          <Button onClick={() => setShowCreateTaskModal(true)} size="sm" className="gap-1.5 shadow-sm text-xs font-semibold rounded-xl h-8">
+            <Plus className="h-3.5 w-3.5" /> Add Work Item
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowCreateProjectModal(true)} className="gap-1.5 text-xs font-semibold rounded-xl h-8">
+            <Briefcase className="h-3.5 w-3.5" /> New Project
+          </Button>
+        </div>
+      </div>
 
       {/* =========================================================================
           TAB 1: WORK ITEMS & TASKS
@@ -779,7 +771,7 @@ export default function ProjectsPage() {
       {activeTab === 'work_items' && (
         <div className="space-y-6">
           {/* Projects Bar Overview */}
-          <div className="flex gap-2.5 overflow-x-auto pb-1">
+          <div className="flex gap-2.5 overflow-x-auto pb-1 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
             <button
               onClick={() => setSelectedProjectId('ALL')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all border ${

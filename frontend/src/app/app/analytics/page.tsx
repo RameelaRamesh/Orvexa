@@ -204,20 +204,65 @@ export default function AnalyticsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <h1 className="text-2xl font-bold text-foreground">Operational Analytics & Reports</h1>
-            <Badge variant="outline" className="text-xs font-mono">Live Scoped Data</Badge>
-          </div>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Real-time cross-module metrics, deterministic formulas, drill-down tables, and verified data exports.
-          </p>
+      {/* Topics (Tabs) & Controls - Single Unified Aligned Row */}
+      <div className="flex flex-col xl:flex-row xl:items-center xl:justify-between border-b border-border gap-2.5 pb-2.5">
+        <div className="flex flex-wrap items-center gap-1.5 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          <Button
+            variant={activeTab === 'overview' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('overview')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Overview & KPIs
+          </Button>
+          <Button
+            variant={activeTab === 'tasks' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('tasks')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Work Items & Tasks
+          </Button>
+          <Button
+            variant={activeTab === 'attendance' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('attendance')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <Clock className="h-3.5 w-3.5" />
+            Time & Attendance
+          </Button>
+          <Button
+            variant={activeTab === 'leave' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('leave')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <Calendar className="h-3.5 w-3.5" />
+            Leave Requests
+          </Button>
+          <Button
+            variant={activeTab === 'quality' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('quality')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <Award className="h-3.5 w-3.5" />
+            Quality & SLAs
+          </Button>
+          <Button
+            variant={activeTab === 'assets' ? 'default' : 'ghost'}
+            size="sm"
+            onClick={() => setActiveTab('assets')}
+            className="text-xs gap-1.5 h-8 font-medium rounded-lg"
+          >
+            <Package className="h-3.5 w-3.5" />
+            Physical Resources
+          </Button>
         </div>
-
-        {/* Global Date Range System */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 justify-end shrink-0 self-end xl:self-center">
           <DateRangeFilter value={dateRange} onChange={setDateRange} />
           <Button
             variant="outline"
@@ -227,71 +272,13 @@ export default function AnalyticsPage() {
               if (activeTab !== 'overview') fetchDrilldown(activeTab);
             }}
             disabled={loadingOverview || loadingDrilldown}
-            className="h-9 gap-1.5"
+            className="h-8 gap-1.5 text-xs font-medium rounded-lg"
             title="Refresh Metrics"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${loadingOverview || loadingDrilldown ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
         </div>
-      </div>
-
-      {/* Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-border pb-2 overflow-x-auto">
-        <Button
-          variant={activeTab === 'overview' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('overview')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <BarChart3 className="h-3.5 w-3.5" />
-          Overview & KPIs
-        </Button>
-        <Button
-          variant={activeTab === 'tasks' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('tasks')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <CheckCircle2 className="h-3.5 w-3.5" />
-          Work Items & Tasks
-        </Button>
-        <Button
-          variant={activeTab === 'attendance' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('attendance')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <Clock className="h-3.5 w-3.5" />
-          Time & Attendance
-        </Button>
-        <Button
-          variant={activeTab === 'leave' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('leave')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <Calendar className="h-3.5 w-3.5" />
-          Leave Requests
-        </Button>
-        <Button
-          variant={activeTab === 'quality' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('quality')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <Award className="h-3.5 w-3.5" />
-          Quality & SLAs
-        </Button>
-        <Button
-          variant={activeTab === 'assets' ? 'default' : 'ghost'}
-          size="sm"
-          onClick={() => setActiveTab('assets')}
-          className="text-xs gap-1.5 h-8"
-        >
-          <Package className="h-3.5 w-3.5" />
-          Physical Resources
-        </Button>
       </div>
 
       {/* Error Banner with Retry */}

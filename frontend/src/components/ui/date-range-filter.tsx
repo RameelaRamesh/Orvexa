@@ -70,11 +70,11 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
 
   return (
     <div className={`flex flex-wrap items-center gap-2 ${className}`}>
-      <div className="inline-flex rounded-lg border border-border bg-card p-1 shadow-sm">
+      <div className="inline-flex items-center h-8 rounded-lg border border-border bg-card p-0.5 shadow-2xs">
         <button
           type="button"
           onClick={() => setPreset('TODAY')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+          className={`h-7 px-2.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center ${
             value.preset === 'TODAY'
               ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-surface-secondary'
@@ -85,7 +85,7 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
         <button
           type="button"
           onClick={() => setPreset('THIS_WEEK')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+          className={`h-7 px-2.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center ${
             value.preset === 'THIS_WEEK'
               ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-surface-secondary'
@@ -96,7 +96,7 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
         <button
           type="button"
           onClick={() => setPreset('THIS_MONTH')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+          className={`h-7 px-2.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center ${
             value.preset === 'THIS_MONTH'
               ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-surface-secondary'
@@ -107,7 +107,7 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
         <button
           type="button"
           onClick={() => setPreset('LAST_30_DAYS')}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${
+          className={`h-7 px-2.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center ${
             value.preset === 'LAST_30_DAYS'
               ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-surface-secondary'
@@ -118,7 +118,7 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
         <button
           type="button"
           onClick={() => setShowCustom(!showCustom)}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors flex items-center gap-1 ${
+          className={`h-7 px-2.5 text-xs font-medium rounded-md transition-colors flex items-center justify-center gap-1 ${
             value.preset === 'CUSTOM' || showCustom
               ? 'bg-primary text-primary-foreground font-semibold shadow-xs'
               : 'text-muted-foreground hover:text-foreground hover:bg-surface-secondary'
@@ -130,21 +130,21 @@ export function DateRangeFilter({ value, onChange, className = '' }: DateRangeFi
       </div>
 
       {showCustom && (
-        <div className="flex items-center gap-2 bg-card border border-border p-1.5 rounded-lg shadow-sm">
+        <div className="flex items-center h-8 gap-2 bg-card border border-border px-2 rounded-lg shadow-2xs">
           <input
             type="date"
             value={customStart}
             onChange={(e) => setCustomStart(e.target.value)}
-            className="text-xs bg-background border border-border rounded px-2 py-1 text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+            className="text-xs bg-background border border-border rounded px-1.5 py-0.5 text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
           />
           <span className="text-xs text-muted-foreground">to</span>
           <input
             type="date"
             value={customEnd}
             onChange={(e) => setCustomEnd(e.target.value)}
-            className="text-xs bg-background border border-border rounded px-2 py-1 text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
+            className="text-xs bg-background border border-border rounded px-1.5 py-0.5 text-foreground focus:outline-hidden focus:ring-1 focus:ring-primary"
           />
-          <Button size="sm" onClick={handleApplyCustom} className="h-7 text-xs px-2.5">
+          <Button size="sm" onClick={handleApplyCustom} className="h-6 text-xs px-2">
             Apply
           </Button>
         </div>

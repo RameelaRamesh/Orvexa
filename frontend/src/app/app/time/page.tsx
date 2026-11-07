@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -34,11 +34,12 @@ import {
   ShieldAlert,
   ArrowRight,
   CornerDownRight,
+  Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function TimeAttendancePage() {
-  const [activeTab, setActiveTab] = useState<'my_attendance' | 'team_logs' | 'corrections' | 'shifts_policy' | 'leave'>('my_attendance');
+  const [activeTab, setActiveTab] = useState<'team_logs' | 'corrections' | 'shifts_policy' | 'leave'>('team_logs');
 
   // Core Data
   const [todayData, setTodayData] = useState<any>(null);
@@ -53,6 +54,22 @@ export default function TimeAttendancePage() {
   const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
   const [currentUserDesignation, setCurrentUserDesignation] = useState<string>('');
+  const [workspaceEmployees, setWorkspaceEmployees] = useState<any[]>([]);
+
+  const getInitials = (firstName?: string, lastName?: string, email?: string) => {
+    if (firstName && lastName) return `${firstName[0]}${lastName[0]}`.toUpperCase();
+    if (firstName && firstName.length >= 2) return firstName.slice(0, 2).toUpperCase();
+    if (firstName) return firstName[0].toUpperCase();
+    if (email && email.length >= 2) return email.slice(0, 2).toUpperCase();
+    return 'EM';
+  };
+
+  const formatSessionTime = (dateStr?: string | Date | null) => {
+    if (!dateStr) return '';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
+  };
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -267,7 +284,7 @@ export default function TimeAttendancePage() {
     if (!token || !wsId) return;
     try {
       const headers = { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId };
-      const [todayRes, listRes, summaryRes, shiftsRes, correctionsRes, policyRes, wsRes, leaveRes, balanceRes, meRes] = await Promise.all([
+      const [todayRes, listRes, summaryRes, shiftsRes, correctionsRes, policyRes, wsRes, leaveRes, balanceRes, meRes, peopleRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/time/today`, { headers }),
         fetch(`${BRANDING.apiUrl}/time/attendance${filterDate ? `?date=${filterDate}` : ''}`, { headers }),
         fetch(`${BRANDING.apiUrl}/time/reports/summary`, { headers }),
@@ -278,6 +295,7 @@ export default function TimeAttendancePage() {
         fetch(`${BRANDING.apiUrl}/leave`, { headers }),
         fetch(`${BRANDING.apiUrl}/leave/balances`, { headers }),
         fetch(`${BRANDING.apiUrl}/auth/me`, { headers }),
+        fetch(`${BRANDING.apiUrl}/people`, { headers }).catch(() => null),
       ]);
 
       const [rawToday, rawList, rawSummary, rawShifts, rawCorrections, rawPolicy, rawWs, rawLeave, rawBalance, rawMe] = await Promise.all([
@@ -385,7 +403,17 @@ export default function TimeAttendancePage() {
       setPolicy(pData);
       setPolicyForm(pData || {});
 
+      let peopleList: any[] = [];
+      if (peopleRes && peopleRes.ok) {
+        try {
+          const rawP = await peopleRes.json();
+          peopleList = Array.isArray(rawP.data) ? rawP.data : Array.isArray(rawP) ? rawP : [];
+        } catch {}
+      }
       const wsData = rawWs.data !== undefined ? rawWs.data : rawWs;
+      const wsMems = Array.isArray(wsData?.memberships) ? wsData.memberships : [];
+      const combinedEmployees = peopleList.length > 0 ? peopleList : wsMems;
+      setWorkspaceEmployees(combinedEmployees);
       let attendanceDisabled = false;
       if (wsData?.settings?.enabledModules && Array.isArray(wsData.settings.enabledModules)) {
         const enabled = wsData.settings.enabledModules.includes('attendance') || wsData.settings.enabledModules.includes('time');
@@ -403,7 +431,7 @@ export default function TimeAttendancePage() {
 
       if (attendanceDisabled && typeof window !== 'undefined') {
         const tabParam = new URLSearchParams(window.location.search).get('tab');
-        if (!tabParam || tabParam === 'my_attendance') {
+        if (!tabParam || tabParam === 'team_logs') {
           setActiveTab('leave');
         }
       }
@@ -973,26 +1001,200 @@ export default function TimeAttendancePage() {
   const uniqueEmployeeCount = new Set(filteredLogs.map((a) => a.membershipId || a.membership?.id || a.id)).size;
   const lateCountDynamic = filteredLogs.filter((a) => a.status === 'LATE').length;
 
+  // Unified Employee Session Rows for Workspace Attendance Logs
+  const employeeSessionRows = useMemo(() => {
+    const rows: any[] = [];
+    const processedAttendanceIds = new Set<string>();
+
+    workspaceEmployees.forEach((emp: any) => {
+      const empId = emp.id;
+      const empUserId = emp.userId || emp.user?.id;
+      const empEmail = (emp.user?.email || emp.email || '').toLowerCase().trim();
+
+      const empLogs = attendanceList.filter((a: any) => {
+        const aMemId = a.membershipId || a.membership?.id;
+        const aUserId = a.membership?.userId || a.membership?.user?.id;
+        const aEmail = (a.membership?.user?.email || a.membership?.email || '').toLowerCase().trim();
+        return (
+          (empId && aMemId === empId) ||
+          (empUserId && aUserId === empUserId) ||
+          (empEmail && aEmail === empEmail)
+        );
+      });
+
+      if (empLogs.length > 0) {
+        empLogs.forEach((a: any, sIdx: number) => {
+          if (a.id) processedAttendanceIds.add(a.id);
+          const nowMs = currentTime ? currentTime.getTime() : Date.now();
+          const clockInMs = new Date(a.clockIn).getTime();
+          const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : nowMs;
+          const grossMinutes = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
+
+          let computedBreakMinutes = 0;
+          const breaksList: any[] = Array.isArray(a.breaks) ? a.breaks : [];
+          const openBreak = breaksList.find((b: any) => !b.breakEnd);
+
+          breaksList.forEach((b: any) => {
+            if (b.breakEnd) {
+              if (b.durationMinutes && b.durationMinutes > 0) {
+                computedBreakMinutes += b.durationMinutes;
+              } else {
+                const bStart = new Date(b.breakStart).getTime();
+                const bEnd = new Date(b.breakEnd).getTime();
+                if (!isNaN(bStart) && !isNaN(bEnd) && bEnd >= bStart) {
+                  computedBreakMinutes += Math.max(0, Math.round((bEnd - bStart) / 60000));
+                }
+              }
+            } else if (b.breakStart) {
+              const bStart = new Date(b.breakStart).getTime();
+              if (!isNaN(bStart)) {
+                computedBreakMinutes += Math.max(0, Math.round((nowMs - bStart) / 60000));
+              }
+            }
+          });
+
+          const totalBreakMinutes = Math.max(a.totalBreakMinutes || 0, computedBreakMinutes);
+          let netWorkMinutes = 0;
+          if (a.clockOut && a.totalWorkMinutes && a.totalWorkMinutes > 0) {
+            netWorkMinutes = a.totalWorkMinutes;
+          } else {
+            netWorkMinutes = Math.max(0, grossMinutes - totalBreakMinutes);
+          }
+          const rawNetHours = (netWorkMinutes / 60).toFixed(1);
+          const netHours = (netWorkMinutes < 480 && rawNetHours === '8.0') ? '7.9' : rawNetHours;
+
+          const isOngoing = !a.clockOut;
+          const statusType = isOngoing ? 'ACTIVE' : 'COMPLETED';
+
+          rows.push({
+            rowKey: `${empId || empEmail}_session_${a.id || sIdx}`,
+            employeeName: `${emp.user?.firstName || a.membership?.user?.firstName || ''} ${emp.user?.lastName || a.membership?.user?.lastName || ''}`.trim() || 'Staff Member',
+            employeeEmail: emp.user?.email || a.membership?.user?.email || empEmail,
+            initials: getInitials(emp.user?.firstName || a.membership?.user?.firstName, emp.user?.lastName || a.membership?.user?.lastName, emp.user?.email || a.membership?.user?.email || empEmail),
+            department: emp.department?.name || a.membership?.department?.name || 'General',
+            statusType,
+            clockInFormatted: formatSessionTime(a.clockIn),
+            clockOutFormatted: a.clockOut ? formatSessionTime(a.clockOut) : '',
+            isOngoing,
+            hasOpenBreak: !!openBreak,
+            totalBreakMinutes,
+            netHours,
+            netWorkMinutes,
+            rawAttendance: a,
+            breaksList,
+            membershipObj: emp,
+          });
+        });
+      } else {
+        rows.push({
+          rowKey: `${empId || empEmail}_not_checked_in`,
+          employeeName: `${emp.user?.firstName || ''} ${emp.user?.lastName || ''}`.trim() || 'Staff Member',
+          employeeEmail: emp.user?.email || empEmail,
+          initials: getInitials(emp.user?.firstName, emp.user?.lastName, emp.user?.email || empEmail),
+          department: emp.department?.name || 'General',
+          statusType: 'NOT_CHECKED_IN',
+          clockInFormatted: '',
+          clockOutFormatted: '',
+          isOngoing: false,
+          hasOpenBreak: false,
+          totalBreakMinutes: 0,
+          netHours: '0',
+          netWorkMinutes: 0,
+          rawAttendance: null,
+          breaksList: [],
+          membershipObj: emp,
+        });
+      }
+    });
+
+    // Extra attendance logs not mapped to known workspaceEmployees
+    attendanceList.forEach((a: any, idx: number) => {
+      if (a.id && processedAttendanceIds.has(a.id)) return;
+      const nowMs = currentTime ? currentTime.getTime() : Date.now();
+      const clockInMs = new Date(a.clockIn).getTime();
+      const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : nowMs;
+      const grossMinutes = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
+      let computedBreakMinutes = 0;
+      (a.breaks || []).forEach((b: any) => {
+        if (b.breakEnd) {
+          if (b.durationMinutes) computedBreakMinutes += b.durationMinutes;
+        } else if (b.breakStart) {
+          computedBreakMinutes += Math.max(0, Math.round((nowMs - new Date(b.breakStart).getTime()) / 60000));
+        }
+      });
+      const totalBreakMinutes = Math.max(a.totalBreakMinutes || 0, computedBreakMinutes);
+      const netWorkMinutes = (a.clockOut && a.totalWorkMinutes) ? a.totalWorkMinutes : Math.max(0, grossMinutes - totalBreakMinutes);
+      const netHours = (netWorkMinutes / 60).toFixed(1);
+      const isOngoing = !a.clockOut;
+
+      rows.push({
+        rowKey: `extra_session_${a.id || idx}`,
+        employeeName: `${a.membership?.user?.firstName || ''} ${a.membership?.user?.lastName || ''}`.trim() || 'Staff Member',
+        employeeEmail: a.membership?.user?.email || '',
+        initials: getInitials(a.membership?.user?.firstName, a.membership?.user?.lastName, a.membership?.user?.email),
+        department: a.membership?.department?.name || 'General',
+        statusType: isOngoing ? 'ACTIVE' : 'COMPLETED',
+        clockInFormatted: formatSessionTime(a.clockIn),
+        clockOutFormatted: a.clockOut ? formatSessionTime(a.clockOut) : '',
+        isOngoing,
+        hasOpenBreak: false,
+        totalBreakMinutes,
+        netHours,
+        netWorkMinutes,
+        rawAttendance: a,
+        breaksList: a.breaks || [],
+        membershipObj: a.membership,
+      });
+    });
+
+    return rows;
+  }, [workspaceEmployees, attendanceList, currentTime]);
+
+  const filteredSessionRows = useMemo(() => {
+    return employeeSessionRows.filter((r) => {
+      if (filterStatus === 'ACTIVE' && r.statusType !== 'ACTIVE') return false;
+      if (filterStatus === 'COMPLETED' && r.statusType !== 'COMPLETED') return false;
+      if (filterStatus === 'NOT_CHECKED_IN' && r.statusType !== 'NOT_CHECKED_IN') return false;
+
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const matchName = r.employeeName.toLowerCase().includes(q);
+        const matchEmail = r.employeeEmail.toLowerCase().includes(q);
+        const matchDept = r.department.toLowerCase().includes(q);
+        if (!matchName && !matchEmail && !matchDept) return false;
+      }
+      return true;
+    });
+  }, [employeeSessionRows, filterStatus, searchQuery]);
+
+  const totalEmployeesCount = useMemo(() => {
+    return Math.max(
+      workspaceEmployees.length,
+      new Set(employeeSessionRows.map((r) => r.employeeEmail || r.employeeName)).size
+    );
+  }, [workspaceEmployees, employeeSessionRows]);
+
+  const activeOnShiftCount = useMemo(() => {
+    return employeeSessionRows.filter((r) => r.statusType === 'ACTIVE').length;
+  }, [employeeSessionRows]);
+
+  const presentEmployeesCount = useMemo(() => {
+    return employeeSessionRows.filter((r) => r.statusType !== 'NOT_CHECKED_IN').length;
+  }, [employeeSessionRows]);
+
+  const attendanceComplianceRate = useMemo(() => {
+    if (totalEmployeesCount > 0) {
+      return Math.min(100, Math.round((presentEmployeesCount / totalEmployeesCount) * 100));
+    }
+    return 95;
+  }, [presentEmployeesCount, totalEmployeesCount]);
+
+  const missedCheckoutsCount = useMemo(() => {
+    return attendanceList.filter((a) => a.notes?.includes('[AUTO_CLOSED_MISSED_CHECKOUT]')).length;
+  }, [attendanceList]);
+
   return (
     <div className="space-y-6">
-      {/* Top Header */}
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between border-b border-border pb-4">
-        <div>
-          <h1 className="text-2xl font-bold text-foreground">Time & Attendance Engine</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Configurable work shifts, multi-session day tracking, break monitoring, and attendance exception management
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-2">
-            <Download className="h-4 w-4" /> Export CSV
-          </Button>
-          <Button variant="ghost" size="sm" onClick={loadAllData} className="gap-2 text-muted-foreground">
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </Button>
-        </div>
-      </div>
-
       {/* Module Disabled Warning */}
       {isAttendanceDisabled && (
         <div className="rounded-xl border border-amber-300 bg-amber-50 dark:border-amber-900/60 dark:bg-amber-950/30 p-4 text-amber-900 dark:text-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 shadow-sm">
@@ -1024,20 +1226,9 @@ export default function TimeAttendancePage() {
         </div>
       )}
 
-      {/* Navigation Tabs */}
-      <div className="flex flex-wrap border-b border-border gap-1 text-sm font-medium">
-        {!isAttendanceDisabled && (canAccessShiftTracker || canViewAttendance) && (
-          <button
-            onClick={() => setActiveTab('my_attendance')}
-            className={`px-4 py-2.5 border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === 'my_attendance'
-                ? 'border-primary text-primary font-semibold'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <Clock className="h-4 w-4" /> My Shift &amp; Sessions
-          </button>
-        )}
+      {/* Navigation Topics (Tabs) & Header Actions - Unified Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border gap-2 pb-1">
+        <div className="flex flex-wrap gap-1 text-sm font-medium">
         {!isAttendanceDisabled && canViewAttendance && (
           <button
             onClick={() => setActiveTab('team_logs')}
@@ -1095,831 +1286,323 @@ export default function TimeAttendancePage() {
           )}
         </button>
       </div>
-
-      {/* =========================================================================
-          TAB 1: MY SHIFT & SESSIONS
-          ========================================================================= */}
-      {activeTab === 'my_attendance' && (
-        <div className="space-y-6">
-          {/* Attendance Disabled Empty State */}
-          {isAttendanceDisabled && (
-            <Card className="border-border bg-card shadow-sm">
-              <CardContent className="py-12 text-center space-y-3">
-                <Clock className="h-10 w-10 text-muted-foreground/50 mx-auto" />
-                <h3 className="text-base font-semibold text-foreground">Attendance &amp; Shifts Module is Disabled</h3>
-                <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                  Shift tracking, clock-in/out, and session histories are disabled in workspace settings. You can manage your leave requests and time off under the Leave &amp; PTO tab.
-                </p>
-                <div className="pt-2">
-                  <Button size="sm" onClick={() => setActiveTab('leave')} className="text-xs">
-                    Switch to Leave &amp; PTO &rarr;
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-          {/* Shift Tracker Access Restricted banner */}
-          {!canAccessShiftTracker && !isAttendanceDisabled && (
-            <Card className="border-border bg-muted/20">
-              <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <Clock className="h-5 w-5 text-muted-foreground shrink-0" />
-                  <div>
-                    <div className="text-xs font-semibold text-foreground">Shift Tracker Access Restricted</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Access to the real-time Shift Tracker and Clock In/Out is controlled by Roles &amp; Permissions. Your current role does not have the <span className="font-mono text-primary font-semibold">attendance:clock</span> permission.
-                    </div>
-                  </div>
-                </div>
-                {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || isPlatformAdmin) && (
-                  <a
-                    href="/app/settings?tab=roles"
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary/90 text-primary-foreground text-xs font-semibold shrink-0 transition-colors shadow-sm"
-                  >
-                    Configure in Roles &amp; Permissions &rarr;
-                  </a>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Real-time Status Card - Only shown if authorized and attendance enabled */}
-          {canAccessShiftTracker && (
-            <Card className="border-border bg-card shadow-sm overflow-hidden">
-              <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 gap-3 bg-surface-secondary/20 border-b border-border">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <CardTitle className="text-lg flex items-center gap-2">
-                      <Clock className="h-5 w-5 text-primary" />
-                      My Today Shift Tracker
-                    </CardTitle>
-                    {liveMetrics.isOvernight && (
-                      <Badge variant="outline" className="border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 gap-1 text-[11px]">
-                        <Moon className="h-3 w-3" /> Overnight Shift (Crossed Midnight)
-                      </Badge>
-                    )}
-                  </div>
-                  <CardDescription className="text-xs mt-1">
-                    {todayData?.todaySummary?.assignedShift
-                      ? `Assigned Shift: ${todayData.todaySummary.assignedShift.name} (${todayData.todaySummary.assignedShift.startTime} - ${todayData.todaySummary.assignedShift.endTime})`
-                      : 'Standard Organization Shift (9:00 AM - 5:00 PM)'}
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  {todayData?.todaySummary?.isOnLeave && (
-                    <Badge variant="outline" className="border-indigo-400 text-indigo-700 dark:text-indigo-300">
-                      Approved Leave
-                    </Badge>
-                  )}
-                  {todayData?.todaySummary?.isHoliday && (
-                    <Badge variant="outline" className="border-emerald-400 text-emerald-700 dark:text-emerald-300">
-                      Holiday: {todayData.todaySummary.holidayName}
-                    </Badge>
-                  )}
-                </div>
-              </CardHeader>
-
-              <CardContent className="space-y-6 pt-6">
-                {/* DUAL LIVE TIMERS DISPLAY */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Timer 1: Live Work-Session Timer (Net Productive Time) */}
-                  <div className={`p-5 rounded-2xl border transition-all ${
-                    isOnBreak
-                      ? 'bg-muted/30 border-dashed border-amber-400/60 dark:border-amber-600/60'
-                      : isClockedIn
-                      ? 'bg-emerald-500/[0.04] border-emerald-500/30 ring-1 ring-emerald-500/10'
-                      : 'bg-surface-secondary/30 border-border'
-                  }`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        <Timer className="h-4 w-4" />
-                        <span>Work Session Timer (Net)</span>
-                      </div>
-                      {isOnBreak ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30">
-                          <Pause className="h-3 w-3" />
-                          <span>PAUSED DURING BREAK</span>
-                        </span>
-                      ) : isClockedIn ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
-                          <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                          </span>
-                          <span>ACTIVE WORK SESSION</span>
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground font-medium">Ready to Clock In</span>
-                      )}
-                    </div>
-
-                    <div className="font-mono text-3xl sm:text-4xl font-bold tracking-tight text-foreground">
-                      {liveMetrics.hoursWorkedDisplay}
-                    </div>
-
-                    <div className="text-xs text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      {isClockedIn ? (
-                        <>
-                          <span>Shift Span (Gross): <strong className="font-mono text-foreground">{liveMetrics.shiftSpanDisplay}</strong></span>
-                          <span>&bull;</span>
-                          <span>Clocked In: <strong className="text-foreground">{formatTimeOnly(todayData?.clockIn)}</strong></span>
-                        </>
-                      ) : sessionsCount > 0 ? (
-                        <span>Completed {sessionsCount} session(s) today. Ready for next session.</span>
-                      ) : (
-                        <span>Tap &ldquo;Start Shift (Clock In)&rdquo; to begin tracking productive time.</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Timer 2: Current-Break Timer */}
-                  <div className={`p-5 rounded-2xl border transition-all ${
-                    isOnBreak
-                      ? 'bg-amber-500/[0.08] border-amber-500 ring-2 ring-amber-500/20 shadow-sm'
-                      : 'bg-surface-secondary/30 border-border opacity-90'
-                  }`}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                        <Coffee className="h-4 w-4" />
-                        <span>Current Break Timer</span>
-                      </div>
-                      {isOnBreak ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/20 text-amber-800 dark:text-amber-200 border border-amber-500/40">
-                          <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-600"></span>
-                          </span>
-                          <span>BREAK IN PROGRESS</span>
-                        </span>
-                      ) : (
-                        <span className="text-[11px] text-muted-foreground font-medium">Inactive &bull; Working</span>
-                      )}
-                    </div>
-
-                    <div className={`font-mono text-3xl sm:text-4xl font-bold tracking-tight ${
-                      isOnBreak ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/60'
-                    }`}>
-                      {liveMetrics.currentBreakDisplay}
-                    </div>
-
-                    <div className="text-xs text-muted-foreground mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
-                      {isOnBreak ? (
-                        <>
-                          <span>Break Category: <strong className="text-foreground">{(activeBreak?.breakType || selectedBreakCategory || 'General Break').replace(/_/g, ' ')}</strong></span>
-                          <span>&bull;</span>
-                          <span>Started at: <strong className="text-foreground">{formatTimeOnly(activeBreak?.breakStart)}</strong></span>
-                        </>
-                      ) : (
-                        <>
-                          <span>Breaks Taken: <strong className="text-foreground">{liveMetrics.breaksList.length}</strong></span>
-                          <span>&bull;</span>
-                          <span>Total Break Time: <strong className="text-foreground">{liveMetrics.totalBreaksDisplay}</strong></span>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                {/* ACTION CONTROLS WITH NEUTRAL WORDING */}
-                <div className="p-4 rounded-xl border border-border bg-surface-secondary/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="text-xs text-muted-foreground">
-                    {isAttendanceDisabled ? (
-                      <span>Attendance module is disabled in Workspace Settings.</span>
-                    ) : isOnBreak ? (
-                      <span className="text-amber-700 dark:text-amber-300 flex items-center gap-1.5 font-medium">
-                        <Coffee className="h-4 w-4 shrink-0" />
-                        Currently on break. Tap <strong>&ldquo;End break&rdquo;</strong> to immediately resume your work session timer.
-                      </span>
-                    ) : isClockedIn ? (
-                      <span className="flex items-center gap-1.5 text-foreground">
-                        <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" />
-                        Work session is active. Take breaks whenever needed; tracking records actual timestamps.
-                      </span>
-                    ) : (
-                      <span>Clock in to begin your shift session. Supports multiple sessions and breaks.</span>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-                    {isAttendanceDisabled ? (
-                      <Button disabled size="lg" className="opacity-50">Module Disabled</Button>
-                    ) : isClockedIn ? (
-                      isOnBreak ? (
-                        <>
-                          {/* ON BREAK: Primary action is "End break" */}
-                          <Button
-                            size="lg"
-                            onClick={handleEndBreak}
-                            disabled={actionLoading}
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2 font-semibold shadow-sm"
-                          >
-                            <Play className="h-4 w-4" /> End break
-                          </Button>
-                          <Button
-                            size="lg"
-                            variant="destructive"
-                            onClick={handleOpenClockOutModal}
-                            disabled={actionLoading}
-                            className="gap-2 shadow-sm font-semibold"
-                          >
-                            <Square className="h-4 w-4" /> Clock Out
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          {/* WORKING: Primary action is "Start break" with optional neutral category */}
-                          <div className="flex items-center gap-1.5">
-                            <select
-                              value={selectedBreakCategory}
-                              onChange={(e) => setSelectedBreakCategory(e.target.value)}
-                              className="h-10 text-xs px-2.5 rounded-lg border border-border bg-background text-foreground"
-                              title="Optional break category (not mandatory)"
-                            >
-                              <option value="General Break">General Break</option>
-                              <option value="Short Rest">Short Rest</option>
-                              <option value="Lunch Break">Lunch Break</option>
-                              <option value="Tea / Coffee">Tea / Coffee</option>
-                              <option value="Personal Break">Personal Break</option>
-                            </select>
-                            <Button
-                              size="lg"
-                              onClick={() => handleStartBreak()}
-                              disabled={actionLoading}
-                              className="bg-amber-600 hover:bg-amber-700 text-white gap-2 font-semibold shadow-sm"
-                            >
-                              <Coffee className="h-4 w-4" /> Start break
-                            </Button>
-                          </div>
-                          <Button
-                            size="lg"
-                            variant="destructive"
-                            onClick={handleOpenClockOutModal}
-                            disabled={actionLoading}
-                            className="gap-2 shadow-sm font-semibold"
-                          >
-                            <Square className="h-4 w-4" /> Clock Out
-                          </Button>
-                        </>
-                      )
-                    ) : canClockInAgain ? (
-                      <Button size="lg" onClick={handleClockIn} disabled={actionLoading} className="gap-2 shadow-sm font-semibold">
-                        <Play className="h-4 w-4" /> {sessionsCount > 0 ? `Clock In Session #${sessionsCount + 1}` : 'Start Shift (Clock In)'}
-                      </Button>
-                    ) : (
-                      <Badge variant="outline" className="py-2.5 px-4 text-xs font-semibold">
-                        Daily Session Limit Reached
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                {/* OPTIONAL NOTES INPUT */}
-                <div className="flex items-center gap-3">
-                  <input
-                    type="text"
-                    placeholder="Optional note for current action or shift handoff (e.g. Remote work, client meeting, specific task)..."
-                    value={sessionNotes}
-                    onChange={(e) => setSessionNotes(e.target.value)}
-                    className="flex-1 text-xs px-3.5 py-2.5 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                </div>
-
-                {/* TODAY'S METRICS BAR */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Net Productive Time</div>
-                    <div className="text-xl font-bold font-mono text-foreground mt-1">
-                      {liveMetrics.hoursWorkedDisplay}
-                    </div>
-                  </div>
-                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Total Break Time</div>
-                    <div className="text-xl font-bold font-mono text-foreground mt-1">
-                      {liveMetrics.totalBreaksDisplay}
-                    </div>
-                  </div>
-                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Breaks Count</div>
-                    <div className="text-xl font-bold text-foreground mt-1">
-                      {liveMetrics.breaksList.length} break{liveMetrics.breaksList.length === 1 ? '' : 's'}
-                    </div>
-                  </div>
-                  <div className="p-3.5 rounded-xl border border-border bg-surface-secondary/20">
-                    <div className="text-[11px] font-medium text-muted-foreground uppercase">Overtime Accrued</div>
-                    <div className="text-xl font-bold font-mono text-foreground mt-1">
-                      {liveMetrics.overtimeMinutes} mins
-                    </div>
-                  </div>
-                </div>
-
-                {/* CURRENT SHIFT BREAKS BREAKDOWN LIST */}
-                {(liveMetrics.breaksList.length > 0 || isOnBreak) && (
-                  <div className="rounded-xl border border-border overflow-hidden">
-                    <div className="px-4 py-3 bg-surface-secondary/30 border-b border-border flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Coffee className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                        <span className="text-xs font-bold text-foreground uppercase tracking-wider">
-                          Current Shift Breaks Breakdown ({liveMetrics.breaksList.length})
-                        </span>
-                      </div>
-                      <span className="text-[11px] text-muted-foreground">
-                        Timestamps recorded accurately. Auto-calculated durations.
-                      </span>
-                    </div>
-
-                    <div className="divide-y divide-border">
-                      {liveMetrics.breaksList.map((b: any, bIdx: number) => {
-                        const isCurrentActive = !b.breakEnd;
-                        const durationMins = isCurrentActive
-                          ? Math.round(liveMetrics.currentBreakSeconds / 60)
-                          : (b.durationMinutes || Math.round((new Date(b.breakEnd).getTime() - new Date(b.breakStart).getTime()) / 60000));
-                        const categoryName = (b.breakType || 'General Break').replace(/_/g, ' ');
-
-                        return (
-                          <div key={b.id || bIdx} className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                            <div className="flex items-center gap-3">
-                              <span className="font-bold text-foreground min-w-[65px]">
-                                Break #{bIdx + 1}
-                              </span>
-                              <Badge variant="outline" className="text-[11px] border-amber-500/30 text-amber-700 dark:text-amber-300 bg-amber-500/10">
-                                {categoryName}
-                              </Badge>
-                              <div className="text-muted-foreground flex flex-wrap items-center gap-x-2">
-                                <span>Start: <strong className="text-foreground">{formatTimeOnly(b.breakStart)}</strong></span>
-                                <span>&rarr;</span>
-                                <span>End: {isCurrentActive ? (
-                                  <span className="text-amber-600 dark:text-amber-400 font-bold animate-pulse">In Progress...</span>
-                                ) : (
-                                  <strong className="text-foreground">{formatTimeOnly(b.breakEnd)}</strong>
-                                )}</span>
-                                <span>&bull;</span>
-                                <span>Duration: <strong className="font-mono text-foreground">{durationMins} mins</strong></span>
-                              </div>
-                            </div>
-
-                            <div className="flex items-center gap-2 self-end sm:self-auto">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleOpenBreakCorrection(b, bIdx + 1)}
-                                className="h-7 px-2.5 text-[11px] text-muted-foreground hover:text-foreground gap-1 border border-border/60"
-                              >
-                                <FileText className="h-3 w-3" /> Request Correction
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Today's Multi-Session Timeline */}
-          {!isAttendanceDisabled && (
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <div>
-                  <CardTitle className="text-base">Today&apos;s Work Sessions History</CardTitle>
-                  <CardDescription>Each work segment recorded today is preserved independently</CardDescription>
-                </div>
-              </CardHeader>
-              <CardContent>
-                {allTodaySessions.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground text-xs">
-                    No attendance sessions recorded for today. Clock in to start your first session.
-                  </div>
-                ) : (
-                  <div className="divide-y divide-border">
-                    {allTodaySessions.map((s: any, idx: number) => {
-                      const grossMins = s.clockOut
-                        ? Math.round((new Date(s.clockOut).getTime() - new Date(s.clockIn).getTime()) / 60000)
-                        : Math.round((Date.now() - new Date(s.clockIn).getTime()) / 60000);
-                      return (
-                        <div key={s.id} className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="space-y-1">
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-bold text-foreground">Session #{idx + 1}</span>
-                              {s.clockOut ? (
-                                s.status === 'HALF_DAY' ? (
-                                  <Badge variant="outline" className="border-purple-300 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 text-[10px]">HALF DAY</Badge>
-                                ) : (
-                                  <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
-                                )
-                              ) : (
-                                <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
-                              )}
-                              {s.status === 'LATE' && (
-                                <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-700">LATE</Badge>
-                              )}
-                            </div>
-                            <div className="text-xs text-muted-foreground">
-                              <span>Clock In: <strong>{new Date(s.clockIn).toLocaleTimeString()}</strong></span>
-                              {s.clockOut && (
-                                <span> • Clock Out: <strong>{new Date(s.clockOut).toLocaleTimeString()}</strong></span>
-                              )}
-                              <span> • Worked: <strong>{s.totalWorkMinutes || grossMins} mins</strong></span>
-                              <span> • Breaks: <strong>{s.totalBreakMinutes || 0} mins ({s.breaks?.length || 0})</strong></span>
-                            </div>
-                            {s.notes && <div className="text-[11px] text-muted-foreground italic">&ldquo;{s.notes}&rdquo;</div>}
-                          </div>
-                          <div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setCorrectionTarget(s);
-                                setRequestedClockIn(new Date(s.clockIn).toISOString().slice(0, 16));
-                                setRequestedClockOut(s.clockOut ? new Date(s.clockOut).toISOString().slice(0, 16) : '');
-                                setShowCorrectionModal(true);
-                              }}
-                              className="text-xs gap-1.5"
-                            >
-                              <FileText className="h-3.5 w-3.5" /> Request Correction
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
+        <div className="flex items-center gap-2 justify-end self-end sm:self-center pb-1 sm:pb-0">
+          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-1.5 text-xs h-8">
+            <Download className="h-3.5 w-3.5" /> Export CSV
+          </Button>
+          <Button variant="ghost" size="sm" onClick={loadAllData} className="gap-1.5 text-xs h-8 text-muted-foreground hover:text-foreground">
+            <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </Button>
         </div>
-      )}
+      </div>
 
       {/* =========================================================================
-          TAB 2: WORKSPACE ATTENDANCE LOGS
+          TAB 2: WORKSPACE ATTENDANCE LOGS (Employee Sessions)
           ========================================================================= */}
       {activeTab === 'team_logs' && (
-        <div className="space-y-6">
-          {/* Summary Stat Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground uppercase font-semibold">Total Work Hours</div>
-              <div className="text-2xl font-bold text-foreground mt-1">{displayTotalWorkHours} hrs</div>
-              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.length} session{filteredLogs.length === 1 ? '' : 's'} logged</div>
-            </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground uppercase font-semibold">Staff Presence</div>
-              <div className="text-2xl font-bold text-foreground mt-1">
-                {activeStaffCount > 0 ? (
-                  <span className="text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
-                    <span className="relative flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
-                    </span>
-                    {activeStaffCount} on shift
-                  </span>
-                ) : (
-                  `${uniqueEmployeeCount} recorded`
-                )}
+        <div className="space-y-4">
+          {/* Summary Stat Cards - Compact Size */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <Card className="p-3.5 shadow-xs border-border bg-card">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                TOTAL WORK HOURS
               </div>
-              <div className="text-xs text-muted-foreground mt-0.5">{uniqueEmployeeCount} employee{uniqueEmployeeCount === 1 ? '' : 's'} recorded</div>
-            </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground uppercase font-semibold">Attendance Rate</div>
-              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                {summaryMetrics?.attendanceComplianceRate || (filteredLogs.length > 0 ? '100%' : 'N/A')}
+              <div className="text-xl font-bold text-foreground mt-0.5 tracking-tight">
+                {displayTotalWorkHours} hrs
               </div>
-              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.filter((r) => r.status === 'PRESENT' || !r.clockOut).length} present</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                {attendanceList.length} session{attendanceList.length === 1 ? '' : 's'} logged
+              </div>
             </Card>
-            <Card className="p-4">
-              <div className="text-xs text-muted-foreground uppercase font-semibold">Late Arrivals</div>
-              <div className="text-2xl font-bold text-amber-600 dark:text-amber-400 mt-1">
+
+            <Card className="p-3.5 shadow-xs border-border bg-card">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                STAFF PRESENCE
+              </div>
+              <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5 flex items-center gap-1.5 tracking-tight">
+                <span className="relative flex h-2 w-2 shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>{activeOnShiftCount} on shift</span>
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                {totalEmployeesCount} employee{totalEmployeesCount === 1 ? '' : 's'} recorded
+              </div>
+            </Card>
+
+            <Card className="p-3.5 shadow-xs border-border bg-card">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                ATTENDANCE RATE
+              </div>
+              <div className="text-xl font-bold text-teal-600 dark:text-teal-400 mt-0.5 tracking-tight">
+                {attendanceComplianceRate}%
+              </div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                {presentEmployeesCount} present
+              </div>
+            </Card>
+
+            <Card className="p-3.5 shadow-xs border-border bg-card">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                LATE ARRIVALS
+              </div>
+              <div className="text-xl font-bold text-amber-500 dark:text-amber-400 mt-0.5 tracking-tight">
                 {lateCountDynamic}
               </div>
-              <div className="text-xs text-muted-foreground mt-0.5">{filteredLogs.filter((r) => r.notes?.includes('[AUTO_CLOSED_MISSED_CHECKOUT]')).length} missed checkouts</div>
+              <div className="text-[11px] text-muted-foreground mt-0.5">
+                {missedCheckoutsCount} missed checkout{missedCheckoutsCount === 1 ? '' : 's'}
+              </div>
             </Card>
           </div>
 
-          {/* Filters Bar */}
-          <Card>
-            <CardContent className="p-4 flex flex-col md:flex-row items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2.5 w-full md:w-auto">
-                <div className="relative">
-                  <Search className="h-4 w-4 absolute left-3 top-3 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search employee or department..."
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-9 pr-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground w-56"
-                  />
+          {/* Main Table Card - Compact Size */}
+          <Card className="shadow-xs border-border bg-card overflow-hidden">
+            {/* Header Section */}
+            <div className="p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center text-primary shrink-0">
+                  <Users className="h-4 w-4" />
                 </div>
+                <div>
+                  <h2 className="text-sm sm:text-base font-bold text-foreground leading-tight">
+                    Employee Sessions
+                  </h2>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Track and manage employee attendance
+                  </p>
+                </div>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/10 text-primary text-[11px] font-medium border border-primary/20 self-start sm:self-auto">
+                <Users className="h-3 w-3" />
+                <span>{totalEmployeesCount} Employees</span>
+              </div>
+            </div>
+
+            {/* Search & Filters Bar */}
+            <div className="p-2.5 sm:p-3 flex flex-col md:flex-row items-center justify-between gap-2.5 bg-muted/20 border-b border-border">
+              <div className="relative w-full md:w-64">
+                <Search className="h-3.5 w-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  placeholder="Search employee..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
                 <input
                   type="date"
                   value={filterDate}
                   onChange={(e) => setFilterDate(e.target.value)}
-                  className="px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground"
+                  className="px-2.5 py-1.5 text-xs rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                 />
-                <select
-                  value={filterStatus}
-                  onChange={(e) => setFilterStatus(e.target.value)}
-                  className="px-3 py-2 text-xs rounded-lg border border-border bg-background text-foreground"
-                >
-                  <option value="ALL">All Statuses</option>
-                  <option value="PRESENT">Present</option>
-                  <option value="LATE">Late Arrival</option>
-                  <option value="HALF_DAY">Half Day</option>
-                </select>
                 {filterDate ? (
-                  <Button variant="ghost" size="sm" onClick={() => setFilterDate('')} className="text-xs">
-                    Clear Date (Show All)
+                  <Button variant="ghost" size="sm" onClick={() => setFilterDate('')} className="text-[11px] h-7 px-2 text-muted-foreground hover:text-foreground">
+                    All Dates
                   </Button>
                 ) : (
-                  <Button variant="ghost" size="sm" onClick={() => setFilterDate(getTodayDateString())} className="text-xs">
+                  <Button variant="ghost" size="sm" onClick={() => setFilterDate(getTodayDateString())} className="text-[11px] h-7 px-2 text-muted-foreground hover:text-foreground">
                     Today
                   </Button>
                 )}
+
+                <div className="relative">
+                  <select
+                    value={filterStatus}
+                    onChange={(e) => setFilterStatus(e.target.value)}
+                    className="appearance-none pr-7 pl-3 py-1.5 text-xs font-medium rounded-lg border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                  >
+                    <option value="ALL">All Statuses</option>
+                    <option value="ACTIVE">Active / Ongoing</option>
+                    <option value="COMPLETED">Completed</option>
+                    <option value="NOT_CHECKED_IN">Not Checked In</option>
+                  </select>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
               </div>
-              <div className="text-xs text-muted-foreground">
-                Showing <strong>{filteredLogs.length}</strong> record(s)
-              </div>
-            </CardContent>
-          </Card>
+            </div>
 
-          {/* Logs Table */}
-          <Card>
-            <CardContent className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm border-collapse">
-                  <thead>
-                    <tr className="border-b border-border text-xs uppercase text-muted-foreground bg-surface-secondary/50">
-                      <th className="py-3.5 px-4">Employee & Session</th>
-                      <th className="py-3.5 px-4">Department / Shift</th>
-                      <th className="py-3.5 px-4">Date</th>
-                      <th className="py-3.5 px-4">Clock In</th>
-                      <th className="py-3.5 px-4">Clock Out</th>
-                      <th className="py-3.5 px-4">Net Hours</th>
-                      <th className="py-3.5 px-4">Breaks</th>
-                      <th className="py-3.5 px-4">Status</th>
-                      <th className="py-3.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border">
-                    {filteredLogs.map((a, rowIdx) => {
-                      const nowMs = currentTime ? currentTime.getTime() : Date.now();
-                      const clockInMs = new Date(a.clockIn).getTime();
-                      const endPointMs = a.clockOut ? new Date(a.clockOut).getTime() : nowMs;
-                      const grossMinutes = Math.max(0, Math.round((endPointMs - clockInMs) / 60000));
-
-                      // Dynamic breaks calculation
-                      let computedBreakMinutes = 0;
-                      const breaksList: any[] = Array.isArray(a.breaks) ? a.breaks : [];
-                      const openBreak = breaksList.find((b: any) => !b.breakEnd);
-                      const hasOpenBreak = !!openBreak;
-
-                      breaksList.forEach((b: any) => {
-                        if (b.breakEnd) {
-                          if (b.durationMinutes && b.durationMinutes > 0) {
-                            computedBreakMinutes += b.durationMinutes;
-                          } else {
-                            const bStart = new Date(b.breakStart).getTime();
-                            const bEnd = new Date(b.breakEnd).getTime();
-                            if (!isNaN(bStart) && !isNaN(bEnd) && bEnd >= bStart) {
-                              computedBreakMinutes += Math.max(0, Math.round((bEnd - bStart) / 60000));
-                            }
-                          }
-                        } else if (b.breakStart) {
-                          const bStart = new Date(b.breakStart).getTime();
-                          if (!isNaN(bStart)) {
-                            computedBreakMinutes += Math.max(0, Math.round((nowMs - bStart) / 60000));
-                          }
-                        }
-                      });
-
-                      const totalBreakMinutes = Math.max(a.totalBreakMinutes || 0, computedBreakMinutes);
-
-                      // Dynamic net work minutes calculation
-                      let netWorkMinutes = 0;
-                      if (a.clockOut && a.totalWorkMinutes && a.totalWorkMinutes > 0) {
-                        netWorkMinutes = a.totalWorkMinutes;
-                      } else {
-                        netWorkMinutes = Math.max(0, grossMinutes - totalBreakMinutes);
-                      }
-                      const rawNetHours = (netWorkMinutes / 60).toFixed(1);
-                      const netHours = (netWorkMinutes < 480 && rawNetHours === '8.0') ? '7.9' : rawNetHours;
-
-                      // Extract session metadata
-                      let sessionIndex: number | null = null;
-                      let shiftName = '';
-                      if (a.notes) {
-                        const metaMatch = a.notes.match(/\[META:(\{.*?\})\]/);
-                        if (metaMatch) {
-                          try {
-                            const parsed = JSON.parse(metaMatch[1]);
-                            if (parsed.sessionIndex) sessionIndex = parsed.sessionIndex;
-                            if (parsed.shiftName) shiftName = parsed.shiftName;
-                          } catch (e) {}
-                        }
-                      }
-
-                      // Fallback session index calculation per employee per day
-                      if (!sessionIndex) {
-                        const memberKey = a.membershipId || a.membership?.id || a.membership?.user?.email || 'unknown';
-                        const aDateStr = new Date(a.date || a.clockIn).toDateString();
-                        const sameDaySessions = filteredLogs
-                          .filter((x) => {
-                            const xKey = x.membershipId || x.membership?.id || x.membership?.user?.email || 'unknown';
-                            const xDateStr = new Date(x.date || x.clockIn).toDateString();
-                            return xKey === memberKey && xDateStr === aDateStr;
-                          })
-                          .sort((x, y) => new Date(x.clockIn).getTime() - new Date(y.clockIn).getTime());
-                        const seq = sameDaySessions.findIndex((x) => x.id === a.id) + 1;
-                        sessionIndex = seq > 0 ? seq : 1;
-                      }
-
-                      // Clean user notes
-                      const displayNotes = (a.notes || '')
-                        .replace(/\[META:\{.*?\}\]/g, '')
-                        .replace(/\[AUTO_CLOSED_MISSED_CHECKOUT\]/g, 'Auto-closed (missed checkout)')
-                        .replace(/\[OUT:\s*(.*?)\]/g, 'Handoff: $1')
-                        .trim();
-
-                      const isExpanded = expandedSessionId === a.id;
-
-                      return (
-                        <React.Fragment key={a.id || rowIdx}>
-                          <tr className="hover:bg-surface-secondary/20 transition-colors">
-                            <td className="py-3.5 px-4">
-                              <div className="flex items-center gap-2">
-                                <div>
-                                  <div className="font-semibold text-foreground flex items-center gap-1.5">
-                                    {a.membership?.user?.firstName || 'Staff'} {a.membership?.user?.lastName || 'Member'}
-                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono font-medium border-muted-foreground/30">
-                                      Session #{sessionIndex}
-                                    </Badge>
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">{a.membership?.user?.email || a.membership?.employeeId || ''}</div>
+            {/* Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-border text-[11px] font-semibold text-muted-foreground bg-muted/40">
+                    <th className="py-2.5 px-4">Employee</th>
+                    <th className="py-2.5 px-4">Department</th>
+                    <th className="py-2.5 px-4">Check In / Check Out</th>
+                    <th className="py-2.5 px-4">Break Duration</th>
+                    <th className="py-2.5 px-4">Total Time</th>
+                    <th className="py-2.5 px-4 text-right sm:text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/60">
+                  {filteredSessionRows.map((row) => {
+                    const isExpanded = expandedSessionId === (row.rawAttendance?.id || row.rowKey);
+                    return (
+                      <React.Fragment key={row.rowKey}>
+                        <tr className="hover:bg-muted/30 transition-colors">
+                          {/* Employee */}
+                          <td className="py-2.5 px-4">
+                            <div className="flex items-center gap-2.5">
+                              <div className="h-7 w-7 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-[10px] shrink-0 border border-primary/20">
+                                {row.initials}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-semibold text-foreground text-xs truncate">
+                                  {row.employeeName}
+                                </div>
+                                <div className="text-[10px] text-muted-foreground truncate">
+                                  {row.employeeEmail}
                                 </div>
                               </div>
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <div className="text-foreground text-xs font-medium">{a.membership?.department?.name || 'General'}</div>
-                              <div className="text-[11px] text-muted-foreground">{shiftName || a.membership?.team?.name || 'Standard Shift'}</div>
-                            </td>
-                            <td className="py-3.5 px-4 font-mono text-xs text-muted-foreground">
-                              {new Date(a.date || a.clockIn).toLocaleDateString()}
-                            </td>
-                            <td className="py-3.5 px-4 font-mono text-xs font-medium">
-                              {new Date(a.clockIn).toLocaleTimeString()}
-                            </td>
-                            <td className="py-3.5 px-4 font-mono text-xs">
-                              {a.clockOut ? (
-                                new Date(a.clockOut).toLocaleTimeString()
-                              ) : (
-                                <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-bold">
-                                  <span className="relative flex h-2 w-2">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                                  </span>
-                                  Active
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3.5 px-4 font-semibold text-foreground text-xs">
-                              <div className="flex items-center gap-1.5">
-                                <span>{netHours} hrs ({netWorkMinutes}m)</span>
-                                {!a.clockOut && (
-                                  <Badge variant="outline" className="text-[9px] px-1 py-0 border-emerald-400 text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 font-mono">
-                                    Live
-                                  </Badge>
+                            </div>
+                          </td>
+
+                          {/* Department */}
+                          <td className="py-2.5 px-4">
+                            <span className="text-xs font-medium text-foreground">
+                              {row.department}
+                            </span>
+                          </td>
+
+                          {/* Check In / Check Out */}
+                          <td className="py-2.5 px-4">
+                            {row.statusType === 'ACTIVE' ? (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                <span>{row.clockInFormatted} — Active</span>
+                              </span>
+                            ) : row.statusType === 'COMPLETED' ? (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-purple-500/10 text-purple-700 dark:text-purple-400 border border-purple-500/30">
+                                <Check className="h-3 w-3 text-purple-600 dark:text-purple-400 stroke-[2.5]" />
+                                <span>{row.clockInFormatted} — {row.clockOutFormatted}</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium text-muted-foreground bg-muted border border-border">
+                                <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60"></span>
+                                <span>Not Checked In</span>
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Break Duration */}
+                          <td className="py-2.5 px-4">
+                            {row.totalBreakMinutes > 0 ? (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedSessionId(isExpanded ? null : (row.rawAttendance?.id || row.rowKey))}
+                                className="inline-flex items-center gap-1 text-xs text-foreground font-medium hover:text-primary transition-colors cursor-pointer"
+                                title="Click to view break breakdown"
+                              >
+                                <Coffee className="h-3 w-3 text-primary" />
+                                <span>{row.totalBreakMinutes} min</span>
+                                {row.breaksList.length > 0 && (
+                                  <span className="text-[10px] text-muted-foreground font-normal">({row.breaksList.length})</span>
                                 )}
-                              </div>
-                            </td>
-                            <td className="py-3.5 px-4 text-xs">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-foreground font-semibold">{totalBreakMinutes}m</span>
-                                <span className="text-muted-foreground text-[11px]">({breaksList.length} break{breaksList.length === 1 ? '' : 's'})</span>
-                                {hasOpenBreak && (
-                                  <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 text-[9px] px-1 py-0">
-                                    On Break
-                                  </Badge>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-3.5 px-4">
-                              <div className="space-y-1">
-                                <div className="flex flex-wrap items-center gap-1">
-                                  {hasOpenBreak ? (
-                                    <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 text-[10px]">
-                                      ON BREAK
-                                    </Badge>
-                                  ) : !a.clockOut ? (
-                                    <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
-                                  ) : a.status === 'HALF_DAY' ? (
-                                    <Badge variant="outline" className="border-purple-300 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 text-[10px]">
-                                      HALF DAY
-                                    </Badge>
-                                  ) : a.status === 'LATE' ? (
-                                    <>
-                                      <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
-                                      <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300 text-[10px]">
-                                        LATE
-                                      </Badge>
-                                    </>
-                                  ) : (
-                                    <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
-                                  )}
+                              </button>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </td>
+
+                          {/* Total Time */}
+                          <td className="py-2.5 px-4">
+                            {row.netWorkMinutes > 0 ? (
+                              <span className="font-semibold text-xs text-foreground">
+                                {row.netHours} hrs
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-2.5 px-4 text-right sm:text-center">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => {
+                                if (row.rawAttendance) {
+                                  setCorrectionTarget(row.rawAttendance);
+                                  setRequestedClockIn(new Date(row.rawAttendance.clockIn).toISOString().slice(0, 16));
+                                  setRequestedClockOut(row.rawAttendance.clockOut ? new Date(row.rawAttendance.clockOut).toISOString().slice(0, 16) : '');
+                                  setShowCorrectionModal(true);
+                                } else {
+                                  const nowIso = new Date().toISOString().slice(0, 16);
+                                  setCorrectionTarget({
+                                    membershipId: row.membershipObj?.id,
+                                    membership: row.membershipObj,
+                                    clockIn: new Date(),
+                                    status: 'PRESENT',
+                                  });
+                                  setRequestedClockIn(nowIso);
+                                  setRequestedClockOut('');
+                                  setShowCorrectionModal(true);
+                                }
+                              }}
+                              className="text-[11px] font-medium gap-1 h-7 px-2.5 rounded-md border-border hover:bg-muted"
+                            >
+                              <Pencil className="h-3 w-3 text-primary" />
+                              <span>Edit</span>
+                            </Button>
+                          </td>
+                        </tr>
+
+                        {isExpanded && row.breaksList && row.breaksList.length > 0 && (
+                          <tr className="bg-muted/20">
+                            <td colSpan={6} className="py-2.5 px-6">
+                              <div className="rounded-lg border border-border bg-background p-2.5 space-y-2">
+                                <div className="text-xs font-semibold text-foreground flex items-center gap-2">
+                                  <Coffee className="h-3 w-3 text-amber-600" /> Breaks Breakdown for {row.employeeName}
                                 </div>
-                                {displayNotes && (
-                                  <div className="text-[10px] text-muted-foreground italic truncate max-w-[200px]" title={displayNotes}>
-                                    &ldquo;{displayNotes}&rdquo;
-                                  </div>
-                                )}
-                              </div>
-                            </td>
-                            <td className="py-3.5 px-4 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                {breaksList.length > 0 && (
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={() => setExpandedSessionId(isExpanded ? null : a.id)}
-                                    className="text-xs h-7 px-2 text-muted-foreground hover:text-foreground gap-1"
-                                    title={isExpanded ? 'Hide break timeline' : 'View break breakdown'}
-                                  >
-                                    {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                                    <span className="text-[11px]">{breaksList.length} break{breaksList.length === 1 ? '' : 's'}</span>
-                                  </Button>
-                                )}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => {
-                                    setCorrectionTarget(a);
-                                    setRequestedClockIn(new Date(a.clockIn).toISOString().slice(0, 16));
-                                    setRequestedClockOut(a.clockOut ? new Date(a.clockOut).toISOString().slice(0, 16) : '');
-                                    setShowCorrectionModal(true);
-                                  }}
-                                  className="text-[11px] h-7 px-2 gap-1 text-muted-foreground hover:text-foreground"
-                                  title="Request Attendance Correction"
-                                >
-                                  <FileText className="h-3 w-3" /> Correct
-                                </Button>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                                  {row.breaksList.map((b: any, bIdx: number) => {
+                                    const bStart = new Date(b.breakStart).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                                    const bEnd = b.breakEnd ? new Date(b.breakEnd).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'In Progress';
+                                    let bDur = b.durationMinutes;
+                                    if (!bDur) {
+                                      const bEndMs = b.breakEnd ? new Date(b.breakEnd).getTime() : Date.now();
+                                      bDur = Math.max(1, Math.round((bEndMs - new Date(b.breakStart).getTime()) / 60000));
+                                    }
+                                    return (
+                                      <div key={b.id || bIdx} className="text-xs p-1.5 rounded border border-border bg-card flex items-center justify-between">
+                                        <div>
+                                          <div className="font-medium text-foreground text-[11px]">{b.breakType?.replace(/_/g, ' ') || 'General Break'}</div>
+                                          <div className="text-[10px] text-muted-foreground">{bStart} - {bEnd}</div>
+                                        </div>
+                                        <Badge variant={b.breakEnd ? 'secondary' : 'default'} className="text-[9px] h-4 px-1">
+                                          {bDur}m
+                                        </Badge>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </div>
                             </td>
                           </tr>
-                          {isExpanded && (
-                            <tr className="bg-muted/30">
-                              <td colSpan={9} className="py-3 px-6">
-                                <div className="rounded-lg border border-border/60 bg-background/80 p-3 space-y-2">
-                                  <div className="text-xs font-semibold text-foreground flex items-center gap-2">
-                                    <Coffee className="h-3.5 w-3.5 text-amber-600" /> Breaks Breakdown for Session #{sessionIndex}
-                                  </div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                                    {breaksList.map((b: any, bIdx: number) => {
-                                      const bStart = new Date(b.breakStart).toLocaleTimeString();
-                                      const bEnd = b.breakEnd ? new Date(b.breakEnd).toLocaleTimeString() : 'In Progress';
-                                      let bDur = b.durationMinutes;
-                                      if (!bDur) {
-                                        const bEndMs = b.breakEnd ? new Date(b.breakEnd).getTime() : nowMs;
-                                        bDur = Math.max(1, Math.round((bEndMs - new Date(b.breakStart).getTime()) / 60000));
-                                      }
-                                      return (
-                                        <div key={b.id || bIdx} className="text-xs p-2 rounded border border-border bg-card flex items-center justify-between">
-                                          <div>
-                                            <div className="font-medium text-foreground">{b.breakType?.replace(/_/g, ' ') || 'General Break'}</div>
-                                            <div className="text-[11px] text-muted-foreground">{bStart} - {bEnd}</div>
-                                          </div>
-                                          <Badge variant={b.breakEnd ? 'secondary' : 'default'} className="text-[10px]">
-                                            {bDur}m
-                                          </Badge>
-                                        </div>
-                                      );
-                                    })}
-                                  </div>
-                                  {displayNotes && (
-                                    <div className="text-xs text-muted-foreground border-t border-border/50 pt-2">
-                                      <strong>Notes / Handoff:</strong> {displayNotes}
-                                    </div>
-                                  )}
-                                </div>
-                              </td>
-                            </tr>
-                          )}
-                        </React.Fragment>
-                      );
-                    })}
-                    {filteredLogs.length === 0 && (
-                      <tr>
-                        <td colSpan={9} className="text-center py-8 text-xs text-muted-foreground">
-                          No matching attendance records found.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
+                        )}
+                      </React.Fragment>
+                    );
+                  })}
+
+                  {filteredSessionRows.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="text-center py-8 text-xs text-muted-foreground">
+                        No matching employee attendance sessions found.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </Card>
         </div>
       )}
+
 
       {/* =========================================================================
           TAB 3: EXCEPTIONS & CORRECTIONS
