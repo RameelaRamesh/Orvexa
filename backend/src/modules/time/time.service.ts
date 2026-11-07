@@ -314,12 +314,13 @@ export class TimeService {
 
     // 4. Status determination & early departure
     let finalStatus = active.status;
-    if (finalStatus !== AttendanceStatus.LATE) {
-      if (netWorkMinutes < policy.halfDayMinutes && netWorkMinutes > 0) {
-        finalStatus = AttendanceStatus.HALF_DAY;
-      } else {
-        finalStatus = AttendanceStatus.PRESENT;
-      }
+    const fullDayThreshold = policy.fullDayMinutes - (policy.gracePeriodMinutes || 15);
+    if (netWorkMinutes >= fullDayThreshold) {
+      finalStatus = active.status === AttendanceStatus.LATE ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+    } else if (netWorkMinutes >= policy.halfDayMinutes) {
+      finalStatus = AttendanceStatus.HALF_DAY;
+    } else {
+      finalStatus = AttendanceStatus.HALF_DAY;
     }
 
     // Append checkout notes
@@ -634,17 +635,38 @@ export class TimeService {
       orderBy: { clockIn: 'desc' },
     });
 
+    // Asynchronously heal any legacy records where full day (>= 420 mins) was miscategorized as HALF_DAY
+    this.prisma.attendance
+      .updateMany({
+        where: {
+          workspaceId,
+          status: AttendanceStatus.HALF_DAY,
+          totalWorkMinutes: { gte: 420 },
+        },
+        data: { status: AttendanceStatus.PRESENT },
+      })
+      .catch(() => {});
+
     return records.map((r) => {
       const isOvernight =
         r.clockOut &&
         new Date(r.clockOut).getDate() !== new Date(r.clockIn).getDate();
-      const netHours = (r.totalWorkMinutes / 60).toFixed(1);
+      const rawNetHours = (r.totalWorkMinutes / 60).toFixed(1);
+      const safeNetHours =
+        r.totalWorkMinutes < 480 && rawNetHours === '8.0' ? 7.9 : Number(rawNetHours);
       const breakHours = (r.totalBreakMinutes / 60).toFixed(1);
       const overtimeMinutes = Math.max(0, r.totalWorkMinutes - 480);
 
+      // Auto-correct any legacy record where >= 7 hours was saved as HALF_DAY
+      let resolvedStatus = r.status;
+      if (resolvedStatus === AttendanceStatus.HALF_DAY && r.totalWorkMinutes >= 420) {
+        resolvedStatus = AttendanceStatus.PRESENT;
+      }
+
       return {
         ...r,
-        netHours: Number(netHours),
+        status: resolvedStatus,
+        netHours: safeNetHours,
         breakHours: Number(breakHours),
         isOvernight: !!isOvernight,
         overtimeMinutes,
@@ -668,9 +690,9 @@ export class TimeService {
     const totalBreakMinutes = list.reduce((sum, r) => sum + (r.totalBreakMinutes || 0), 0);
     const totalOvertimeMinutes = list.reduce((sum, r) => sum + (r.overtimeMinutes || 0), 0);
 
-    const presentCount = list.filter((r) => r.status === AttendanceStatus.PRESENT).length;
+    const presentCount = list.filter((r) => r.status === AttendanceStatus.PRESENT || (r.totalWorkMinutes || 0) >= 420).length;
     const lateCount = list.filter((r) => r.status === AttendanceStatus.LATE).length;
-    const halfDayCount = list.filter((r) => r.status === AttendanceStatus.HALF_DAY).length;
+    const halfDayCount = list.filter((r) => r.status === AttendanceStatus.HALF_DAY && (r.totalWorkMinutes || 0) < 420).length;
     const missedCheckoutCount = list.filter((r) => r.notes?.includes('[AUTO_CLOSED_MISSED_CHECKOUT]')).length;
 
     const uniqueEmployees = new Set(list.map((r) => r.membershipId)).size;
@@ -748,10 +770,38 @@ export class TimeService {
         });
       }
 
-      // Auto-set clock-out at fullDayMinutes (e.g. 8 hours) after clock-in
-      const resolvedClockOut = new Date(new Date(session.clockIn).getTime() + policy.fullDayMinutes * 60 * 1000);
+      // Auto-set clock-out based on assigned shift end time or fullDayMinutes
+      const shift = await this.resolveMemberShift(workspaceId, session.membershipId);
+      let resolvedClockOut: Date;
+      if (shift && shift.endTime) {
+        const [endHour, endMinute] = shift.endTime.split(':').map(Number);
+        const shiftEndToday = new Date(session.clockIn);
+        shiftEndToday.setHours(endHour, endMinute, 0, 0);
+        if (shiftEndToday > new Date(session.clockIn)) {
+          resolvedClockOut = shiftEndToday;
+        } else {
+          resolvedClockOut = new Date(new Date(session.clockIn).getTime() + policy.fullDayMinutes * 60 * 1000);
+        }
+      } else {
+        resolvedClockOut = new Date(new Date(session.clockIn).getTime() + policy.fullDayMinutes * 60 * 1000);
+      }
+
+      const grossMinutes = Math.max(
+        0,
+        Math.round((resolvedClockOut.getTime() - new Date(session.clockIn).getTime()) / (1000 * 60)),
+      );
       const totalBreaks = session.breaks.reduce((acc, b) => acc + (b.durationMinutes || 0), 0);
-      const netMinutes = Math.max(0, policy.fullDayMinutes - totalBreaks);
+      const netMinutes = Math.max(0, grossMinutes - totalBreaks);
+
+      const fullDayThreshold = policy.fullDayMinutes - (policy.gracePeriodMinutes || 15);
+      let resolvedStatus: AttendanceStatus;
+      if (netMinutes >= fullDayThreshold) {
+        resolvedStatus = session.status === AttendanceStatus.LATE ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+      } else if (netMinutes >= policy.halfDayMinutes) {
+        resolvedStatus = AttendanceStatus.HALF_DAY;
+      } else {
+        resolvedStatus = AttendanceStatus.HALF_DAY;
+      }
 
       await this.prisma.attendance.update({
         where: { id: session.id },
@@ -759,7 +809,7 @@ export class TimeService {
           clockOut: resolvedClockOut,
           totalWorkMinutes: netMinutes,
           totalBreakMinutes: totalBreaks,
-          status: AttendanceStatus.HALF_DAY,
+          status: resolvedStatus,
           notes: `${session.notes || ''} [AUTO_CLOSED_MISSED_CHECKOUT]`.trim(),
         },
       });

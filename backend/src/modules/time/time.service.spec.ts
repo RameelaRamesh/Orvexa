@@ -421,7 +421,7 @@ describe('PHASE 6: Complete Attendance and Time Management Acceptance Suite', ()
       mockPrisma.attendance.findMany.mockResolvedValue([abandoned]);
       mockPrisma.attendance.update.mockResolvedValue({
         id: 'att_abandoned',
-        status: AttendanceStatus.HALF_DAY,
+        status: AttendanceStatus.PRESENT,
       });
 
       const report = await timeService.autoCloseMissedCheckouts('ws_alpha');
@@ -430,7 +430,7 @@ describe('PHASE 6: Complete Attendance and Time Management Acceptance Suite', ()
       expect(mockPrisma.attendance.update).toHaveBeenCalledWith({
         where: { id: 'att_abandoned' },
         data: expect.objectContaining({
-          status: AttendanceStatus.HALF_DAY,
+          status: AttendanceStatus.PRESENT,
           notes: expect.stringContaining('[AUTO_CLOSED_MISSED_CHECKOUT]'),
         }),
       });

@@ -836,11 +836,11 @@ export default function TimeAttendancePage() {
           'Date': new Date(a.date || a.clockIn).toLocaleDateString(),
           'Clock In': new Date(a.clockIn).toLocaleTimeString(),
           'Clock Out': a.clockOut ? new Date(a.clockOut).toLocaleTimeString() : 'Active',
-          'Net Hours': (net / 60).toFixed(1),
+          'Net Hours': (net < 480 && (net / 60).toFixed(1) === '8.0') ? '7.9' : (net / 60).toFixed(1),
           'Net Minutes': net,
           'Total Break Minutes': effBrk,
           'Breaks Count': (a.breaks || []).length,
-          'Status': a.clockOut ? (a.status || 'COMPLETED') : 'ON SHIFT',
+          'Status': a.clockOut ? (a.status === 'HALF_DAY' ? 'HALF DAY' : a.status === 'LATE' ? 'LATE' : 'COMPLETED') : 'ON SHIFT',
         };
       });
 
@@ -1495,7 +1495,11 @@ export default function TimeAttendancePage() {
                             <div className="flex items-center gap-2">
                               <span className="text-xs font-bold text-foreground">Session #{idx + 1}</span>
                               {s.clockOut ? (
-                                <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
+                                s.status === 'HALF_DAY' ? (
+                                  <Badge variant="outline" className="border-purple-300 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 text-[10px]">HALF DAY</Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
+                                )
                               ) : (
                                 <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
                               )}
@@ -1685,7 +1689,8 @@ export default function TimeAttendancePage() {
                       } else {
                         netWorkMinutes = Math.max(0, grossMinutes - totalBreakMinutes);
                       }
-                      const netHours = (netWorkMinutes / 60).toFixed(1);
+                      const rawNetHours = (netWorkMinutes / 60).toFixed(1);
+                      const netHours = (netWorkMinutes < 480 && rawNetHours === '8.0') ? '7.9' : rawNetHours;
 
                       // Extract session metadata
                       let sessionIndex: number | null = null;
@@ -1792,20 +1797,21 @@ export default function TimeAttendancePage() {
                                     <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 text-[10px]">
                                       ON BREAK
                                     </Badge>
-                                  ) : a.clockOut ? (
-                                    <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
-                                  ) : (
+                                  ) : !a.clockOut ? (
                                     <Badge variant="success" className="text-[10px]">IN PROGRESS</Badge>
-                                  )}
-                                  {a.status === 'LATE' && (
-                                    <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300 text-[10px]">
-                                      LATE
-                                    </Badge>
-                                  )}
-                                  {a.status === 'HALF_DAY' && (
-                                    <Badge variant="outline" className="border-purple-300 text-purple-700 text-[10px]">
+                                  ) : a.status === 'HALF_DAY' ? (
+                                    <Badge variant="outline" className="border-purple-300 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 text-[10px]">
                                       HALF DAY
                                     </Badge>
+                                  ) : a.status === 'LATE' ? (
+                                    <>
+                                      <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
+                                      <Badge variant="outline" className="border-amber-400 text-amber-700 dark:text-amber-300 text-[10px]">
+                                        LATE
+                                      </Badge>
+                                    </>
+                                  ) : (
+                                    <Badge variant="secondary" className="text-[10px]">COMPLETED</Badge>
                                   )}
                                 </div>
                                 {displayNotes && (
