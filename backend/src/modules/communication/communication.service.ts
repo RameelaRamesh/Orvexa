@@ -84,6 +84,7 @@ export class CommunicationService {
         ...conv,
         displayName,
         participants: participantDetails,
+        lastMessageSnippet: conv.lastMessage,
       };
     });
   }
@@ -452,5 +453,111 @@ export class CommunicationService {
       return { success: true, message: messages[msgIndex] };
     }
     return { success: true, message: undefined };
+  }
+
+  async clearMessages(
+    workspaceId: string,
+    conversationId: string,
+    membershipId: string,
+  ) {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const settings = (ws?.settings as any) || {};
+    const conversations: Conversation[] = settings.conversations || [];
+    const messages: Message[] = settings.messages || [];
+
+    const convIndex = conversations.findIndex((c) => c.id === conversationId);
+    if (convIndex === -1) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const conv = conversations[convIndex];
+    if (!conv.participantMembershipIds.includes(membershipId)) {
+      throw new ForbiddenException('Access denied: You are not a participant in this conversation.');
+    }
+
+    // Filter out messages for this conversation permanently
+    const remainingMessages = messages.filter((m) => m.conversationId !== conversationId);
+
+    // Reset conversation preview snippet and timestamp
+    conversations[convIndex] = {
+      ...conv,
+      lastMessage: undefined,
+      lastMessageAt: undefined,
+      updatedAt: new Date(),
+    };
+
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: {
+        settings: {
+          ...settings,
+          conversations,
+          messages: remainingMessages,
+        },
+      },
+    });
+
+    return { cleared: true, conversationId };
+  }
+
+  async deleteMessage(
+    workspaceId: string,
+    conversationId: string,
+    messageId: string,
+    membershipId: string,
+  ) {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const settings = (ws?.settings as any) || {};
+    const conversations: Conversation[] = settings.conversations || [];
+    const messages: Message[] = settings.messages || [];
+
+    const convIndex = conversations.findIndex((c) => c.id === conversationId);
+    if (convIndex === -1) {
+      throw new NotFoundException('Conversation not found');
+    }
+
+    const conv = conversations[convIndex];
+    if (!conv.participantMembershipIds.includes(membershipId)) {
+      throw new ForbiddenException('Access denied: You are not a participant in this conversation.');
+    }
+
+    const targetMsg = messages.find((m) => m.id === messageId && m.conversationId === conversationId);
+    if (!targetMsg) {
+      return { deleted: true, messageId };
+    }
+
+    const remainingMessages = messages.filter((m) => m.id !== messageId);
+
+    const remainingConvMessages = remainingMessages
+      .filter((m) => m.conversationId === conversationId)
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+    const lastRemaining = remainingConvMessages[remainingConvMessages.length - 1];
+
+    conversations[convIndex] = {
+      ...conv,
+      lastMessage: lastRemaining ? lastRemaining.content.slice(0, 80) || '[Attachment]' : undefined,
+      lastMessageAt: lastRemaining ? new Date(lastRemaining.createdAt) : undefined,
+      updatedAt: new Date(),
+    };
+
+    await this.prisma.workspace.update({
+      where: { id: workspaceId },
+      data: {
+        settings: {
+          ...settings,
+          conversations,
+          messages: remainingMessages,
+        },
+      },
+    });
+
+    return { deleted: true, messageId };
   }
 }

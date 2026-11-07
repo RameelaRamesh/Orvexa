@@ -120,4 +120,28 @@ export class CommunicationController {
   ) {
     return this.communicationService.markAsRead(workspaceId, conversationId, messageId, req.membershipId);
   }
+
+  @Delete('conversations/:id/messages')
+  async clearMessages(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') conversationId: string,
+  ) {
+    return this.communicationService.clearMessages(workspaceId, conversationId, req.membershipId);
+  }
+
+  @Delete('conversations/:id/messages/:messageId')
+  async deleteMessage(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') conversationId: string,
+    @Param('messageId') messageId: string,
+  ) {
+    return this.communicationService.deleteMessage(
+      workspaceId,
+      conversationId,
+      messageId,
+      req.membershipId,
+    );
+  }
 }

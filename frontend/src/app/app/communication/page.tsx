@@ -280,20 +280,22 @@ export default function CommunicationPage() {
           }
         }
 
-        // Filter dummy/test messages and locally cleared messages
+        // Filter dummy/test messages, deleted messages, and messages sent prior to clear timestamp
         let activeMsgs = msgs;
         try {
           const deletedMsgIds: string[] = typeof window !== 'undefined'
             ? JSON.parse(localStorage.getItem('orvexa_deleted_msg_ids') || '[]')
             : [];
-          const clearedConvIds: string[] = typeof window !== 'undefined'
-            ? JSON.parse(localStorage.getItem('orvexa_cleared_conv_ids') || '[]')
-            : [];
-          if (clearedConvIds.includes(convId)) {
-            activeMsgs = [];
-          } else {
-            activeMsgs = msgs.filter((m) => !deletedMsgIds.includes(m.id) && !isDummyMessage(m.content));
-          }
+          const clearedAt = getConversationClearedAt(convId);
+
+          activeMsgs = msgs.filter((m) => {
+            if (deletedMsgIds.includes(m.id)) return false;
+            if (isDummyMessage(m.content)) return false;
+            if (clearedAt && new Date(m.createdAt).getTime() <= new Date(clearedAt).getTime()) {
+              return false;
+            }
+            return true;
+          });
         } catch {}
 
         setMessages(activeMsgs);
@@ -314,16 +316,43 @@ export default function CommunicationPage() {
     }
   };
 
-  
   const isDummyMessage = (c?: string) => {
     if (!c) return false;
     const trimmed = c.trim().toLowerCase();
     return trimmed === 'hi' || trimmed === 'hello' || trimmed === 'test' || trimmed === 'testing' || trimmed === 'dummy';
   };
 
-  const handleClearChat = (convId: string) => {
+  const getConversationClearedAt = (convId: string): string | null => {
+    try {
+      const clearedTimestamps: Record<string, string> = typeof window !== 'undefined'
+        ? JSON.parse(localStorage.getItem('orvexa_cleared_timestamps') || '{}')
+        : {};
+      return clearedTimestamps[convId] || null;
+    } catch {
+      return null;
+    }
+  };
+
+  const getConversationSnippet = (conv: Conversation) => {
+    const clearedAt = getConversationClearedAt(conv.id);
+    if (clearedAt && conv.lastMessageAt && new Date(conv.lastMessageAt).getTime() <= new Date(clearedAt).getTime()) {
+      return 'No messages yet';
+    }
+    const snippet = conv.lastMessageSnippet || (conv as any).lastMessage;
+    if (!snippet || isDummyMessage(snippet)) return 'No messages yet';
+    return snippet;
+  };
+
+  const handleClearChat = async (convId: string) => {
     if (confirm('Clear message history for this chat?')) {
+      const nowIso = new Date().toISOString();
       try {
+        const clearedTimestamps: Record<string, string> = typeof window !== 'undefined'
+          ? JSON.parse(localStorage.getItem('orvexa_cleared_timestamps') || '{}')
+          : {};
+        clearedTimestamps[convId] = nowIso;
+        localStorage.setItem('orvexa_cleared_timestamps', JSON.stringify(clearedTimestamps));
+
         const clearedConvIds: string[] = typeof window !== 'undefined'
           ? JSON.parse(localStorage.getItem('orvexa_cleared_conv_ids') || '[]')
           : [];
@@ -332,12 +361,32 @@ export default function CommunicationPage() {
           localStorage.setItem('orvexa_cleared_conv_ids', JSON.stringify(clearedConvIds));
         }
       } catch {}
+
       setMessages([]);
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId
+            ? { ...c, lastMessageSnippet: '', lastMessage: '', lastMessageAt: undefined }
+            : c,
+        ),
+      );
+
+      // Call backend to permanently delete conversation messages
+      try {
+        const headers = getHeaders();
+        await fetch(`${BRANDING.apiUrl}/communication/conversations/${convId}/messages`, {
+          method: 'DELETE',
+          headers,
+        });
+      } catch (err) {
+        console.error('Failed to clear messages on backend:', err);
+      }
+
       toast.success('Chat history cleared');
     }
   };
 
-  const handleDeleteMessage = (msgId: string) => {
+  const handleDeleteMessage = async (msgId: string) => {
     try {
       const deletedMsgIds: string[] = typeof window !== 'undefined'
         ? JSON.parse(localStorage.getItem('orvexa_deleted_msg_ids') || '[]')
@@ -348,6 +397,21 @@ export default function CommunicationPage() {
       }
     } catch {}
     setMessages((prev) => prev.filter((m) => m.id !== msgId));
+
+    if (activeConversation) {
+      try {
+        const headers = getHeaders();
+        await fetch(
+          `${BRANDING.apiUrl}/communication/conversations/${activeConversation.id}/messages/${msgId}`,
+          {
+            method: 'DELETE',
+            headers,
+          },
+        );
+      } catch (err) {
+        console.error('Failed to delete message on backend:', err);
+      }
+    }
     toast.success('Message deleted');
   };
 
@@ -403,17 +467,7 @@ export default function CommunicationPage() {
         lastKnownMessageAtRef.current[activeConversation.id] = data.data.createdAt;
       }
 
-      // Append new message
-      try {
-        const clearedConvIds: string[] = typeof window !== 'undefined'
-          ? JSON.parse(localStorage.getItem('orvexa_cleared_conv_ids') || '[]')
-          : [];
-        if (clearedConvIds.includes(activeConversation.id)) {
-          const updated = clearedConvIds.filter((id) => id !== activeConversation.id);
-          localStorage.setItem('orvexa_cleared_conv_ids', JSON.stringify(updated));
-        }
-      } catch {}
-
+      // Append new message (cleared timestamps remain active so older cleared messages are never resurrected)
       setMessages((prev) => [...prev, data.data]);
 
       // Update conversations preview
@@ -842,7 +896,7 @@ export default function CommunicationPage() {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold text-foreground truncate">{title}</span>
-                                {conv.lastMessageAt && (
+                                {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
                                   <span className="text-[10px] text-muted-foreground">
                                     {new Date(conv.lastMessageAt).toLocaleTimeString([], {
                                       hour: '2-digit',
@@ -852,7 +906,7 @@ export default function CommunicationPage() {
                                 )}
                               </div>
                               <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                                {conv.lastMessageSnippet && !isDummyMessage(conv.lastMessageSnippet) ? conv.lastMessageSnippet : 'No messages yet'}
+                                {getConversationSnippet(conv)}
                               </p>
                             </div>
                           </button>
@@ -954,7 +1008,7 @@ export default function CommunicationPage() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center justify-between">
                         <span className="text-xs font-semibold text-foreground truncate">{title}</span>
-                        {conv.lastMessageAt && (
+                        {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
                           <span className="text-[10px] text-muted-foreground">
                             {new Date(conv.lastMessageAt).toLocaleTimeString([], {
                               hour: '2-digit',
@@ -964,7 +1018,7 @@ export default function CommunicationPage() {
                         )}
                       </div>
                       <p className="text-[11px] text-muted-foreground truncate mt-0.5">
-                        {conv.lastMessageSnippet || 'No messages yet'}
+                        {getConversationSnippet(conv)}
                       </p>
                       <div className="flex items-center gap-1.5 mt-1">
                         <Badge variant="outline" className="text-[9px] px-1 py-0 font-normal">
