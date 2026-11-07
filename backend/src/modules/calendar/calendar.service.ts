@@ -178,6 +178,8 @@ export class CalendarService {
       teamId?: string;
       status?: string;
       layers?: string[];
+      scope?: string;
+      memberIds?: string[];
     } = {},
   ): Promise<{ workspaceId: string; events: CalendarEventItem[]; metadata: Record<string, any> }> {
     const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
@@ -187,6 +189,8 @@ export class CalendarService {
     start.setHours(0, 0, 0, 0);
     const end = filters.endDate ? new Date(filters.endDate) : new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59);
     end.setHours(23, 59, 59, 999);
+
+    const scope = (filters.scope || 'MY_SCHEDULE').toUpperCase();
 
     const events: CalendarEventItem[] = [];
 
@@ -198,7 +202,6 @@ export class CalendarService {
     const settings = (ws?.settings as Record<string, any>) || {};
     const storedCalendarEvents: any[] = settings.calendarEvents || [];
 
-    // Also merge with in-memory collection if available
     let inMemEvents: any[] = [];
     try {
       inMemEvents = await (this.prisma as any).calendarEvent.findMany({ where: { workspaceId } });
@@ -220,23 +223,33 @@ export class CalendarService {
       const evtStart = new Date(evt.startDate);
       const evtEnd = new Date(evt.endDate || evt.startDate);
 
-      // Range check
       if (evtStart > end || evtEnd < start) continue;
 
-      // Visibility scoping
+      // Visibility & Scope checking
       let isVisible = false;
-      if (userCtx.canViewAll) {
+      const isCompanyWide = evt.audience === 'ALL' || evt.type === 'COMPANY_EVENT' || evt.type === 'HOLIDAY';
+
+      if (isCompanyWide) {
+        isVisible = true; // Company wide events always visible in all scopes
+      } else if (scope === 'MY_SCHEDULE') {
+        isVisible = evt.organizerMembershipId === membershipId ||
+          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+      } else if (scope === 'MY_TEAM' && userCtx.teamId) {
+        isVisible = evt.teamId === userCtx.teamId ||
+          evt.organizerMembershipId === membershipId ||
+          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+      } else if (scope === 'MY_DEPARTMENT' && userCtx.departmentId) {
+        isVisible = evt.departmentId === userCtx.departmentId ||
+          evt.organizerMembershipId === membershipId ||
+          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||
+          (evt.participants && evt.participants.some((p: any) => filters.memberIds!.includes(p.membershipId)));
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin)) {
         isVisible = true;
-      } else if (evt.audience === 'ALL') {
-        isVisible = true;
-      } else if (evt.organizerMembershipId === membershipId) {
-        isVisible = true;
-      } else if (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId)) {
-        isVisible = true;
-      } else if (userCtx.canViewDept && evt.departmentId && evt.departmentId === userCtx.departmentId) {
-        isVisible = true;
-      } else if (userCtx.canViewTeam && evt.teamId && evt.teamId === userCtx.teamId) {
-        isVisible = true;
+      } else {
+        isVisible = evt.organizerMembershipId === membershipId ||
+          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
       }
 
       if (!isVisible) continue;
@@ -278,34 +291,34 @@ export class CalendarService {
       });
     }
 
-    // --- B. TASKS & DEADLINES ---
+    // --- B. TASKS & DEADLINES (MULTI-DAY TASK CONTINUITY) ---
     try {
-      const taskWhere: any = {
-        workspaceId,
-      };
+      const taskWhere: any = { workspaceId };
 
-      if (!userCtx.canViewAll && !userCtx.isManager && !userCtx.isLead) {
-        // Regular members see tasks assigned to them or created by them
+      if (scope === 'MY_SCHEDULE') {
         taskWhere.OR = [
           { assigneeMembershipId: membershipId },
           { assignee: { userId: userCtx.membership?.userId } },
-          { createdByMembershipId: membershipId },
         ];
-      } else if (userCtx.isManager && userCtx.departmentId && !userCtx.canViewAll) {
-        // Department managers see their department tasks or assigned tasks
-        taskWhere.OR = [
-          { assigneeMembershipId: membershipId },
-          { project: { departmentId: userCtx.departmentId } },
-        ];
+      } else if (scope === 'MY_TEAM' && userCtx.teamId) {
+        taskWhere.assignee = { teamId: userCtx.teamId };
+      } else if (scope === 'MY_DEPARTMENT' && userCtx.departmentId) {
+        taskWhere.assignee = { departmentId: userCtx.departmentId };
+      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        taskWhere.assigneeMembershipId = { in: filters.memberIds };
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin)) {
+        // all workspace tasks
+      } else {
+        taskWhere.assigneeMembershipId = membershipId;
       }
 
       const [tasks, workspaceMemberships] = await Promise.all([
         this.prisma.task.findMany({
           where: taskWhere,
           include: {
-            project: { select: { name: true } },
+            project: { select: { id: true, name: true } },
             assignee: {
-              include: { user: { select: { firstName: true, lastName: true, email: true } } },
+              include: { user: { select: { firstName: true, lastName: true, email: true, avatarUrl: true } } },
             },
           },
         }),
@@ -321,12 +334,21 @@ export class CalendarService {
 
       for (const t of tasks) {
         if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
-        const rawDate = t.dueDate || (t as any).startDate || t.createdAt || new Date();
-        const taskDate = new Date(rawDate);
-        if (isNaN(taskDate.getTime())) continue;
-        if (taskDate < start || taskDate > end) continue;
 
         const sla = (t.sla as any) || {};
+        const rawStart = sla.startDate || (t as any).startDate || (t.dueDate ? t.dueDate : t.createdAt) || new Date();
+        const rawEnd = t.dueDate || rawStart;
+
+        const taskStartDate = new Date(rawStart);
+        const taskEndDate = new Date(rawEnd);
+        if (isNaN(taskStartDate.getTime()) || isNaN(taskEndDate.getTime())) continue;
+
+        const validStart = taskStartDate <= taskEndDate ? taskStartDate : taskEndDate;
+        const validEnd = taskStartDate <= taskEndDate ? taskEndDate : taskStartDate;
+
+        // Multi-day overlap check: task start must be before calendar end, and task end must be after calendar start
+        if (validStart > end || validEnd < start) continue;
+
         const creatorId = sla.creatorMembershipId || (t as any).creatorMembershipId || (t as any).createdByMembershipId;
         let assignerName = '';
         if (creatorId) {
@@ -336,51 +358,57 @@ export class CalendarService {
           }
         }
         if (!assignerName) {
-          const assigneeNameLower = (t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : '').toLowerCase();
-          if (assigneeNameLower.includes('yuvan') || assigneeNameLower.includes('priyan')) {
-            assignerName = 'Harini G';
-          } else if (assigneeNameLower.includes('indumathi') || assigneeNameLower.includes('sanjeev') || assigneeNameLower.includes('teenu')) {
-            assignerName = 'Rameela R';
-          } else if (assigneeNameLower.includes('harini')) {
-            assignerName = 'Rameela R';
-          } else {
-            const lead = workspaceMemberships.find((m: any) => m.user?.firstName === 'Rameela') ||
-                         workspaceMemberships.find((m: any) => m.accessRole === 'MANAGER' || m.accessRole === 'OWNER' || m.accessRole === 'ADMIN');
-            if (lead?.user?.firstName) {
-              assignerName = `${lead.user.firstName} ${lead.user.lastName}`.trim();
-            }
+          const lead = workspaceMemberships.find((m: any) => m.accessRole === 'MANAGER' || m.accessRole === 'OWNER' || m.accessRole === 'ADMIN');
+          if (lead?.user?.firstName) {
+            assignerName = `${lead.user.firstName} ${lead.user.lastName}`.trim();
           }
         }
-        if (!assignerName || assignerName === 'Workspace Admin') {
-          assignerName = 'Rameela R';
-        }
 
-        const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
+        const isOverdue = t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && t.dueDate && new Date(t.dueDate).getTime() < Date.now();
         const assigneeName = t.assignee?.user
           ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
           : (t as any).assigneeName || 'Unassigned';
 
-        const isMidnight = taskDate.getUTCHours() === 0 && taskDate.getUTCMinutes() === 0;
+        const progress = sla.progress !== undefined
+          ? sla.progress
+          : (t.status === 'COMPLETED' ? 100 : t.status === 'IN_PROGRESS' ? 25 : 0);
+
+        let color = '#8b5cf6'; // purple default
+        if (t.status === 'COMPLETED') {
+          color = '#10b981'; // emerald green
+        } else if (isOverdue) {
+          color = '#ef4444'; // red
+        } else if (t.status === 'IN_REVIEW') {
+          color = '#f59e0b'; // amber
+        } else if (t.status === 'IN_PROGRESS') {
+          color = '#3b82f6'; // blue
+        }
 
         events.push({
           id: `task-${t.id}`,
           title: t.title,
           type: 'TASK',
           layer: 'TASKS',
-          startDate: taskDate.toISOString(),
-          endDate: (t.dueDate ? new Date(t.dueDate) : taskDate).toISOString(),
-          allDay: isMidnight || !t.dueDate,
+          startDate: validStart.toISOString(),
+          endDate: validEnd.toISOString(),
+          allDay: true,
           status: t.status || 'TODO',
-          color: isUrgent ? '#ef4444' : '#8b5cf6',
+          color,
           description: t.description,
           details: {
-            projectName: t.project?.name || (t as any).projectName || 'General',
+            taskId: t.id,
+            projectId: t.projectId || t.project?.id || null,
+            projectName: t.project?.name || (t as any).projectName || 'Standalone',
             priority: t.priority || 'MEDIUM',
             assigneeName,
             assigneeId: t.assigneeMembershipId,
             assignerName,
             creatorMembershipId: creatorId,
             dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : (t.dueDate as any).toISOString()) : null,
+            startDate: validStart.toISOString(),
+            deadline: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : (t.dueDate as any).toISOString()) : null,
+            progress,
+            isOverdue,
             isMyTask: t.assigneeMembershipId === membershipId || userCtx.membership?.userId === (t as any).assignee?.userId,
             hasDueDate: Boolean(t.dueDate),
           },

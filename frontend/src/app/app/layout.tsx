@@ -41,6 +41,7 @@ import { TeamNotificationListener } from '@/components/team-notification-listene
 import { CommonSearchBar } from '@/components/common-search-bar';
 import { UserAvatar } from '@/components/ui/user-avatar';
 import { ProfileSetupModal } from '@/components/profile-setup-modal';
+import { NotificationCenter } from '@/components/notification-center';
 
 const cleanWorkspaceMemberships = (raw: any[]) => {
   if (!Array.isArray(raw)) return [];
@@ -824,18 +825,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               </Button>
             )}
 
-            {/* Notification Bell with Red Badge 3 */}
-            <button
-              type="button"
-              onClick={() => router.push('/app/communication')}
-              className="relative p-2 rounded-full text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title="Notifications"
-            >
-              <Bell className="h-4 w-4" />
-              <span className="absolute top-1 right-1 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white shadow-xs">
-                3
-              </span>
-            </button>
+            {/* Dynamic Notification Bell & Center */}
+            <NotificationCenter />
 
             <ThemeToggle />
 

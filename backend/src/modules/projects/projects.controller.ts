@@ -1,4 +1,15 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { ProjectsService } from './projects.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
@@ -18,26 +29,41 @@ export class ProjectsController {
     return this.projectsService.list(workspaceId, status);
   }
 
+  @Get(':id')
+  async getById(
+    @CurrentWorkspace() workspaceId: string,
+    @Param('id') id: string,
+  ) {
+    return this.projectsService.getById(id, workspaceId);
+  }
+
   @Post()
   async create(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Body()
     body: {
       name: string;
       key: string;
       clientId?: string;
       description?: string;
+      departmentId?: string;
+      managerMembershipId?: string;
+      memberMembershipIds?: string[];
       priority?: PriorityLevel;
+      status?: ProjectStatus;
       startDate?: Date;
       endDate?: Date;
     },
   ) {
-    return this.projectsService.create(workspaceId, body);
+    const creatorMembershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.projectsService.create(workspaceId, body, creatorMembershipId);
   }
 
   @Patch(':id')
   async update(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Param('id') id: string,
     @Body()
     body: {
@@ -47,9 +73,46 @@ export class ProjectsController {
       priority?: PriorityLevel;
       startDate?: Date;
       endDate?: Date;
+      departmentId?: string;
+      managerMembershipId?: string;
+      memberMembershipIds?: string[];
     },
   ) {
-    return this.projectsService.update(id, workspaceId, body);
+    const actorMembershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.projectsService.update(id, workspaceId, body, actorMembershipId);
+  }
+
+  @Post(':id/members')
+  async addMember(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body('memberMembershipId') memberMembershipId: string,
+  ) {
+    const actorMembershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.projectsService.addMember(id, workspaceId, memberMembershipId, actorMembershipId);
+  }
+
+  @Delete(':id/members/:memberId')
+  async removeMember(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Param('memberId') memberId: string,
+  ) {
+    const actorMembershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.projectsService.removeMember(id, workspaceId, memberId, actorMembershipId);
+  }
+
+  @Post(':id/files')
+  async addFile(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') id: string,
+    @Body() file: { name: string; url: string; size?: string; type?: string },
+  ) {
+    const actorMembershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.projectsService.addFile(id, workspaceId, file, actorMembershipId);
   }
 
   @Delete(':id')

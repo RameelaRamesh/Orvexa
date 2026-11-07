@@ -35,6 +35,13 @@ export class AnalyticsService {
         description: 'Percentage of scoped tasks marked COMPLETED within the selected date window.',
         unit: '%',
       },
+      activeProjects: {
+        name: 'Active Projects',
+        category: 'Work Execution',
+        formula: 'Count(Projects WHERE Status NOT IN [COMPLETED, CANCELLED])',
+        description: 'Number of ongoing projects currently active or in progress.',
+        unit: 'projects',
+      },
       overdueTasksCount: {
         name: 'Overdue Tasks',
         category: 'Work Execution',
@@ -95,6 +102,7 @@ export class AnalyticsService {
       memberId?: string;
       status?: string;
       priority?: string;
+      scope?: string;
     } = {},
   ) {
     const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
@@ -105,7 +113,17 @@ export class AnalyticsService {
     // Ensure end date covers end of that day
     end.setHours(23, 59, 59, 999);
 
-    const targetMembershipId = isManagerOrAdmin && filters.memberId ? filters.memberId : (!isManagerOrAdmin ? membershipId : undefined);
+    let targetMembershipId: string | undefined = undefined;
+    const scopeUpper = (filters.scope || '').toUpperCase();
+    if (scopeUpper === 'MY_DATA') {
+      targetMembershipId = membershipId;
+    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
+      targetMembershipId = undefined;
+    } else if (filters.memberId && isManagerOrAdmin) {
+      targetMembershipId = filters.memberId;
+    } else if (!isManagerOrAdmin) {
+      targetMembershipId = membershipId;
+    }
 
     // 1. Task Queries
     const taskWhere: any = {
@@ -122,7 +140,7 @@ export class AnalyticsService {
       taskWhere.priority = filters.priority;
     }
 
-    const [allTasks, totalMembersCount] = await Promise.all([
+    const [allTasks, totalMembersCount, activeProjectsCount, totalProjectsCount] = await Promise.all([
       this.prisma.task.findMany({
         where: taskWhere,
         select: {
@@ -136,6 +154,16 @@ export class AnalyticsService {
       this.prisma.membership.count({
         where: { workspaceId, status: 'ACTIVE' },
       }),
+      this.prisma.project?.count
+        ? this.prisma.project.count({
+            where: { workspaceId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
+          })
+        : Promise.resolve(0),
+      this.prisma.project?.count
+        ? this.prisma.project.count({
+            where: { workspaceId },
+          })
+        : Promise.resolve(0),
     ]);
 
     const totalTasks = allTasks.length;
@@ -296,6 +324,10 @@ export class AnalyticsService {
     const underMaintenanceAssets = assets.filter((a) => a.status === 'UNDER_MAINTENANCE').length;
     const assetUtilizationRate = totalAssets > 0 ? Math.round((assignedAssets / totalAssets) * 1000) / 10 : 0;
 
+    const attendanceRate = totalMembersCount > 0
+      ? Math.round((presentTodayCount / totalMembersCount) * 1000) / 10
+      : (attendanceCount > 0 ? 100.0 : 0.0);
+
     return {
       workspaceId,
       userRole,
@@ -304,6 +336,10 @@ export class AnalyticsService {
         endDate: end.toISOString(),
       },
       kpis: {
+        projects: {
+          active: activeProjectsCount,
+          total: totalProjectsCount,
+        },
         tasks: {
           total: totalTasks,
           completed: completedTasks,
@@ -328,6 +364,7 @@ export class AnalyticsService {
           presentToday: presentTodayCount,
           activeClockedIn: activeClockedInCount,
           totalMembers: totalMembersCount,
+          attendanceRate,
         },
         leave: {
           totalRequests: totalLeaveRequests,
@@ -658,6 +695,7 @@ export class AnalyticsService {
       priority?: string;
       memberId?: string;
       search?: string;
+      scope?: string;
       limit?: number;
       offset?: number;
     } = {},
@@ -667,7 +705,18 @@ export class AnalyticsService {
     const end = filters.endDate ? new Date(filters.endDate) : new Date();
     end.setHours(23, 59, 59, 999);
 
-    const targetMembershipId = isManagerOrAdmin && filters.memberId ? filters.memberId : (!isManagerOrAdmin ? membershipId : undefined);
+    let targetMembershipId: string | undefined = undefined;
+    const scopeUpper = (filters.scope || '').toUpperCase();
+    if (scopeUpper === 'MY_DATA') {
+      targetMembershipId = membershipId;
+    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
+      targetMembershipId = undefined;
+    } else if (filters.memberId && isManagerOrAdmin) {
+      targetMembershipId = filters.memberId;
+    } else if (!isManagerOrAdmin) {
+      targetMembershipId = membershipId;
+    }
+
     const limit = Number(filters.limit) || 50;
     const offset = Number(filters.offset) || 0;
 
@@ -678,7 +727,14 @@ export class AnalyticsService {
           createdAt: { gte: start, lte: end },
         };
         if (targetMembershipId) where.assigneeMembershipId = targetMembershipId;
-        if (filters.status && filters.status !== 'ALL') where.status = filters.status;
+        if (filters.status && filters.status !== 'ALL') {
+          if (filters.status === 'OVERDUE') {
+            where.dueDate = { lt: new Date() };
+            where.status = { notIn: ['COMPLETED', 'CANCELLED'] };
+          } else {
+            where.status = filters.status;
+          }
+        }
         if (filters.priority && filters.priority !== 'ALL') where.priority = filters.priority;
         if (filters.search) {
           where.title = { contains: filters.search, mode: 'insensitive' };
@@ -890,8 +946,64 @@ export class AnalyticsService {
         };
       }
 
+      case 'projects': {
+        const where: any = { workspaceId };
+        if (filters.status && filters.status !== 'ALL') {
+          if (filters.status === 'ACTIVE') {
+            where.status = { notIn: ['COMPLETED', 'CANCELLED'] };
+          } else {
+            where.status = filters.status;
+          }
+        }
+        if (filters.search) {
+          where.name = { contains: filters.search, mode: 'insensitive' };
+        }
+
+        const [items, total] = this.prisma.project?.findMany
+          ? await Promise.all([
+              this.prisma.project.findMany({
+                where,
+                include: {
+                  client: { select: { name: true } },
+                  tasks: { select: { id: true, status: true } },
+                },
+                orderBy: { createdAt: 'desc' },
+                take: limit,
+                skip: offset,
+              }),
+              this.prisma.project.count({ where }),
+            ])
+          : [[], 0];
+
+        return {
+          category: 'projects',
+          total,
+          limit,
+          offset,
+          items: items.map((p) => {
+            const totalT = p.tasks?.length || 0;
+            const compT = p.tasks?.filter((t: any) => t.status === 'COMPLETED').length || 0;
+            const progress = totalT > 0 ? Math.round((compT / totalT) * 100) : 0;
+            return {
+              id: p.id,
+              name: p.name,
+              key: p.key,
+              status: p.status,
+              priority: p.priority || 'MEDIUM',
+              progress,
+              totalTasks: totalT,
+              completedTasks: compT,
+              clientName: p.client?.name || 'Internal',
+              startDate: p.startDate,
+              targetDate: p.endDate || null,
+              createdAt: p.createdAt,
+            };
+          }),
+        };
+      }
+
       default:
-        throw new BadRequestException(`Unsupported drilldown category: ${category}. Supported categories: tasks, attendance, leave, quality, assets`);
+        throw new BadRequestException(`Unsupported drilldown category: ${category}. Supported categories: tasks, attendance, leave, quality, assets, projects`);
     }
   }
 
