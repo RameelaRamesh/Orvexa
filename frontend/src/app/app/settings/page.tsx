@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { BRANDING } from '@/config/branding';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -44,6 +45,7 @@ import {
   Copy,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Eye,
   EyeOff,
   ChevronDown,
@@ -161,6 +163,13 @@ const DEFAULT_PERMISSIONS_CATALOG = [
   { id: 'perm_pay_export', code: 'payroll:export', name: 'Export Sensitive Payroll Reports', module: 'Payroll' },
   { id: 'perm_pay_manage', code: 'payroll:manage', name: 'Full Payroll Administration', module: 'Payroll' },
 
+  // Calendar & Common Holidays
+  { id: 'perm_cal_view_all', code: 'calendar:view:all', name: 'View All Organization Calendar Events', module: 'Calendar' },
+  { id: 'perm_cal_view_dept', code: 'calendar:view:department', name: 'View Department Calendar Events', module: 'Calendar' },
+  { id: 'perm_cal_view_team', code: 'calendar:view:team', name: 'View Team Calendar Events', module: 'Calendar' },
+  { id: 'perm_cal_create', code: 'calendar:create', name: 'Schedule Meetings & Events', module: 'Calendar' },
+  { id: 'perm_cal_holidays', code: 'calendar:holidays:manage', name: 'Manage Common Holidays & Festivals (Owner & Admin)', module: 'Calendar' },
+
   // Admin & Org
   { id: 'perm_org_manage', code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
   { id: 'perm_inv_mgmt', code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
@@ -203,6 +212,7 @@ const DEFAULT_SYSTEM_ROLES = [
       'inventory:view', 'inventory:move',
       'ledger:view', 'ledger:export',
       'documents:view', 'documents:upload', 'documents:download',
+      'calendar:view:department', 'calendar:view:team', 'calendar:create',
     ].map((code) => {
       const p = DEFAULT_PERMISSIONS_CATALOG.find((x) => x.code === code);
       return { permissionId: p?.id || code, code, permission: p };
@@ -1797,6 +1807,73 @@ const selectedRoleObj =
               <Button onClick={handleSaveDetails} disabled={savingDetails} size="sm">
                 {savingDetails ? 'Saving...' : 'Save Organization Details'}
               </Button>
+            </CardFooter>
+          </Card>
+
+          {/* Card: Common Holidays & Festivals Policy */}
+          <Card className="border-border">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-lg bg-emerald-500/10 flex items-center justify-center text-emerald-600">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base font-bold text-foreground">Common Holidays & Festivals</CardTitle>
+                    <CardDescription className="text-xs">
+                      Organization-wide recognized public holidays, regional festivals, and access controls
+                    </CardDescription>
+                  </div>
+                </div>
+                <Badge className="bg-emerald-600 text-white font-semibold text-[10px]">
+                  Owner & Admin Controlled
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="rounded-lg border border-emerald-500/20 bg-emerald-50/40 dark:bg-emerald-950/20 p-3.5 text-xs text-foreground space-y-2">
+                <div className="flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold text-emerald-900 dark:text-emerald-300">
+                      Access Restricted to Admin and Owner Roles
+                    </p>
+                    <p className="text-muted-foreground text-[11px] mt-0.5">
+                      Only workspace Owners and Administrators have permission (<code className="bg-muted px-1 py-0.5 rounded font-mono text-[10px]">calendar:holidays:manage</code>) to configure company holidays and festivals. Regular team members and contributors see all approved holidays and festivals across the company calendar in view-only mode.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="p-3 rounded-lg border border-border bg-card">
+                  <div className="font-semibold text-foreground flex items-center gap-1.5">
+                    <Calendar className="w-3.5 h-3.5 text-primary" /> Operations Calendar Coverage
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Holidays and festivals appear directly on the unified Operations Calendar, respecting mandatory and optional observances for all shifts.
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg border border-border bg-card">
+                  <div className="font-semibold text-foreground flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" /> Pre-Configured Common Festivals
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-1">
+                    Quick presets are provided for Diwali, Pongal, Eid, Christmas, Tamil New Year, Republic Day, Independence Day, and custom holidays.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+            <CardFooter className="pt-2 border-t border-border flex items-center justify-between">
+              <span className="text-[11px] text-muted-foreground">
+                Configured in workspace settings and synced in real-time.
+              </span>
+              <Link href="/app/calendar?openHolidays=true">
+                <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 shadow-xs">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  Manage Calendar Holidays & Festivals
+                </Button>
+              </Link>
             </CardFooter>
           </Card>
         </div>

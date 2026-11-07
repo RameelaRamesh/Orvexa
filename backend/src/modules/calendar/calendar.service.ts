@@ -128,7 +128,12 @@ export class CalendarService {
       },
     });
 
-    const accessRole = (membership?.accessRole || userRole || 'MEMBER').toUpperCase();
+    const accessRole = (
+      membership?.accessRole ||
+      (membership?.role as any)?.name ||
+      userRole ||
+      'MEMBER'
+    ).toUpperCase();
     const isOwnerOrAdmin = accessRole === 'OWNER' || accessRole === 'ADMIN' || accessRole.includes('OWNER') || accessRole.includes('ADMIN');
     const isManager = accessRole === 'MANAGER' || accessRole.includes('MANAGER');
     const isLead = accessRole.includes('LEAD');
@@ -508,7 +513,7 @@ export class CalendarService {
           description: ch.description || 'Company Holiday',
           canEdit: userCtx.canManageHolidays,
           details: {
-            category: 'Company Holiday',
+            category: ch.category || 'Company Holiday',
             isOptional: Boolean(ch.isOptional),
             isWorkingDay: Boolean(ch.isWorkingDay),
           },
@@ -1114,7 +1119,7 @@ export class CalendarService {
   ) {
     const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
     if (!userCtx.canManageHolidays) {
-      throw new ForbiddenException('Only HR and Administrators can configure company holidays');
+      throw new ForbiddenException('Only Workspace Administrators and Owners can configure company holidays & festivals');
     }
 
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
@@ -1127,6 +1132,7 @@ export class CalendarService {
       date: dto.date,
       endDate: dto.endDate || dto.date,
       description: dto.description?.trim(),
+      category: dto.category?.trim() || 'Festival / Holiday',
       isOptional: Boolean(dto.isOptional),
       isWorkingDay: Boolean(dto.isWorkingDay),
       createdAt: new Date(),
@@ -1161,7 +1167,7 @@ export class CalendarService {
   async deleteCompanyHoliday(workspaceId: string, membershipId: string, userRole: string, id: string) {
     const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
     if (!userCtx.canManageHolidays) {
-      throw new ForbiddenException('Only HR and Administrators can delete company holidays');
+      throw new ForbiddenException('Only Workspace Administrators and Owners can delete company holidays & festivals');
     }
 
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });

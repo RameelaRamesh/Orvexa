@@ -154,6 +154,8 @@ export class CalendarController {
     const userRole = (
       req.userContext?.accessRole ||
       req.membership?.accessRole ||
+      req.userContext?.roleName ||
+      req.membership?.role?.name ||
       'MEMBER'
     ).toString();
 
@@ -170,6 +172,8 @@ export class CalendarController {
     const userRole = (
       req.userContext?.accessRole ||
       req.membership?.accessRole ||
+      req.userContext?.roleName ||
+      req.membership?.role?.name ||
       'MEMBER'
     ).toString();
 

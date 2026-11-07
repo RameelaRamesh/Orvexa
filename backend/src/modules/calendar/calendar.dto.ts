@@ -159,6 +159,10 @@ export class CreateCompanyHolidayDto {
   @IsOptional()
   description?: string;
 
+  @IsString()
+  @IsOptional()
+  category?: string;
+
   @IsBoolean()
   @IsOptional()
   isOptional?: boolean;

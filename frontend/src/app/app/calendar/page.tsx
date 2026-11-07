@@ -33,6 +33,7 @@ import {
   HelpCircle,
   XCircle,
   Sparkles,
+  Trash2,
   LayoutGrid,
   PanelRight,
   Globe,
@@ -72,6 +73,8 @@ interface CalendarEvent {
   recurrence?: string;
   reminderMinutes?: number;
   canEdit?: boolean;
+  isCompany?: boolean;
+  category?: string;
   details?: Record<string, any>;
   _isFirstDay?: boolean;
   _isLastDay?: boolean;
@@ -186,10 +189,51 @@ export default function UnifiedCalendarPage() {
   const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
   const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
   const canSelectPeople = canViewWorkspace || roleUpper.includes('LEAD');
+  const [canManageHolidaysServer, setCanManageHolidaysServer] = useState<boolean | null>(null);
+  const canManageHolidays = canManageHolidaysServer ?? (['OWNER', 'ADMIN'].includes(roleUpper) || roleUpper.includes('OWNER') || roleUpper.includes('ADMIN'));
+
+  // Common Holidays & Festivals State
+  const [holidayList, setHolidayList] = useState<any[]>([]);
+  const [loadingHolidays, setLoadingHolidays] = useState(false);
+  const [holidayActiveTab, setHolidayActiveTab] = useState<'LIST' | 'ADD'>('LIST');
+  const [holidayFilterCategory, setHolidayFilterCategory] = useState<'ALL' | 'FESTIVAL' | 'PUBLIC' | 'COMPANY'>('ALL');
+
+  // Add Holiday Form State
+  const [newHolidayName, setNewHolidayName] = useState('');
+  const [newHolidayDate, setNewHolidayDate] = useState('');
+  const [newHolidayEndDate, setNewHolidayEndDate] = useState('');
+  const [newHolidayCategory, setNewHolidayCategory] = useState<'Festival' | 'Public Holiday' | 'Company Holiday' | 'Regional Observance'>('Festival');
+  const [newHolidayDesc, setNewHolidayDesc] = useState('');
+  const [newHolidayIsOptional, setNewHolidayIsOptional] = useState(false);
+  const [newHolidayIsWorkingDay, setNewHolidayIsWorkingDay] = useState(false);
+  const [isSubmittingHoliday, setIsSubmittingHoliday] = useState(false);
+
+  // Common Festival Presets
+  const COMMON_FESTIVAL_PRESETS = [
+    { name: 'Diwali (Deepavali)', month: 11, day: 8, category: 'Festival', desc: 'Festival of Lights holiday celebration' },
+    { name: 'Pongal / Makar Sankranti', month: 1, day: 14, category: 'Festival', desc: 'Traditional Harvest Festival' },
+    { name: 'Thiruvalluvar Day', month: 1, day: 15, category: 'Regional Observance', desc: 'Tamil cultural and literature observance' },
+    { name: 'Uzhavar Thirunal', month: 1, day: 16, category: 'Regional Observance', desc: 'Farmers festival observance' },
+    { name: 'Republic Day', month: 1, day: 26, category: 'Public Holiday', desc: 'National Holiday' },
+    { name: 'Tamil New Year (Puthandu)', month: 4, day: 14, category: 'Festival', desc: 'Tamil New Year & Dr. B.R. Ambedkar Jayanti' },
+    { name: 'Good Friday', month: 4, day: 3, category: 'Public Holiday', desc: 'Christian religious observance' },
+    { name: 'Eid al-Fitr (Ramzan)', month: 3, day: 31, category: 'Festival', desc: 'Islamic religious festival' },
+    { name: 'May Day (Labour Day)', month: 5, day: 1, category: 'Public Holiday', desc: 'International Workers Day' },
+    { name: 'Bakrid / Eid al-Adha', month: 6, day: 17, category: 'Festival', desc: 'Feast of the Sacrifice observance' },
+    { name: 'Independence Day', month: 8, day: 15, category: 'Public Holiday', desc: 'National Holiday celebrating Indian independence' },
+    { name: 'Ganesh Chaturthi', month: 9, day: 7, category: 'Festival', desc: 'Vinayakar Chathurthi celebration' },
+    { name: 'Milad-un-Nabi', month: 9, day: 16, category: 'Festival', desc: 'Prophet Birthday observance' },
+    { name: 'Gandhi Jayanti', month: 10, day: 2, category: 'Public Holiday', desc: 'National Holiday commemorating Mahatma Gandhi' },
+    { name: 'Ayutha Pooja', month: 10, day: 11, category: 'Festival', desc: 'Saraswati & Ayutha Pooja workplace blessing' },
+    { name: 'Vijaya Dasami (Dussehra)', month: 10, day: 12, category: 'Festival', desc: 'Triumph of light over darkness celebration' },
+    { name: 'Christmas Day', month: 12, day: 25, category: 'Festival', desc: 'Christmas celebration and holiday' },
+    { name: "New Year's Day", month: 1, day: 1, category: 'Public Holiday', desc: 'Celebration of the New Year' },
+    { name: 'Annual Company Day', month: 12, day: 15, category: 'Company Holiday', desc: 'Official Organization Foundation Day' },
+  ];
 
   // Create Event Form State
   const [formTitle, setFormTitle] = useState('');
-  const [formType, setFormType] = useState<'MEETING' | 'COMPANY_EVENT' | 'TASK' | 'SHIFT'>('MEETING');
+  const [formType, setFormType] = useState<'MEETING' | 'COMPANY_EVENT' | 'TASK' | 'SHIFT' | 'HOLIDAY'>('MEETING');
   const [formDescription, setFormDescription] = useState('');
   const [formStartDate, setFormStartDate] = useState('');
   const [formEndDate, setFormEndDate] = useState('');
@@ -250,6 +294,14 @@ export default function UnifiedCalendarPage() {
           if (prof.memberships[0].accessRole) setCurrentUserRole(prof.memberships[0].accessRole);
         }
       } catch {}
+    }
+
+    if (typeof window !== 'undefined') {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get('openHolidays') === 'true') {
+        setHolidayActiveTab('LIST');
+        setIsHolidayModalOpen(true);
+      }
     }
   }, []);
 
@@ -345,8 +397,15 @@ export default function UnifiedCalendarPage() {
       let allEvents: CalendarEvent[] = [];
 
       if (calRes && calRes.ok) {
-        const data = await calRes.json();
+        const rawJson = await calRes.json();
+        const data = rawJson.data || rawJson;
         allEvents = (data.events || []).filter((e: any) => !e.id?.startsWith('evt_seed_') && !e.id?.startsWith('task_seed_') && !e.id?.startsWith('leave_seed_') && !e.id?.startsWith('seed_') && !e.id?.includes('seed'));
+        if (data.metadata?.canManageHolidays !== undefined) {
+          setCanManageHolidaysServer(Boolean(data.metadata.canManageHolidays));
+        }
+        if (data.metadata?.userRole) {
+          setCurrentUserRole(data.metadata.userRole);
+        }
       } else {
         // Fallback to analytics calendar
         const fallbackRes = await fetch(`${BRANDING.apiUrl}/analytics/calendar?${params.toString()}`, { headers }).catch(() => null);
@@ -763,6 +822,31 @@ export default function UnifiedCalendarPage() {
 
     setIsSubmitting(true);
     try {
+      if (formType === 'HOLIDAY') {
+        const hRes = await fetch(`${BRANDING.apiUrl}/calendar/holidays`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${activeToken}`,
+            'x-workspace-id': activeWs,
+          },
+          body: JSON.stringify({
+            name: formTitle.trim(),
+            date: formStartDate,
+            endDate: formEndDate || formStartDate,
+            description: formDescription.trim(),
+            category: 'Festival',
+          }),
+        });
+        if (!hRes.ok) {
+          const err = await hRes.json().catch(() => ({}));
+          throw new Error(err.message || 'Failed to add holiday / festival');
+        }
+        toast.success(`Common Holiday / Festival "${formTitle.trim()}" added to organization calendar!`);
+        setIsCreateModalOpen(false);
+        fetchEvents();
+        return;
+      }
       const startIso = formAllDay
         ? new Date(`${formStartDate}T00:00:00.000Z`).toISOString()
         : new Date(`${formStartDate}T${formStartTime}:00.000Z`).toISOString();
@@ -874,6 +958,184 @@ export default function UnifiedCalendarPage() {
       toast.error('Error recording RSVP');
     }
   };
+
+  // Holidays & Festivals Handlers
+  const fetchHolidays = async () => {
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
+
+    setLoadingHolidays(true);
+    try {
+      const yr = currentDate.getFullYear();
+      const headers = {
+        Authorization: `Bearer ${activeToken}`,
+        'x-workspace-id': activeWs,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/holidays?year=${yr}`, { headers });
+      if (res.ok) {
+        const json = await res.json();
+        const data = json.data || json;
+        const pub = (data.publicHolidays || []).map((h: any) => ({
+          ...h,
+          isCompany: false,
+          category: 'Public Holiday / Festival',
+        }));
+        const comp = (data.companyHolidays || []).map((h: any) => ({
+          ...h,
+          isCompany: true,
+          category: h.category || 'Company Holiday',
+        }));
+        setHolidayList([...comp, ...pub]);
+      }
+    } catch (err) {
+      console.error('Failed to load holidays:', err);
+    } finally {
+      setLoadingHolidays(false);
+    }
+  };
+
+  const handleSelectPreset = (preset: typeof COMMON_FESTIVAL_PRESETS[0]) => {
+    const yr = currentDate.getFullYear();
+    const mm = String(preset.month).padStart(2, '0');
+    const dd = String(preset.day).padStart(2, '0');
+    setNewHolidayName(preset.name);
+    setNewHolidayDate(`${yr}-${mm}-${dd}`);
+    setNewHolidayEndDate(`${yr}-${mm}-${dd}`);
+    setNewHolidayCategory(preset.category as any);
+    setNewHolidayDesc(preset.desc);
+    toast.info(`Preset "${preset.name}" selected`);
+  };
+
+  const handleCreateHoliday = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!canManageHolidays) {
+      toast.error('Only Workspace Administrators and Owners can add holidays or festivals');
+      return;
+    }
+    if (!newHolidayName.trim() || !newHolidayDate) {
+      toast.error('Please enter holiday/festival name and date');
+      return;
+    }
+
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
+
+    setIsSubmittingHoliday(true);
+    try {
+      const headers = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${activeToken}`,
+        'x-workspace-id': activeWs,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/holidays`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: newHolidayName.trim(),
+          date: newHolidayDate,
+          endDate: newHolidayEndDate || newHolidayDate,
+          category: newHolidayCategory,
+          description: newHolidayDesc.trim(),
+          isOptional: newHolidayIsOptional,
+          isWorkingDay: newHolidayIsWorkingDay,
+        }),
+      });
+
+      const resData = await res.json();
+      if (!res.ok) {
+        throw new Error(resData.message || 'Failed to add holiday');
+      }
+
+      toast.success(`"${newHolidayName.trim()}" added to organization calendar!`);
+      setNewHolidayName('');
+      setNewHolidayDate('');
+      setNewHolidayEndDate('');
+      setNewHolidayDesc('');
+      setNewHolidayIsOptional(false);
+      setNewHolidayIsWorkingDay(false);
+      setHolidayActiveTab('LIST');
+      await fetchHolidays();
+      await fetchEvents();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to add holiday');
+    } finally {
+      setIsSubmittingHoliday(false);
+    }
+  };
+
+  const handleDeleteHoliday = async (id: string, name: string) => {
+    if (!canManageHolidays) {
+      toast.error('Only Workspace Administrators and Owners can delete holidays');
+      return;
+    }
+    if (!confirm(`Are you sure you want to remove "${name}" from company holidays?`)) {
+      return;
+    }
+
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
+
+    try {
+      const headers = {
+        Authorization: `Bearer ${activeToken}`,
+        'x-workspace-id': activeWs,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/holidays/${id}`, {
+        method: 'DELETE',
+        headers,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || 'Failed to delete holiday');
+      }
+
+      toast.success(`"${name}" removed from company calendar`);
+      setHolidayList((prev) => prev.filter((h) => h.id !== id));
+      await fetchEvents();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete holiday');
+    }
+  };
+
+  const displayedHolidays = useMemo(() => {
+    const baseList = holidayList.length > 0
+      ? holidayList
+      : events
+          .filter((e) => e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY')
+          .map((e) => ({
+            id: e.id,
+            name: e.title,
+            title: e.title,
+            date: e.startDate,
+            startDate: e.startDate,
+            description: e.description,
+            isCompany: e.status === 'COMPANY',
+            category: e.details?.category || (e.status === 'COMPANY' ? 'Company Holiday' : 'Public Holiday'),
+            isOptional: e.details?.isOptional,
+          }));
+
+    return baseList.filter((h) => {
+      if (holidayFilterCategory === 'ALL') return true;
+      const cat = (h.category || h.details?.category || '').toUpperCase();
+      const isCompany = h.isCompany || h.status === 'COMPANY';
+      if (holidayFilterCategory === 'FESTIVAL') {
+        const title = (h.title || h.name || '').toLowerCase();
+        return cat.includes('FESTIVAL') || title.includes('pongal') || title.includes('diwali') || title.includes('eid') || title.includes('christmas') || title.includes('chaturthi') || title.includes('pooja') || title.includes('dasami') || title.includes('puthandu');
+      }
+      if (holidayFilterCategory === 'PUBLIC') return !isCompany;
+      if (holidayFilterCategory === 'COMPANY') return isCompany;
+      return true;
+    });
+  }, [holidayList, events, holidayFilterCategory]);
+
+  useEffect(() => {
+    if (isHolidayModalOpen) {
+      fetchHolidays();
+    }
+  }, [isHolidayModalOpen, currentDate]);
 
   // Helper to check if a timestamp is UTC midnight (date-only with no scheduled time)
   const isMidnightUtc = (iso?: string | null) => {
@@ -1104,6 +1366,25 @@ export default function UnifiedCalendarPage() {
 
             {/* Quick Action Buttons */}
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setHolidayActiveTab('LIST');
+                  setIsHolidayModalOpen(true);
+                }}
+                className="text-xs h-8 gap-1.5 border-emerald-300 bg-emerald-50/70 hover:bg-emerald-100 text-emerald-800 font-medium shadow-2xs"
+                title="View recognized company holidays & regional festivals"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                Holidays & Festivals
+                {canManageHolidays && (
+                  <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.2 rounded font-semibold ml-0.5">
+                    Admin
+                  </span>
+                )}
+              </Button>
+
               <Button
                 size="sm"
                 onClick={() => {
@@ -1956,15 +2237,37 @@ export default function UnifiedCalendarPage() {
                     Holidays & Leave
                   </div>
                   <div className="space-y-2">
-                    {selectedHolidays.map((h) => (
-                      <div key={h.id} className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50 flex items-center gap-3">
-                        <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
-                        <div>
-                          <h4 className="text-xs font-bold text-emerald-900">{h.title}</h4>
-                          <p className="text-[10px] text-emerald-700">Official Tamil Nadu Public Holiday</p>
+                    {selectedHolidays.map((h) => {
+                      const isCompany = h.status === 'COMPANY' || h.isCompany;
+                      const cat = h.details?.category || (isCompany ? 'Company Holiday' : 'Public Holiday / Festival');
+                      return (
+                        <div key={h.id} className="p-3 rounded-xl border border-emerald-200 bg-emerald-50/50 flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <h4 className="text-xs font-bold text-emerald-900 truncate">{h.title}</h4>
+                                <Badge variant="outline" className="text-[9px] px-1 py-0 bg-white/80 border-emerald-300 text-emerald-800 shrink-0">
+                                  {cat}
+                                </Badge>
+                              </div>
+                              <p className="text-[10px] text-emerald-700 mt-0.5 truncate">
+                                {h.description || 'Recognized Organization Holiday Observance'}
+                              </p>
+                            </div>
+                          </div>
+                          {canManageHolidays && isCompany && (
+                            <button
+                              onClick={() => handleDeleteHoliday(h.id, h.title)}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors shrink-0"
+                              title="Delete Holiday"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                     {selectedLeaves.map((l) => (
                       <div key={l.id} className="p-3 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center gap-3">
                         <User className="w-4 h-4 text-amber-600 shrink-0" />
@@ -2046,6 +2349,9 @@ export default function UnifiedCalendarPage() {
                   >
                     <option value="MEETING">Meeting</option>
                     <option value="COMPANY_EVENT">Company Event</option>
+                    {canManageHolidays && (
+                      <option value="HOLIDAY">Common Holiday / Festival</option>
+                    )}
                     <option value="TASK">Task Deadline</option>
                     <option value="SHIFT">Work Shift</option>
                   </select>
@@ -2566,48 +2872,345 @@ export default function UnifiedCalendarPage() {
       )}
 
       {/* =========================================================================
-          TAMIL NADU & WORKSPACE HOLIDAY CALENDAR MODAL
+          COMMON HOLIDAYS & FESTIVALS MODAL
          ========================================================================= */}
       {isHolidayModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden border border-slate-200">
-            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden border border-slate-200">
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 bg-slate-50/60 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-bold text-slate-900">Tamil Nadu Public & Company Holidays</h3>
-                <p className="text-xs text-slate-500">Official recognized regional calendar for {year}</p>
+                <div className="flex items-center gap-2">
+                  <div className="h-7 w-7 rounded-lg bg-emerald-100 flex items-center justify-center text-emerald-700">
+                    <Sparkles className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-base font-bold text-slate-900">Common Holidays & Festivals</h3>
+                  {canManageHolidays ? (
+                    <Badge className="bg-emerald-600 text-white text-[10px] font-semibold">
+                      Owner & Admin Access
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-slate-500 text-[10px]">
+                      View Only
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Recognized public holidays, common regional festivals, and company observances for {year}
+                </p>
               </div>
-              <button onClick={() => setIsHolidayModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <button
+                onClick={() => setIsHolidayModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-3 divide-y divide-slate-100 text-xs">
-              {events
-                .filter((e) => e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY')
-                .map((h) => (
-                  <div key={h.id} className="pt-2.5 flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-slate-800">{h.title}</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{h.description}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-semibold text-slate-700">
-                        {new Date(h.startDate).toLocaleDateString('default', { month: 'short', day: 'numeric' })}
-                      </div>
-                      <Badge variant="outline" className="text-[10px] bg-emerald-50 text-emerald-700 border-emerald-200">
-                        {h.status === 'COMPANY' ? 'Company Holiday' : 'Public Holiday'}
-                      </Badge>
-                    </div>
-                  </div>
-                ))}
+            {/* Sub-Tabs: List vs Add (Add only if canManageHolidays) */}
+            <div className="px-6 pt-3 pb-2 border-b border-slate-100 flex items-center justify-between gap-3 bg-white">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setHolidayActiveTab('LIST')}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+                    holidayActiveTab === 'LIST'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  <CalendarDays className="w-3.5 h-3.5" />
+                  Recognized Calendar ({displayedHolidays.length})
+                </button>
+                {canManageHolidays && (
+                  <button
+                    onClick={() => setHolidayActiveTab('ADD')}
+                    className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5 ${
+                      holidayActiveTab === 'ADD'
+                        ? 'bg-emerald-600 text-white shadow-2xs'
+                        : 'text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Add Holiday / Festival
+                  </button>
+                )}
+              </div>
+
+              {holidayActiveTab === 'LIST' && (
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="text-slate-400">Category:</span>
+                  <select
+                    value={holidayFilterCategory}
+                    onChange={(e: any) => setHolidayFilterCategory(e.target.value)}
+                    className="border border-slate-200 rounded-md px-2 py-1 text-xs bg-white text-slate-700"
+                  >
+                    <option value="ALL">All Categories</option>
+                    <option value="FESTIVAL">Festivals</option>
+                    <option value="PUBLIC">Public Holidays</option>
+                    <option value="COMPANY">Company Holidays</option>
+                  </select>
+                </div>
+              )}
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
+            {/* Modal Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {holidayActiveTab === 'LIST' ? (
+                <div className="space-y-3">
+                  <div className="text-[11px] text-slate-500 flex items-center justify-between bg-slate-50 p-2.5 rounded-lg border border-slate-100">
+                    <span>
+                      {canManageHolidays
+                        ? 'As an Administrator/Owner, you can add new festival dates or remove company-specific holidays.'
+                        : 'Approved company holidays and regional festivals applicable to all work schedules.'}
+                    </span>
+                    {canManageHolidays && (
+                      <button
+                        onClick={() => setHolidayActiveTab('ADD')}
+                        className="text-emerald-700 font-semibold hover:underline text-xs shrink-0 ml-2"
+                      >
+                        + Add Festival
+                      </button>
+                    )}
+                  </div>
+
+                  {/* List of Holidays */}
+                  <div className="divide-y divide-slate-100">
+                    {displayedHolidays.length === 0 ? (
+                      <div className="text-center py-8 text-xs text-slate-400">
+                        {loadingHolidays ? 'Loading holiday calendar...' : 'No holidays or festivals found matching the selected filter.'}
+                      </div>
+                    ) : (
+                      displayedHolidays.map((h: any) => {
+                        const hDate = new Date(h.startDate || h.date);
+                        const isCompany = h.isCompany || h.status === 'COMPANY';
+                        const cat = h.category || h.details?.category || (isCompany ? 'Company Holiday' : 'Public Holiday / Festival');
+                        const titleLower = (h.title || h.name || '').toLowerCase();
+                        const isFestival = cat.toLowerCase().includes('festival') || titleLower.includes('pongal') || titleLower.includes('diwali') || titleLower.includes('eid') || titleLower.includes('christmas') || titleLower.includes('chaturthi') || titleLower.includes('pooja') || titleLower.includes('dasami') || titleLower.includes('puthandu');
+
+                        return (
+                          <div
+                            key={h.id}
+                            className="pt-2.5 pb-2 flex items-start justify-between gap-3 group hover:bg-slate-50/70 p-2 rounded-lg transition-colors"
+                          >
+                            <div className="flex items-start gap-3 min-w-0">
+                              <div
+                                className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 text-sm font-bold ${
+                                  isFestival
+                                    ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                                    : isCompany
+                                    ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                                    : 'bg-blue-100 text-blue-700 border border-blue-200'
+                                }`}
+                              >
+                                {isFestival ? '✨' : '📅'}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className="font-bold text-xs text-slate-800">{h.title || h.name}</span>
+                                  <Badge
+                                    variant="outline"
+                                    className={`text-[9px] px-1.5 py-0 font-medium ${
+                                      isFestival
+                                        ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                        : isCompany
+                                        ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                        : 'bg-blue-50 text-blue-800 border-blue-200'
+                                    }`}
+                                  >
+                                    {cat}
+                                  </Badge>
+                                  {h.isOptional && (
+                                    <Badge variant="outline" className="text-[9px] px-1.5 py-0 bg-purple-50 text-purple-700 border-purple-200">
+                                      Optional Leave
+                                    </Badge>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                  {h.description || 'Recognized Holiday Observance'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3 shrink-0 text-right">
+                              <div>
+                                <div className="font-semibold text-xs text-slate-800">
+                                  {hDate.toLocaleDateString('default', { month: 'short', day: 'numeric', weekday: 'short' })}
+                                </div>
+                                <div className="text-[10px] text-slate-400">
+                                  {hDate.getFullYear()}
+                                </div>
+                              </div>
+
+                              {canManageHolidays && isCompany && (
+                                <button
+                                  onClick={() => handleDeleteHoliday(h.id, h.title || h.name)}
+                                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors"
+                                  title="Delete Company Holiday"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              ) : (
+                /* TAB: ADD HOLIDAY / FESTIVAL (ADMIN & OWNER) */
+                <form onSubmit={handleCreateHoliday} className="space-y-4 text-xs">
+                  {/* Preset Festival Chips */}
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1.5 flex items-center justify-between">
+                      <span>Quick Select Common Festival / Holiday</span>
+                      <span className="text-[10px] text-slate-400 font-normal">Click to auto-fill form</span>
+                    </label>
+                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto p-2 bg-slate-50 rounded-xl border border-slate-200">
+                      {COMMON_FESTIVAL_PRESETS.map((p) => (
+                        <button
+                          key={p.name}
+                          type="button"
+                          onClick={() => handleSelectPreset(p)}
+                          className="px-2.5 py-1 text-[11px] font-medium rounded-lg bg-white border border-slate-200 hover:border-emerald-500 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 transition-all text-left flex items-center gap-1 shadow-2xs"
+                        >
+                          <Sparkles className="w-3 h-3 text-amber-500 shrink-0" />
+                          <span>{p.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Holiday / Festival Name <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={newHolidayName}
+                        onChange={(e) => setNewHolidayName(e.target.value)}
+                        placeholder="e.g. Diwali Festival"
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Category
+                      </label>
+                      <select
+                        value={newHolidayCategory}
+                        onChange={(e: any) => setNewHolidayCategory(e.target.value)}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white font-medium"
+                      >
+                        <option value="Festival">Festival</option>
+                        <option value="Public Holiday">Public Holiday</option>
+                        <option value="Company Holiday">Company Holiday</option>
+                        <option value="Regional Observance">Regional Observance</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Date <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        required
+                        value={newHolidayDate}
+                        onChange={(e) => setNewHolidayDate(e.target.value)}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        End Date <span className="text-slate-400 font-normal">(optional)</span>
+                      </label>
+                      <input
+                        type="date"
+                        value={newHolidayEndDate}
+                        onChange={(e) => setNewHolidayEndDate(e.target.value)}
+                        className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">Description / Notes</label>
+                    <input
+                      type="text"
+                      value={newHolidayDesc}
+                      onChange={(e) => setNewHolidayDesc(e.target.value)}
+                      placeholder="e.g. Festival of Lights holiday celebration for all departments"
+                      className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-emerald-500 bg-white"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-6 pt-1">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newHolidayIsOptional}
+                        onChange={(e) => setNewHolidayIsOptional(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5"
+                      />
+                      <span className="text-xs text-slate-700 font-medium">Optional / Restricted Holiday</span>
+                    </label>
+
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={newHolidayIsWorkingDay}
+                        onChange={(e) => setNewHolidayIsWorkingDay(e.target.checked)}
+                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5"
+                      />
+                      <span className="text-xs text-slate-700 font-medium">Working Day Observance</span>
+                    </label>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <button
+                      type="button"
+                      onClick={() => setHolidayActiveTab('LIST')}
+                      className="px-3 py-1.5 text-xs text-slate-600 hover:text-slate-900 rounded-lg"
+                    >
+                      Cancel
+                    </button>
+                    <Button
+                      type="submit"
+                      disabled={isSubmittingHoliday}
+                      size="sm"
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs gap-1.5 shadow-xs"
+                    >
+                      {isSubmittingHoliday ? (
+                        <>Adding...</>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5" />
+                          Add Holiday to Organization Calendar
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </form>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-xs">
+              <span className="text-[11px] text-slate-500">
+                Synced automatically across team schedules & attendance
+              </span>
               <button
                 onClick={() => setIsHolidayModalOpen(false)}
-                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700"
+                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-slate-800 text-white hover:bg-slate-900"
               >
-                Done
+                Close
               </button>
             </div>
           </div>
