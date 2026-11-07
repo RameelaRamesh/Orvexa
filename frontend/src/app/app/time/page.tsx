@@ -63,8 +63,17 @@ export default function TimeAttendancePage() {
   const [applyReason, setApplyReason] = useState('');
   const [submittingLeave, setSubmittingLeave] = useState(false);
 
-  // Filters & State
-  const [filterDate, setFilterDate] = useState<string>('');
+  // Helper to get local YYYY-MM-DD string
+  const getTodayDateString = () => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Filters & State - Defaults to Today's date
+  const [filterDate, setFilterDate] = useState<string>(getTodayDateString);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [isAttendanceDisabled, setIsAttendanceDisabled] = useState(false);
@@ -1618,9 +1627,13 @@ export default function TimeAttendancePage() {
                   <option value="LATE">Late Arrival</option>
                   <option value="HALF_DAY">Half Day</option>
                 </select>
-                {filterDate && (
+                {filterDate ? (
                   <Button variant="ghost" size="sm" onClick={() => setFilterDate('')} className="text-xs">
-                    Clear Date
+                    Clear Date (Show All)
+                  </Button>
+                ) : (
+                  <Button variant="ghost" size="sm" onClick={() => setFilterDate(getTodayDateString())} className="text-xs">
+                    Today
                   </Button>
                 )}
               </div>

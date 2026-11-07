@@ -450,18 +450,34 @@ export class TimeService {
       include: { breaks: true },
     });
 
-    const activeSession = allTodaySessions.find((s) => !s.clockOut) || null;
-    const latestSession = allTodaySessions[allTodaySessions.length - 1] || null;
+    // Pick up any ongoing session where user hasn't clocked out yet (timer continues across days)
+    const ongoingSession = await this.prisma.attendance.findFirst({
+      where: {
+        workspaceId,
+        membershipId,
+        clockOut: null,
+      },
+      orderBy: { clockIn: 'desc' },
+      include: { breaks: true },
+    });
+
+    const activeSession = ongoingSession || allTodaySessions.find((s) => !s.clockOut) || null;
+    const latestSession = allTodaySessions[allTodaySessions.length - 1] || activeSession || null;
+
+    const sessionsToCompute = [...allTodaySessions];
+    if (activeSession && !sessionsToCompute.some((s) => s.id === activeSession.id)) {
+      sessionsToCompute.unshift(activeSession);
+    }
 
     let totalWorkMinutesToday = 0;
     let totalBreakMinutesToday = 0;
 
-    for (const session of allTodaySessions) {
+    for (const session of sessionsToCompute) {
       totalBreakMinutesToday += session.totalBreakMinutes || 0;
       if (session.clockOut) {
         totalWorkMinutesToday += session.totalWorkMinutes || 0;
       } else {
-        // Compute in-progress work minutes for active session
+        // Compute in-progress work minutes for active session (timer continues!)
         const currentGross = Math.round((now.getTime() - new Date(session.clockIn).getTime()) / 60000);
         const currentNet = Math.max(0, currentGross - (session.totalBreakMinutes || 0));
         totalWorkMinutesToday += currentNet;
@@ -520,7 +536,7 @@ export class TimeService {
     return {
       ...representativeSession,
       todaySummary: summary,
-      allSessions: allTodaySessions,
+      allSessions: sessionsToCompute,
     };
   }
 
@@ -557,14 +573,8 @@ export class TimeService {
       const targetEnd = new Date(targetDate);
       targetEnd.setHours(23, 59, 59, 999);
       where.date = { gte: targetDate, lte: targetEnd };
-    } else {
-      // Default to today
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayEnd = new Date(today);
-      todayEnd.setHours(23, 59, 59, 999);
-      where.date = { gte: today, lte: todayEnd };
     }
+    // If no date query parameter is provided (e.g. Clear Date), return all records across dates
 
     if (query?.status) {
       where.status = query.status as AttendanceStatus;
@@ -741,91 +751,13 @@ export class TimeService {
   }
 
   // ---------------------------------------------------------------------------
-  // MISSED CHECKOUT AUTO-RESOLUTION & EXCEPTION HANDLING
+  // MISSED CHECKOUT AUTO-RESOLUTION & EXCEPTION HANDLING (DISABLED)
   // ---------------------------------------------------------------------------
 
   async autoCloseMissedCheckouts(workspaceId: string) {
-    const policy = await this.getAttendancePolicy(workspaceId);
-    const thresholdHours = policy.autoCloseMissedCheckoutHours || 16;
-    const cutoffTime = new Date(Date.now() - thresholdHours * 60 * 60 * 1000);
-
-    const abandonedSessions = await this.prisma.attendance.findMany({
-      where: {
-        workspaceId,
-        clockOut: null,
-        clockIn: { lt: cutoffTime },
-      },
-      include: { breaks: true },
-    });
-
-    for (const session of abandonedSessions) {
-      const openBreak = session.breaks.find((b) => !b.breakEnd);
-      if (openBreak) {
-        await this.prisma.attendanceBreak.update({
-          where: { id: openBreak.id },
-          data: {
-            breakEnd: new Date(new Date(openBreak.breakStart).getTime() + 60 * 60 * 1000),
-            durationMinutes: 60,
-          },
-        });
-      }
-
-      // Auto-set clock-out based on assigned shift end time or fullDayMinutes
-      const shift = await this.resolveMemberShift(workspaceId, session.membershipId);
-      let resolvedClockOut: Date;
-      if (shift && shift.endTime) {
-        const [endHour, endMinute] = shift.endTime.split(':').map(Number);
-        const shiftEndToday = new Date(session.clockIn);
-        shiftEndToday.setHours(endHour, endMinute, 0, 0);
-        if (shiftEndToday > new Date(session.clockIn)) {
-          resolvedClockOut = shiftEndToday;
-        } else {
-          resolvedClockOut = new Date(new Date(session.clockIn).getTime() + policy.fullDayMinutes * 60 * 1000);
-        }
-      } else {
-        resolvedClockOut = new Date(new Date(session.clockIn).getTime() + policy.fullDayMinutes * 60 * 1000);
-      }
-
-      const grossMinutes = Math.max(
-        0,
-        Math.round((resolvedClockOut.getTime() - new Date(session.clockIn).getTime()) / (1000 * 60)),
-      );
-      const totalBreaks = session.breaks.reduce((acc, b) => acc + (b.durationMinutes || 0), 0);
-      const netMinutes = Math.max(0, grossMinutes - totalBreaks);
-
-      const fullDayThreshold = policy.fullDayMinutes - (policy.gracePeriodMinutes || 15);
-      let resolvedStatus: AttendanceStatus;
-      if (netMinutes >= fullDayThreshold) {
-        resolvedStatus = session.status === AttendanceStatus.LATE ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
-      } else if (netMinutes >= policy.halfDayMinutes) {
-        resolvedStatus = AttendanceStatus.HALF_DAY;
-      } else {
-        resolvedStatus = AttendanceStatus.HALF_DAY;
-      }
-
-      await this.prisma.attendance.update({
-        where: { id: session.id },
-        data: {
-          clockOut: resolvedClockOut,
-          totalWorkMinutes: netMinutes,
-          totalBreakMinutes: totalBreaks,
-          status: resolvedStatus,
-          notes: `${session.notes || ''} [AUTO_CLOSED_MISSED_CHECKOUT]`.trim(),
-        },
-      });
-
-      // Send alert to employee
-      await this.sendAttendanceNotification(
-        workspaceId,
-        session.membershipId,
-        'Missed Checkout Auto-Resolved',
-        `Your shift session from ${session.clockIn.toLocaleDateString()} was automatically closed due to missing clock-out. Please review and submit a correction if necessary.`,
-        'WARNING',
-        `missed-checkout-${session.id}`,
-      );
-    }
-
-    return { resolvedCount: abandonedSessions.length };
+    // Disabled / Killed per operational requirement: If an employee does not check out,
+    // the session is not auto-closed; the timer continues running indefinitely until manual checkout.
+    return { resolvedCount: 0 };
   }
 
   // ---------------------------------------------------------------------------

@@ -407,34 +407,10 @@ describe('PHASE 6: Complete Attendance and Time Management Acceptance Suite', ()
   // =========================================================================
   // 6. MISSED CHECKOUT AUTO-RESOLUTION
   // =========================================================================
-  describe('Requirement 9: Missed Checkout Detection & Resolution', () => {
-    it('autoCloseMissedCheckouts should auto-cap abandoned sessions past cutoff threshold', async () => {
-      const abandoned = {
-        id: 'att_abandoned',
-        workspaceId: 'ws_alpha',
-        membershipId: 'mem_forgot',
-        clockIn: new Date(Date.now() - 20 * 3600 * 1000), // 20 hours ago (> 16h threshold)
-        clockOut: null,
-        breaks: [],
-      };
-
-      mockPrisma.attendance.findMany.mockResolvedValue([abandoned]);
-      mockPrisma.attendance.update.mockResolvedValue({
-        id: 'att_abandoned',
-        status: AttendanceStatus.PRESENT,
-      });
-
+  describe('Requirement 9: Missed Checkout Detection & Resolution (Disabled)', () => {
+    it('autoCloseMissedCheckouts should remain disabled so unclosed sessions continue running', async () => {
       const report = await timeService.autoCloseMissedCheckouts('ws_alpha');
-
-      expect(report.resolvedCount).toBe(1);
-      expect(mockPrisma.attendance.update).toHaveBeenCalledWith({
-        where: { id: 'att_abandoned' },
-        data: expect.objectContaining({
-          status: AttendanceStatus.PRESENT,
-          notes: expect.stringContaining('[AUTO_CLOSED_MISSED_CHECKOUT]'),
-        }),
-      });
-      expect(mockPrisma.notification.create).toHaveBeenCalled();
+      expect(report.resolvedCount).toBe(0);
     });
   });
 
