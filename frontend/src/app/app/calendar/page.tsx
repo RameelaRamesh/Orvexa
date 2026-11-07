@@ -771,6 +771,7 @@ export default function UnifiedCalendarPage() {
 
     for (const evt of events) {
       if (!evt.startDate) continue;
+      const isMeeting = evt.layer === 'MEETINGS' || evt.type === 'MEETING';
       const isAllDayEvt = Boolean(
         evt.allDay ||
         evt.layer === 'HOLIDAYS' ||
@@ -781,6 +782,18 @@ export default function UnifiedCalendarPage() {
       const startKey = parseDayKey(evt.startDate, isAllDayEvt);
       const endKey = parseDayKey(evt.endDate || evt.startDate, isAllDayEvt);
       if (!startKey) continue;
+
+      // MEETINGS ONLY OCCUR ON THEIR SCHEDULED START DATE (Never repeat across multi-day span)
+      if (isMeeting) {
+        if (!map[startKey]) map[startKey] = [];
+        map[startKey].push({
+          ...evt,
+          _isFirstDay: true,
+          _isLastDay: true,
+          _isMultiDay: false,
+        });
+        continue;
+      }
 
       const startDateObj = keyToDate(startKey);
       const endDateObj = keyToDate(endKey || startKey);
@@ -998,8 +1011,8 @@ export default function UnifiedCalendarPage() {
         : new Date(`${formStartDate}T${formStartTime}:00.000Z`).toISOString();
 
       const endIso = formAllDay
-        ? new Date(`${formEndDate || formStartDate}T00:00:00.000Z`).toISOString()
-        : new Date(`${formEndDate || formStartDate}T${formEndTime}:00.000Z`).toISOString();
+        ? new Date(`${formStartDate}T00:00:00.000Z`).toISOString()
+        : new Date(`${formStartDate}T${formEndTime}:00.000Z`).toISOString();
 
       const payload = {
         title: formTitle.trim(),
@@ -1243,6 +1256,37 @@ export default function UnifiedCalendarPage() {
       await fetchEvents();
     } catch (err: any) {
       toast.error(err.message || 'Failed to delete holiday');
+    }
+  };
+
+  const handleDeleteEvent = async (id: string, title: string) => {
+    if (!confirm(`Are you sure you want to delete "${title}"?`)) {
+      return;
+    }
+    const activeToken = token || (typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null);
+    const activeWs = wsId || (typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null);
+    if (!activeToken || !activeWs) return;
+
+    try {
+      const headers = {
+        Authorization: `Bearer ${activeToken}`,
+        'x-workspace-id': activeWs,
+      };
+      const res = await fetch(`${BRANDING.apiUrl}/calendar/events/${id}`, {
+        method: 'DELETE',
+        headers,
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.message || 'Failed to delete event');
+      }
+
+      toast.success(`"${title}" deleted successfully`);
+      setIsEventDetailOpen(false);
+      setSelectedEvent(null);
+      await fetchEvents();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete event');
     }
   };
 
@@ -2271,24 +2315,39 @@ export default function UnifiedCalendarPage() {
                         onClick={() => { setSelectedEvent(m); setIsEventDetailOpen(true); }}
                         className="p-3 rounded-xl border border-slate-200/90 hover:border-blue-300 hover:shadow-xs transition-all cursor-pointer bg-white group flex items-center justify-between"
                       >
-                        <div className="flex items-start gap-3">
+                        <div className="flex items-start gap-3 min-w-0 flex-1">
                           <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
                             <Users className="w-4 h-4" />
                           </div>
-                          <div>
-                            <h4 className="text-xs font-bold text-slate-900 group-hover:text-blue-600 transition-colors">
+                          <div className="min-w-0 flex-1">
+                            <h4 className="text-xs font-bold text-slate-900 group-hover:text-blue-600 transition-colors truncate">
                               {m.title}
                             </h4>
                             <p className="text-[11px] text-slate-500 font-medium mt-0.5">
                               {formatTimeRange(m.startDate, m.endDate)}
                             </p>
-                            <p className="text-[10px] text-slate-400 mt-0.5">
+                            <p className="text-[10px] text-slate-400 mt-0.5 truncate">
                               {m.teamName || (m.organizer?.name ? `Organized by ${m.organizer.name}` : 'Team Meeting')}
                               {m.participants && m.participants.length > 0 && ` • ${m.participants.length} participant${m.participants.length > 1 ? 's' : ''}`}
                             </p>
                           </div>
                         </div>
-                        <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 group-hover:translate-x-0.5 transition-all" />
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {(m.canEdit || m.organizer?.id === currentMembershipId || canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteEvent(m.id, m.title);
+                              }}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                              title="Delete Meeting"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-blue-500 group-hover:translate-x-0.5 transition-all" />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -2715,7 +2774,7 @@ export default function UnifiedCalendarPage() {
                     value={formStartDate}
                     onChange={(e) => {
                       setFormStartDate(e.target.value);
-                      if (!formEndDate) setFormEndDate(e.target.value);
+                      setFormEndDate(e.target.value);
                     }}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none bg-white"
                   />
@@ -3270,13 +3329,26 @@ export default function UnifiedCalendarPage() {
             </div>
 
             {/* Modal Footer */}
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end">
-              <button
-                onClick={() => setIsEventDetailOpen(false)}
-                className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100"
-              >
-                Close
-              </button>
+            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+              {(selectedEvent.canEdit || selectedEvent.organizer?.id === currentMembershipId || canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')) &&
+               !selectedEvent.id.startsWith('task-') && !selectedEvent.id.startsWith('pub_') && !selectedEvent.id.startsWith('leave-') ? (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteEvent(selectedEvent.id, selectedEvent.title)}
+                  className="px-3 py-1.5 text-xs font-semibold rounded-lg text-rose-600 hover:bg-rose-50 border border-rose-200 flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Delete Event
+                </button>
+              ) : <div />}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setIsEventDetailOpen(false)}
+                  className="px-4 py-1.5 text-xs font-semibold rounded-lg bg-white border border-slate-200 text-slate-700 hover:bg-slate-100 cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

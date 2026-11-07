@@ -265,13 +265,27 @@ export class CalendarService {
       const isOrganizer = evt.organizerMembershipId === membershipId;
       const canEdit = isOrganizer || userCtx.isOwnerOrAdmin;
 
+      let safeEndDate = evt.endDate;
+      if (isMeeting && evt.startDate && evt.endDate) {
+        const sD = new Date(evt.startDate);
+        const eD = new Date(evt.endDate);
+        if (sD.toDateString() !== eD.toDateString()) {
+          const fixed = new Date(sD);
+          fixed.setHours(eD.getHours(), eD.getMinutes(), eD.getSeconds(), eD.getMilliseconds());
+          if (fixed <= sD) {
+            fixed.setTime(sD.getTime() + 30 * 60 * 1000);
+          }
+          safeEndDate = fixed.toISOString();
+        }
+      }
+
       events.push({
         id: evt.id,
         title: evt.title,
         type: evt.type || 'MEETING',
         layer: isMeeting ? 'MEETINGS' : 'COMPANY_EVENTS',
         startDate: evt.startDate,
-        endDate: evt.endDate,
+        endDate: safeEndDate,
         allDay: Boolean(evt.allDay),
         status: evt.status || 'CONFIRMED',
         color: isMeeting ? '#3b82f6' : '#ec4899',
@@ -500,12 +514,16 @@ export class CalendarService {
     for (const ch of cleanCompanyHolidays) {
       const cDate = new Date(ch.date);
       if (cDate >= start && cDate <= end) {
-        const startStr = typeof ch.date === 'string'
-          ? (ch.date.includes('T') ? ch.date : `${ch.date}T00:00:00.000Z`)
-          : cDate.toISOString();
-        const endStr = ch.endDate
-          ? (typeof ch.endDate === 'string' && !ch.endDate.includes('T') ? `${ch.endDate}T00:00:00.000Z` : ch.endDate)
-          : startStr;
+        const rawStartDate = typeof ch.date === 'string' ? ch.date : cDate.toISOString();
+        const startDateOnly = rawStartDate.includes('T') ? rawStartDate.split('T')[0] : rawStartDate;
+        const startStr = `${startDateOnly}T00:00:00.000Z`;
+
+        let endStr = startStr;
+        if (ch.endDate) {
+          const rawEndDate = typeof ch.endDate === 'string' ? ch.endDate : new Date(ch.endDate).toISOString();
+          const endDateOnly = rawEndDate.includes('T') ? rawEndDate.split('T')[0] : rawEndDate;
+          endStr = `${endDateOnly}T00:00:00.000Z`;
+        }
 
         events.push({
           id: `comp_hol_${ch.id}`,
@@ -980,12 +998,19 @@ export class CalendarService {
     const settings = (ws?.settings as Record<string, any>) || {};
     const events: any[] = settings.calendarEvents || [];
 
-    const existing = events.find((e) => e.id === eventId);
+    let existing = events.find((e) => e.id === eventId);
+    if (!existing) {
+      try {
+        const ime = await (this.prisma as any).calendarEvent.findUnique({ where: { id: eventId } });
+        if (ime) existing = ime;
+      } catch {}
+    }
+
     if (!existing) {
       throw new NotFoundException(`Calendar event with id ${eventId} not found`);
     }
 
-    if (existing.organizerMembershipId !== membershipId && !userCtx.isOwnerOrAdmin) {
+    if (existing.organizerMembershipId && existing.organizerMembershipId !== membershipId && !userCtx.isOwnerOrAdmin) {
       throw new ForbiddenException('Only the organizer or an administrator can delete this event');
     }
 
@@ -1000,6 +1025,10 @@ export class CalendarService {
         },
       },
     }).catch(() => null);
+
+    try {
+      await (this.prisma as any).calendarEvent.deleteMany({ where: { id: eventId } });
+    } catch {}
 
     // Notify participants
     if (existing.participants) {
