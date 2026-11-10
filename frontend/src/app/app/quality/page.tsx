@@ -7,12 +7,14 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Award, Plus, ShieldCheck, AlertOctagon, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { checkPermission } from '@/lib/permissions';
 
 export default function QualityPage() {
   const [reviews, setReviews] = useState<any[]>([]);
   const [workItems, setWorkItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
 
   const [reviewForm, setReviewForm] = useState({
     workItemId: '',
@@ -28,10 +30,20 @@ export default function QualityPage() {
   const loadData = async () => {
     if (!token || !wsId) return;
     try {
-      const [revRes, wiRes] = await Promise.all([
+      const [revRes, wiRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/quality`, { headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId } }),
         fetch(`${BRANDING.apiUrl}/work-items`, { headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId } }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId } }).catch(() => null),
       ]);
+
+      if (meRes && meRes.ok) {
+        const meJson = await meRes.json().catch(() => null);
+        const me = meJson?.data !== undefined ? meJson.data : meJson;
+        if (me?.memberships) {
+          const liveMem = me.memberships.find((m: any) => m.workspaceId === wsId) || me.memberships[0];
+          if (liveMem) setCurrentMembership(liveMem);
+        }
+      }
 
       const revData = await revRes.json();
       const wiData = await wiRes.json();
@@ -46,8 +58,14 @@ export default function QualityPage() {
   };
 
   useEffect(() => {
+    try {
+      const wsCache = localStorage.getItem('orvexa_cached_workspace');
+      if (wsCache) setCurrentMembership(JSON.parse(wsCache));
+    } catch {}
     loadData();
   }, []);
+
+  const canManageQuality = checkPermission(currentMembership, 'quality:manage');
 
   const handleSubmitReview = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -80,9 +98,11 @@ export default function QualityPage() {
             <CardTitle>Quality Audit History</CardTitle>
             <CardDescription>Scorecards submitted across operational work items</CardDescription>
           </div>
-          <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
-            <Plus className="h-4 w-4" /> Conduct Quality Audit
-          </Button>
+          {canManageQuality && (
+            <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
+              <Plus className="h-4 w-4" /> Conduct Quality Audit
+            </Button>
+          )}
         </CardHeader>
         <CardContent>
           <div className="overflow-x-auto">

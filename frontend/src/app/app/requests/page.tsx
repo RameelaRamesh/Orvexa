@@ -30,6 +30,7 @@ import {
   UserCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { checkPermission } from '@/lib/permissions';
 
 interface RequestCategory {
   id: string;
@@ -234,6 +235,7 @@ export default function RequestsPage() {
     MEMBER: DEFAULT_ROLE_GROUPS.MEMBER,
   });
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [currentRole, setCurrentRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER'>('MEMBER');
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
@@ -364,6 +366,7 @@ export default function RequestsPage() {
           }
           const mem = meData.data.memberships?.find((m: any) => m.workspaceId === targetWsId) || meData.data.memberships?.[0];
           if (mem) {
+            setCurrentMembership(mem);
             setCurrentMembershipId(mem.id);
             if (mem.accessRole) {
               setCurrentRole(mem.accessRole.toUpperCase() as any);
@@ -430,6 +433,7 @@ export default function RequestsPage() {
     OWNER: 4,
   };
   const myLevel = roleHierarchy[currentRole] || 1;
+  const canManageRequestSettings = checkPermission(currentMembership, 'settings:manage');
 
   // Handle Create Request Submit (Requirement 1 & 2)
   const handleFormSubmit = async (e: React.FormEvent) => {
@@ -1248,10 +1252,12 @@ export default function RequestsPage() {
             <p className="text-xs text-muted-foreground">
               Request types and categories configured for this organization.
             </p>
-            <Button size="sm" onClick={() => setShowCategoryModal(true)}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />
-              Add Request Category
-            </Button>
+            {canManageRequestSettings && (
+              <Button size="sm" onClick={() => setShowCategoryModal(true)}>
+                <Plus className="mr-1.5 h-3.5 w-3.5" />
+                Add Request Category
+              </Button>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

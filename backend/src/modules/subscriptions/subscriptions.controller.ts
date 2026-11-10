@@ -2,10 +2,12 @@ import { Controller, Get, Post, Body, UseGuards, Headers, Req, BadRequestExcepti
 import { SubscriptionsService } from './subscriptions.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
+import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { Public } from '../../common/decorators/public.decorator';
 
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('subscriptions')
 export class SubscriptionsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
@@ -22,6 +24,7 @@ export class SubscriptionsController {
   }
 
   @Post('checkout')
+  @RequirePermissions('billing:manage')
   async createCheckoutOrder(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: { planId: string; billingCycle: 'monthly' | 'yearly' },
@@ -30,6 +33,7 @@ export class SubscriptionsController {
   }
 
   @Post('verify')
+  @RequirePermissions('billing:manage')
   async verifyPayment(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: { orderId: string; paymentId: string; signature: string; planId: string },
@@ -38,6 +42,7 @@ export class SubscriptionsController {
   }
 
   @Post('cancel')
+  @RequirePermissions('billing:manage')
   async cancelSubscription(@CurrentWorkspace() workspaceId: string) {
     return this.subscriptionsService.cancelSubscription(workspaceId);
   }

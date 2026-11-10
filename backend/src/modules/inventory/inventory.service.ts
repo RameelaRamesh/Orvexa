@@ -4,6 +4,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { buildUserContextFromMembership, hasPermission } from '../../common/utils/access-scope.util';
 
 export interface StockLocation {
   id: string;
@@ -498,9 +499,14 @@ export class InventoryService {
         status: 'ACTIVE',
         accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] },
       },
+      include: { role: { include: { permissions: { include: { permission: true } } } } },
     });
 
-    for (const m of managers) {
+    for (const m of (managers || [])) {
+      if (m.role?.permissions && m.accessRole !== 'OWNER') {
+        const ctx = buildUserContextFromMembership(m);
+        if (!hasPermission(ctx, ['inventory:manage', 'inventory:move'])) continue;
+      }
       await this.prisma.notification.create({
         data: {
           workspaceId,

@@ -5,6 +5,12 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  hasPermission,
+  isTargetWithinScope,
+  resolveEffectiveScope,
+  resolveLedTeamIds,
+} from '../../common/utils/access-scope.util';
 
 export interface DateFilter {
   startDate?: string;
@@ -87,6 +93,79 @@ export class AnalyticsService {
     };
   }
 
+  private async resolveAnalyticsMemberIds(
+    workspaceId: string,
+    membershipId: string,
+    userRole: string,
+    filters: { memberId?: string; departmentId?: string; teamId?: string; scope?: string },
+    userContext?: any,
+  ): Promise<{ mode: 'ALL' | 'SINGLE' | 'LIST'; memberId?: string; memberIds?: string[] }> {
+    const scopeUpper = (filters.scope || '').toUpperCase();
+    if (scopeUpper === 'MY_DATA') {
+      return { mode: 'SINGLE', memberId: membershipId, memberIds: [membershipId] };
+    }
+
+    // Preserve direct unit test behavior when userContext is omitted
+    if (!userContext) {
+      const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
+      if (!isManagerOrAdmin) return { mode: 'SINGLE', memberId: membershipId, memberIds: [membershipId] };
+      if (filters.memberId) return { mode: 'SINGLE', memberId: filters.memberId, memberIds: [filters.memberId] };
+      return { mode: 'ALL' };
+    }
+
+    const canViewReports = userContext.accessRole === 'OWNER' || hasPermission(userContext, 'reports:view');
+    const effectiveScope = userContext.accessRole === 'OWNER'
+      ? 'GLOBAL'
+      : !canViewReports
+      ? 'ASSIGNED'
+      : resolveEffectiveScope(userContext);
+
+    if (effectiveScope === 'ASSIGNED') {
+      return { mode: 'SINGLE', memberId: membershipId, memberIds: [membershipId] };
+    }
+
+    if (effectiveScope === 'GLOBAL') {
+      if (filters.memberId) return { mode: 'SINGLE', memberId: filters.memberId, memberIds: [filters.memberId] };
+      if (filters.departmentId || filters.teamId) {
+        const members = await this.prisma.membership.findMany({
+          where: {
+            workspaceId,
+            status: 'ACTIVE',
+            ...(filters.departmentId ? { departmentId: filters.departmentId } : {}),
+            ...(filters.teamId ? { teamId: filters.teamId } : {}),
+          },
+          select: { id: true },
+        });
+        const ids = (members || []).map((m: any) => m.id).filter(Boolean);
+        return { mode: 'LIST', memberIds: ids.length > 0 ? ids : ['__none__'] };
+      }
+      return { mode: 'ALL' };
+    }
+
+    // Scoped to TEAM or DEPARTMENT: Tech TL only gets Tech metrics; Dept Lead gets Dept metrics
+    const [members, ledTeamIds] = await Promise.all([
+      this.prisma.membership.findMany({
+        where: { workspaceId, status: 'ACTIVE' },
+        select: { id: true, departmentId: true, teamId: true, reportsToId: true },
+      }),
+      resolveLedTeamIds(this.prisma, workspaceId, membershipId),
+    ]);
+    const allowedIds = Array.from(new Set([
+      membershipId,
+      ...(members || [])
+        .filter((m: any) => isTargetWithinScope(userContext, m, ledTeamIds))
+        .map((m: any) => m.id),
+    ].filter(Boolean)));
+
+    if (filters.memberId) {
+      return allowedIds.includes(filters.memberId)
+        ? { mode: 'SINGLE', memberId: filters.memberId, memberIds: [filters.memberId] }
+        : { mode: 'LIST', memberIds: ['__none__'] };
+    }
+
+    return { mode: 'LIST', memberIds: allowedIds };
+  }
+
   // ---------------------------------------------------------------------------
   // OVERVIEW METRICS ENGINE
   // ---------------------------------------------------------------------------
@@ -104,35 +183,27 @@ export class AnalyticsService {
       priority?: string;
       scope?: string;
     } = {},
+    userContext?: any,
   ) {
-    const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
-
     // Date Range Scoping
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const end = filters.endDate ? new Date(filters.endDate) : new Date();
     // Ensure end date covers end of that day
     end.setHours(23, 59, 59, 999);
 
-    let targetMembershipId: string | undefined = undefined;
-    const scopeUpper = (filters.scope || '').toUpperCase();
-    if (scopeUpper === 'MY_DATA') {
-      targetMembershipId = membershipId;
-    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
-      targetMembershipId = undefined;
-    } else if (filters.memberId && isManagerOrAdmin) {
-      targetMembershipId = filters.memberId;
-    } else if (!isManagerOrAdmin) {
-      targetMembershipId = membershipId;
-    }
+    const scopeRes = await this.resolveAnalyticsMemberIds(workspaceId, membershipId, userRole, filters, userContext);
+    const applyMemFilter = (field: string) => {
+      if (scopeRes.mode === 'SINGLE' && scopeRes.memberId) return { [field]: scopeRes.memberId };
+      if (scopeRes.mode === 'LIST' && scopeRes.memberIds) return { [field]: { in: scopeRes.memberIds } };
+      return {};
+    };
 
     // 1. Task Queries
     const taskWhere: any = {
       workspaceId,
       createdAt: { gte: start, lte: end },
+      ...applyMemFilter('assigneeMembershipId'),
     };
-    if (targetMembershipId) {
-      taskWhere.assigneeMembershipId = targetMembershipId;
-    }
     if (filters.status && filters.status !== 'ALL') {
       taskWhere.status = filters.status;
     }
@@ -140,7 +211,7 @@ export class AnalyticsService {
       taskWhere.priority = filters.priority;
     }
 
-    const [allTasks, totalMembersCount, activeProjectsCount, totalProjectsCount] = await Promise.all([
+    const [allTasks, totalMembersCount] = await Promise.all([
       this.prisma.task.findMany({
         where: taskWhere,
         select: {
@@ -151,20 +222,46 @@ export class AnalyticsService {
           createdAt: true,
         },
       }),
-      this.prisma.membership.count({
-        where: { workspaceId, status: 'ACTIVE' },
-      }),
-      this.prisma.project?.count
-        ? this.prisma.project.count({
-            where: { workspaceId, status: { notIn: ['COMPLETED', 'CANCELLED'] } },
-          })
-        : Promise.resolve(0),
-      this.prisma.project?.count
-        ? this.prisma.project.count({
-            where: { workspaceId },
-          })
-        : Promise.resolve(0),
+      scopeRes.mode === 'LIST' && scopeRes.memberIds
+        ? Promise.resolve(scopeRes.memberIds.filter((id) => id !== '__none__').length)
+        : scopeRes.mode === 'SINGLE'
+        ? Promise.resolve(1)
+        : this.prisma.membership.count({
+            where: { workspaceId, status: 'ACTIVE' },
+          }),
     ]);
+    let activeProjectsCount = 0;
+    let totalProjectsCount = 0;
+    if (scopeRes.mode === 'ALL') {
+      if (this.prisma.project?.count) {
+        [activeProjectsCount, totalProjectsCount] = await Promise.all([
+          this.prisma.project.count({ where: { workspaceId, status: { notIn: ['COMPLETED', 'CANCELLED'] } } }),
+          this.prisma.project.count({ where: { workspaceId } }),
+        ]);
+      }
+    } else if (this.prisma.project?.findMany) {
+      const allowedIdSet = new Set(scopeRes.memberIds || []);
+      const [rawProj, ws] = await Promise.all([
+        this.prisma.project.findMany({
+          where: { workspaceId },
+          include: { tasks: { select: { assigneeMembershipId: true } } },
+        }),
+        this.prisma.workspace?.findUnique
+          ? this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } }).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+      const allMeta = ((ws?.settings as any)?.projectMetadata || {}) as Record<string, any>;
+      const effScope = userContext ? resolveEffectiveScope(userContext) : 'ASSIGNED';
+      const visibleProj = (rawProj || []).filter((p: any) => {
+        const meta = allMeta[p.id] || {};
+        if (meta.managerMembershipId && allowedIdSet.has(meta.managerMembershipId)) return true;
+        if (Array.isArray(meta.memberMembershipIds) && meta.memberMembershipIds.some((id: string) => allowedIdSet.has(id))) return true;
+        if (effScope === 'DEPARTMENT' && userContext?.departmentId && meta.departmentId === userContext.departmentId) return true;
+        return Array.isArray(p.tasks) && p.tasks.some((tk: any) => tk.assigneeMembershipId && allowedIdSet.has(tk.assigneeMembershipId));
+      });
+      totalProjectsCount = visibleProj.length;
+      activeProjectsCount = visibleProj.filter((p: any) => p.status !== 'COMPLETED' && p.status !== 'CANCELLED').length;
+    }
 
     const totalTasks = allTasks.length;
     const completedTasks = allTasks.filter((t) => t.status === 'COMPLETED').length;
@@ -182,10 +279,8 @@ export class AnalyticsService {
     const workItemWhere: any = {
       workspaceId,
       createdAt: { gte: start, lte: end },
+      ...applyMemFilter('assignedMembershipId'),
     };
-    if (targetMembershipId) {
-      workItemWhere.assignedMembershipId = targetMembershipId;
-    }
 
     const workItems = await this.prisma.workItem.findMany({
       where: workItemWhere,
@@ -210,10 +305,8 @@ export class AnalyticsService {
     const attendanceWhere: any = {
       workspaceId,
       date: { gte: start, lte: end },
+      ...applyMemFilter('membershipId'),
     };
-    if (targetMembershipId) {
-      attendanceWhere.membershipId = targetMembershipId;
-    }
 
     const attendances = await this.prisma.attendance.findMany({
       where: attendanceWhere,
@@ -241,6 +334,7 @@ export class AnalyticsService {
       where: {
         workspaceId,
         date: { gte: startOfToday, lte: endOfToday },
+        ...applyMemFilter('membershipId'),
       },
       select: {
         id: true,
@@ -257,10 +351,8 @@ export class AnalyticsService {
       workspaceId,
       startDate: { lte: end },
       endDate: { gte: start },
+      ...applyMemFilter('membershipId'),
     };
-    if (targetMembershipId) {
-      leaveWhere.membershipId = targetMembershipId;
-    }
 
     const leaveRequests = await this.prisma.leaveRequest.findMany({
       where: leaveWhere,
@@ -287,15 +379,31 @@ export class AnalyticsService {
       reviewedAt: { gte: start, lte: end },
     };
 
-    const qualityReviews = await this.prisma.qualityReview.findMany({
-      where: qualityWhere,
-      select: {
-        id: true,
-        score: true,
-        maxScore: true,
-        passStatus: true,
-      },
-    });
+    const rawQualityReviews: any[] =
+      scopeRes.mode === 'ALL'
+        ? await this.prisma.qualityReview.findMany({
+            where: qualityWhere,
+            select: {
+              id: true,
+              score: true,
+              maxScore: true,
+              passStatus: true,
+            },
+          })
+        : await this.prisma.qualityReview.findMany({
+            where: qualityWhere,
+            include: {
+              workItem: { select: { assignedMembershipId: true } },
+            },
+          });
+    const allowedIdSet = scopeRes.memberIds ? new Set(scopeRes.memberIds) : null;
+    const qualityReviews =
+      scopeRes.mode === 'ALL' || !allowedIdSet
+        ? rawQualityReviews
+        : rawQualityReviews.filter((q: any) =>
+            allowedIdSet.has(q.reviewerMembershipId) ||
+            (q.workItem?.assignedMembershipId && allowedIdSet.has(q.workItem.assignedMembershipId)),
+          );
 
     const totalQualityReviews = qualityReviews.length;
     const sumQualityScores = qualityReviews.reduce((acc, q) => acc + (q.score / (q.maxScore || 100)) * 100, 0);
@@ -311,7 +419,10 @@ export class AnalyticsService {
 
     // 6. Assets & Inventory
     const assets = await this.prisma.asset.findMany({
-      where: { workspaceId },
+      where: {
+        workspaceId,
+        ...applyMemFilter('assignedToMembershipId'),
+      },
       select: {
         id: true,
         status: true,
@@ -405,16 +516,19 @@ export class AnalyticsService {
       layers?: string[];
       memberId?: string;
     } = {},
+    userContext?: any,
   ) {
-    const roleUpper = (userRole || '').toUpperCase();
-    const isManagerOrAdmin = 
-      ['OWNER', 'ADMIN', 'MANAGER', 'HR', 'TEAM_LEAD', 'LEAD'].some((r) => roleUpper.includes(r));
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     start.setHours(0, 0, 0, 0);
     const end = filters.endDate ? new Date(filters.endDate) : new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0, 23, 59, 59);
     end.setHours(23, 59, 59, 999);
 
-    const targetMembershipId = filters.memberId ? filters.memberId : (isManagerOrAdmin ? undefined : undefined);
+    const scopeRes = await this.resolveAnalyticsMemberIds(workspaceId, membershipId, userRole, filters, userContext);
+    const applyMemFilter = (field: string) => {
+      if (scopeRes.mode === 'SINGLE' && scopeRes.memberId) return { [field]: scopeRes.memberId };
+      if (scopeRes.mode === 'LIST' && scopeRes.memberIds) return { [field]: { in: scopeRes.memberIds } };
+      return {};
+    };
     const activeLayers = filters.layers && filters.layers.length > 0
       ? filters.layers.map((l) => l.toUpperCase())
       : ['ATTENDANCE', 'SHIFTS', 'LEAVE', 'TASKS', 'QUALITY'];
@@ -439,8 +553,8 @@ export class AnalyticsService {
       const attWhere: any = {
         workspaceId,
         date: { gte: start, lte: end },
+        ...applyMemFilter('membershipId'),
       };
-      if (targetMembershipId) attWhere.membershipId = targetMembershipId;
 
       const attendances = await this.prisma.attendance.findMany({
         where: attWhere,
@@ -508,8 +622,8 @@ export class AnalyticsService {
         workspaceId,
         startDate: { lte: end },
         endDate: { gte: start },
+        ...applyMemFilter('membershipId'),
       };
-      if (targetMembershipId) leaveWhere.membershipId = targetMembershipId;
 
       const leaves = await this.prisma.leaveRequest.findMany({
         where: leaveWhere,
@@ -546,6 +660,7 @@ export class AnalyticsService {
     if (activeLayers.includes('TASKS')) {
       const taskWhere: any = {
         workspaceId,
+        ...applyMemFilter('assigneeMembershipId'),
         OR: [
           { dueDate: { gte: start, lte: end } },
           { startDate: { gte: start, lte: end } },
@@ -553,9 +668,6 @@ export class AnalyticsService {
           { AND: [{ dueDate: null }, { status: { notIn: ['COMPLETED', 'CANCELLED'] } }] },
         ],
       };
-      if (filters.memberId) {
-        taskWhere.assigneeMembershipId = filters.memberId;
-      }
 
       const tasks = await this.prisma.task.findMany({
         where: taskWhere,
@@ -601,15 +713,23 @@ export class AnalyticsService {
         reviewedAt: { gte: start, lte: end },
       };
 
-      const reviews = await this.prisma.qualityReview.findMany({
+      const rawReviews: any[] = await this.prisma.qualityReview.findMany({
         where: qualityWhere,
         include: {
-          workItem: { select: { title: true, batchId: true } },
+          workItem: { select: { title: true, batchId: true, assignedMembershipId: true } },
           reviewer: {
             include: { user: { select: { firstName: true, lastName: true } } },
           },
         },
       });
+      const allowedIdSet = scopeRes.memberIds ? new Set(scopeRes.memberIds) : null;
+      const reviews =
+        scopeRes.mode === 'ALL' || !allowedIdSet
+          ? rawReviews
+          : rawReviews.filter((q: any) =>
+              allowedIdSet.has(q.reviewerMembershipId) ||
+              (q.workItem?.assignedMembershipId && allowedIdSet.has(q.workItem.assignedMembershipId)),
+            );
 
       for (const q of reviews) {
         events.push({
@@ -641,7 +761,14 @@ export class AnalyticsService {
       });
       const settings = (ws?.settings as Record<string, any>) || {};
       const storedEvts: any[] = settings.calendarEvents || [];
+      const allowedIdSet = scopeRes.memberIds ? new Set(scopeRes.memberIds) : null;
       for (const ce of storedEvts) {
+        if (scopeRes.mode !== 'ALL' && allowedIdSet) {
+          const isCompanyWide = ce.audience === 'ALL' || ce.type === 'COMPANY_EVENT' || ce.type === 'HOLIDAY';
+          const participantHit = Array.isArray(ce.participants) && ce.participants.some((p: any) => allowedIdSet.has(p.membershipId));
+          const orgHit = ce.organizerMembershipId && allowedIdSet.has(ce.organizerMembershipId);
+          if (!isCompanyWide && !participantHit && !orgHit) continue;
+        }
         const ceStart = new Date(ce.startDate);
         const ceEnd = new Date(ce.endDate || ce.startDate);
         if (ceStart <= end && ceEnd >= start && ce.status !== 'CANCELLED') {
@@ -699,23 +826,18 @@ export class AnalyticsService {
       limit?: number;
       offset?: number;
     } = {},
+    userContext?: any,
   ) {
-    const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const end = filters.endDate ? new Date(filters.endDate) : new Date();
     end.setHours(23, 59, 59, 999);
 
-    let targetMembershipId: string | undefined = undefined;
-    const scopeUpper = (filters.scope || '').toUpperCase();
-    if (scopeUpper === 'MY_DATA') {
-      targetMembershipId = membershipId;
-    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
-      targetMembershipId = undefined;
-    } else if (filters.memberId && isManagerOrAdmin) {
-      targetMembershipId = filters.memberId;
-    } else if (!isManagerOrAdmin) {
-      targetMembershipId = membershipId;
-    }
+    const scopeRes = await this.resolveAnalyticsMemberIds(workspaceId, membershipId, userRole, filters, userContext);
+    const applyMemFilter = (field: string) => {
+      if (scopeRes.mode === 'SINGLE' && scopeRes.memberId) return { [field]: scopeRes.memberId };
+      if (scopeRes.mode === 'LIST' && scopeRes.memberIds) return { [field]: { in: scopeRes.memberIds } };
+      return {};
+    };
 
     const limit = Number(filters.limit) || 50;
     const offset = Number(filters.offset) || 0;
@@ -725,8 +847,8 @@ export class AnalyticsService {
         const where: any = {
           workspaceId,
           createdAt: { gte: start, lte: end },
+          ...applyMemFilter('assigneeMembershipId'),
         };
-        if (targetMembershipId) where.assigneeMembershipId = targetMembershipId;
         if (filters.status && filters.status !== 'ALL') {
           if (filters.status === 'OVERDUE') {
             where.dueDate = { lt: new Date() };
@@ -779,8 +901,8 @@ export class AnalyticsService {
         const where: any = {
           workspaceId,
           date: { gte: start, lte: end },
+          ...applyMemFilter('membershipId'),
         };
-        if (targetMembershipId) where.membershipId = targetMembershipId;
         if (filters.status && filters.status !== 'ALL') where.status = filters.status;
 
         const [items, total] = await Promise.all([
@@ -823,8 +945,8 @@ export class AnalyticsService {
           workspaceId,
           startDate: { lte: end },
           endDate: { gte: start },
+          ...applyMemFilter('membershipId'),
         };
-        if (targetMembershipId) where.membershipId = targetMembershipId;
         if (filters.status && filters.status !== 'ALL') where.status = filters.status;
 
         const [items, total] = await Promise.all([
@@ -869,21 +991,43 @@ export class AnalyticsService {
         };
         if (filters.status && filters.status !== 'ALL') where.passStatus = filters.status;
 
-        const [items, total] = await Promise.all([
-          this.prisma.qualityReview.findMany({
+        let items: any[] = [];
+        let total = 0;
+        if (scopeRes.mode === 'ALL') {
+          [items, total] = await Promise.all([
+            this.prisma.qualityReview.findMany({
+              where,
+              include: {
+                workItem: { select: { id: true, title: true, batchId: true } },
+                reviewer: {
+                  include: { user: { select: { firstName: true, lastName: true, email: true } } },
+                },
+              },
+              orderBy: { reviewedAt: 'desc' },
+              take: limit,
+              skip: offset,
+            }),
+            this.prisma.qualityReview.count({ where }),
+          ]);
+        } else {
+          const allowedIdSet = new Set(scopeRes.memberIds || []);
+          const rawItems = await this.prisma.qualityReview.findMany({
             where,
             include: {
-              workItem: { select: { id: true, title: true, batchId: true } },
+              workItem: { select: { id: true, title: true, batchId: true, assignedMembershipId: true } },
               reviewer: {
                 include: { user: { select: { firstName: true, lastName: true, email: true } } },
               },
             },
             orderBy: { reviewedAt: 'desc' },
-            take: limit,
-            skip: offset,
-          }),
-          this.prisma.qualityReview.count({ where }),
-        ]);
+          });
+          const filtered = (rawItems || []).filter((q: any) =>
+            allowedIdSet.has(q.reviewerMembershipId) ||
+            (q.workItem?.assignedMembershipId && allowedIdSet.has(q.workItem.assignedMembershipId)),
+          );
+          total = filtered.length;
+          items = filtered.slice(offset, offset + limit);
+        }
 
         return {
           category: 'quality',
@@ -905,7 +1049,7 @@ export class AnalyticsService {
       }
 
       case 'assets': {
-        const where: any = { workspaceId };
+        const where: any = { workspaceId, ...applyMemFilter('assignedToMembershipId') };
         if (filters.status && filters.status !== 'ALL') where.status = filters.status;
         if (filters.search) {
           where.name = { contains: filters.search, mode: 'insensitive' };
@@ -959,8 +1103,11 @@ export class AnalyticsService {
           where.name = { contains: filters.search, mode: 'insensitive' };
         }
 
-        const [items, total] = this.prisma.project?.findMany
-          ? await Promise.all([
+        let items: any[] = [];
+        let total = 0;
+        if (this.prisma.project?.findMany) {
+          if (scopeRes.mode === 'ALL') {
+            [items, total] = await Promise.all([
               this.prisma.project.findMany({
                 where,
                 include: {
@@ -972,8 +1119,35 @@ export class AnalyticsService {
                 skip: offset,
               }),
               this.prisma.project.count({ where }),
-            ])
-          : [[], 0];
+            ]);
+          } else {
+            const allowedIdSet = new Set(scopeRes.memberIds || []);
+            const [rawProjects, ws] = await Promise.all([
+              this.prisma.project.findMany({
+                where,
+                include: {
+                  client: { select: { name: true } },
+                  tasks: { select: { id: true, status: true, assigneeMembershipId: true } },
+                },
+                orderBy: { createdAt: 'desc' },
+              }),
+              this.prisma.workspace?.findUnique
+                ? this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } }).catch(() => null)
+                : Promise.resolve(null),
+            ]);
+            const allMeta = ((ws?.settings as any)?.projectMetadata || {}) as Record<string, any>;
+            const effScope = userContext ? resolveEffectiveScope(userContext) : 'ASSIGNED';
+            const filtered = (rawProjects || []).filter((p: any) => {
+              const meta = allMeta[p.id] || {};
+              if (meta.managerMembershipId && allowedIdSet.has(meta.managerMembershipId)) return true;
+              if (Array.isArray(meta.memberMembershipIds) && meta.memberMembershipIds.some((id: string) => allowedIdSet.has(id))) return true;
+              if (effScope === 'DEPARTMENT' && userContext?.departmentId && meta.departmentId === userContext.departmentId) return true;
+              return Array.isArray(p.tasks) && p.tasks.some((t: any) => t.assigneeMembershipId && allowedIdSet.has(t.assigneeMembershipId));
+            });
+            total = filtered.length;
+            items = filtered.slice(offset, offset + limit);
+          }
+        }
 
         return {
           category: 'projects',
@@ -1017,12 +1191,13 @@ export class AnalyticsService {
     category: string,
     format: 'json' | 'csv' = 'json',
     filters: any = {},
+    userContext?: any,
   ) {
     const drilldown = await this.getDrilldown(workspaceId, membershipId, userRole, category, {
       ...filters,
       limit: 1000, // Export up to 1000 rows
       offset: 0,
-    });
+    }, userContext);
 
     if (format === 'json') {
       return {

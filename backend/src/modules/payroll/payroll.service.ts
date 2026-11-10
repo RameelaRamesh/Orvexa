@@ -5,6 +5,12 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  hasPermission,
+  isTargetWithinScope,
+  resolveEffectiveScope,
+  resolveLedTeamIds,
+} from '../../common/utils/access-scope.util';
 
 export interface PayrollConfig {
   currency: string;
@@ -245,17 +251,59 @@ export class PayrollService {
   // PAYROLL PERIODS & REPRODUCIBLE CALCULATION (REQUIREMENTS 5, 6, 7, 10)
   // ---------------------------------------------------------------------------
 
-  async listPeriods(workspaceId: string): Promise<PayrollPeriod[]> {
+  private canViewWorkspacePayroll(userContext?: any): boolean {
+    if (!userContext) return true;
+    if (userContext.accessRole === 'OWNER') return true;
+    if (Array.isArray(userContext.permissionCodes)) {
+      return hasPermission(userContext, 'payroll:view');
+    }
+    return userContext.accessRole === 'ADMIN' || userContext.accessRole === 'HR';
+  }
+
+  async listPeriods(workspaceId: string, userContext?: any): Promise<PayrollPeriod[]> {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { settings: true },
     });
     const settings = (ws?.settings as any) || {};
-    return settings.payrollPeriods || [];
+    const periods: PayrollPeriod[] = settings.payrollPeriods || [];
+
+    if (!userContext) return periods;
+    const canViewAll = this.canViewWorkspacePayroll(userContext);
+    const effectiveScope = canViewAll ? resolveEffectiveScope(userContext) : 'ASSIGNED';
+    if (effectiveScope === 'GLOBAL') return periods;
+
+    let allowedMemIds: Set<string> | null = null;
+    if (canViewAll && effectiveScope !== 'ASSIGNED') {
+      const [members, ledTeamIds] = await Promise.all([
+        this.prisma.membership.findMany({ where: { workspaceId }, select: { id: true, departmentId: true, teamId: true, reportsToId: true } }),
+        resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId),
+      ]);
+      allowedMemIds = new Set(
+        (members || []).filter((m: any) => isTargetWithinScope(userContext, m, ledTeamIds)).map((m: any) => m.id),
+      );
+    }
+
+    return periods.map((p) => {
+      const scopedPayslips = (p.payslips || []).filter((ps) => {
+        if (ps.membershipId === userContext.membershipId) return true;
+        return allowedMemIds ? allowedMemIds.has(ps.membershipId) : false;
+      });
+      const sumGross = Math.round(scopedPayslips.reduce((s, ps) => s + (ps.grossSalary || 0), 0) * 100) / 100;
+      const sumDed = Math.round(scopedPayslips.reduce((s, ps) => s + (ps.totalDeductions || 0), 0) * 100) / 100;
+      const sumNet = Math.round(scopedPayslips.reduce((s, ps) => s + (ps.netSalary || 0), 0) * 100) / 100;
+      return {
+        ...p,
+        payslips: scopedPayslips,
+        totalGross: sumGross,
+        totalDeductions: sumDed,
+        totalNet: sumNet,
+      };
+    });
   }
 
-  async getPeriodById(workspaceId: string, periodId: string): Promise<PayrollPeriod> {
-    const periods = await this.listPeriods(workspaceId);
+  async getPeriodById(workspaceId: string, periodId: string, userContext?: any): Promise<PayrollPeriod> {
+    const periods = await this.listPeriods(workspaceId, userContext);
     const period = periods.find((p) => p.id === periodId);
     if (!period) throw new NotFoundException('Payroll period not found');
     return period;
@@ -515,21 +563,22 @@ export class PayrollService {
     workspaceId: string,
     periodId: string,
     payslipId: string,
-    userContext?: { membershipId?: string; accessRole?: string },
+    userContext?: any,
   ): Promise<Payslip> {
     const period = await this.getPeriodById(workspaceId, periodId);
     const payslip = period.payslips.find((p) => p.id === payslipId);
     if (!payslip) throw new NotFoundException('Payslip not found');
 
-    // Strict record permission check
-    if (
-      userContext &&
-      userContext.accessRole !== 'OWNER' &&
-      userContext.accessRole !== 'ADMIN' &&
-      userContext.accessRole !== 'HR'
-    ) {
-      if (userContext.membershipId !== payslip.membershipId) {
-        throw new ForbiddenException('Access denied: You can only view your own payslip');
+    if (userContext && payslip.membershipId !== userContext.membershipId) {
+      if (!this.canViewWorkspacePayroll(userContext)) {
+        throw new ForbiddenException('Access denied: Your role does not include `payroll:view` to inspect other employees payslips');
+      }
+      if (resolveEffectiveScope(userContext) !== 'GLOBAL') {
+        const target = await this.prisma.membership.findFirst({ where: { id: payslip.membershipId, workspaceId } });
+        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
+        if (!target || !isTargetWithinScope(userContext, target, ledTeamIds)) {
+          throw new ForbiddenException('Access denied: Payslip is outside your team or department visibility scope');
+        }
       }
     }
 
@@ -539,9 +588,9 @@ export class PayrollService {
   async getHistoricalReports(
     workspaceId: string,
     query?: { membershipId?: string; startDate?: string; endDate?: string },
-    userContext?: { membershipId?: string; accessRole?: string },
+    userContext?: any,
   ) {
-    const periods = await this.listPeriods(workspaceId);
+    const periods = await this.listPeriods(workspaceId, userContext);
 
     // Only include calculated or approved periods
     let eligiblePeriods = periods.filter((p) => p.status === 'CALCULATED' || p.status === 'APPROVED' || p.status === 'PAID');
@@ -553,12 +602,8 @@ export class PayrollService {
       eligiblePeriods = eligiblePeriods.filter((p) => p.endDate <= query.endDate!);
     }
 
-    // Role-based filtering
-    const isRestricted =
-      userContext &&
-      userContext.accessRole !== 'OWNER' &&
-      userContext.accessRole !== 'ADMIN' &&
-      userContext.accessRole !== 'HR';
+    // Strict permission-based filtering (no ADMIN bypass when payroll:view is unchecked)
+    const isRestricted = userContext && !this.canViewWorkspacePayroll(userContext);
 
     const targetMembershipId = isRestricted ? userContext?.membershipId : query?.membershipId;
 

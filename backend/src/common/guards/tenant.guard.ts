@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../../database/prisma.service';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
+import { buildUserContextFromMembership } from '../utils/access-scope.util';
 
 @Injectable()
 export class TenantGuard implements CanActivate {
@@ -74,6 +75,7 @@ export class TenantGuard implements CanActivate {
       request.workspaceId = defaultMembership.workspaceId;
       request.membershipId = defaultMembership.id;
       request.membership = defaultMembership;
+      request.userContext = buildUserContextFromMembership(defaultMembership);
 
       return true;
     }
@@ -108,6 +110,7 @@ export class TenantGuard implements CanActivate {
     request.workspaceId = membership.workspaceId;
     request.membershipId = membership.id;
     request.membership = membership;
+    request.userContext = buildUserContextFromMembership(membership);
 
     return true;
   }

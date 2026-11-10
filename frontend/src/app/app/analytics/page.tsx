@@ -37,13 +37,15 @@ import {
   Globe,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { checkPermission, getEffectiveScope } from '@/lib/permissions';
 
 export default function AnalyticsPage() {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState<'overview' | 'tasks' | 'projects' | 'attendance' | 'leave' | 'quality' | 'assets'>('overview');
 
   // Scope State (Permission-Based Scoping)
-  const [selectedScope, setSelectedScope] = useState<'MY_DATA' | 'MY_TEAM' | 'MY_DEPARTMENT' | 'ENTIRE_WORKSPACE'>('ENTIRE_WORKSPACE');
+  const [selectedScope, setSelectedScope] = useState<'MY_DATA' | 'MY_TEAM' | 'MY_DEPARTMENT' | 'ENTIRE_WORKSPACE'>('MY_DATA');
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [userRole, setUserRole] = useState<string>('MEMBER');
   const [userDepartmentId, setUserDepartmentId] = useState<string>('');
   const [userTeamId, setUserTeamId] = useState<string>('');
@@ -79,42 +81,78 @@ export default function AnalyticsPage() {
   const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
   const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
 
+  const applyMembershipContext = (mem: any, initScope = false) => {
+    if (!mem) return;
+    setCurrentMembership(mem);
+    if (mem.accessRole || mem.role?.name) {
+      setUserRole(mem.accessRole || mem.role?.name || 'MEMBER');
+    }
+    if (mem.departmentId || mem.department?.id) {
+      setUserDepartmentId(mem.departmentId || mem.department?.id);
+    }
+    if (mem.teamId || mem.team?.id) {
+      setUserTeamId(mem.teamId || mem.team?.id);
+    }
+    if (initScope) {
+      const eff = getEffectiveScope(mem);
+      if (eff === 'GLOBAL') setSelectedScope('ENTIRE_WORKSPACE');
+      else if (eff === 'DEPARTMENT') setSelectedScope('MY_DEPARTMENT');
+      else if (eff === 'TEAM') setSelectedScope('MY_TEAM');
+      else setSelectedScope('MY_DATA');
+    }
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    const activeWs = localStorage.getItem('activeWorkspaceId');
     const cachedWs = localStorage.getItem('orvexa_cached_workspace');
     const p = localStorage.getItem('orvexa_cached_profile') || localStorage.getItem('user');
-    let role = 'MEMBER';
+
+    let initialMem: any = null;
     if (cachedWs) {
       try {
         const wsObj = JSON.parse(cachedWs);
-        if (wsObj?.accessRole || wsObj?.role) role = wsObj.accessRole || wsObj.role;
+        if (wsObj && (!activeWs || wsObj.workspaceId === activeWs || wsObj.id)) {
+          initialMem = wsObj;
+        }
       } catch {}
     }
-    if (p) {
+    if (!initialMem && p) {
       try {
         const prof = JSON.parse(p);
-        if (prof?.memberships && prof.memberships[0]?.accessRole) {
-          role = prof.memberships[0].accessRole;
-        }
-        if (prof?.memberships && prof.memberships[0]?.departmentId) {
-          setUserDepartmentId(prof.memberships[0].departmentId);
-        }
-        if (prof?.memberships && prof.memberships[0]?.teamId) {
-          setUserTeamId(prof.memberships[0].teamId);
-        }
+        const list = prof?.memberships || [];
+        initialMem = (activeWs ? list.find((m: any) => m.workspaceId === activeWs) : null) || list[0];
       } catch {}
     }
-    setUserRole(role);
-    const rUpper = role.toUpperCase();
-    if (!['OWNER', 'ADMIN', 'MANAGER'].includes(rUpper)) {
-      setSelectedScope('MY_DATA');
+    if (initialMem) {
+      applyMembershipContext(initialMem, true);
+    }
+
+    const activeToken = localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token');
+    if (activeToken) {
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          ...(activeWs && activeWs !== 'undefined' && activeWs !== 'null' ? { 'x-workspace-id': activeWs } : {}),
+        },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((json) => {
+          const me = json?.data !== undefined ? json.data : json;
+          if (me?.memberships) {
+            const liveMem = (activeWs ? me.memberships.find((m: any) => m.workspaceId === activeWs) : null) || me.memberships[0];
+            if (liveMem) applyMembershipContext(liveMem, true);
+          }
+        })
+        .catch(() => null);
     }
   }, []);
 
-  const roleUpper = (userRole || 'MEMBER').toUpperCase();
-  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
-  const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
-  const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
+  const effectiveScope = getEffectiveScope(currentMembership);
+  const canViewWorkspace = effectiveScope === 'GLOBAL' || checkPermission(currentMembership, 'scope:workspace');
+  const canViewDept = canViewWorkspace || effectiveScope === 'DEPARTMENT' || checkPermission(currentMembership, 'scope:department');
+  const canViewTeam = canViewDept || effectiveScope === 'TEAM' || checkPermission(currentMembership, 'scope:team');
+  const canExportReports = checkPermission(currentMembership, 'reports:export');
 
   // Load Overview Data
   const fetchOverview = async () => {
@@ -1065,29 +1103,33 @@ export default function AnalyticsPage() {
                 </select>
               )}
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleExport('csv')}
-                disabled={exportLoading}
-                className="h-8 text-xs gap-1.5"
-                title="Download CSV"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-500" />
-                Export CSV
-              </Button>
+              {canExportReports && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport('csv')}
+                    disabled={exportLoading}
+                    className="h-8 text-xs gap-1.5"
+                    title="Download CSV"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-500" />
+                    Export CSV
+                  </Button>
 
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => handleExport('json')}
-                disabled={exportLoading}
-                className="h-8 text-xs gap-1.5"
-                title="Download JSON"
-              >
-                <FileCode className="h-3.5 w-3.5 text-primary" />
-                Export JSON
-              </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleExport('json')}
+                    disabled={exportLoading}
+                    className="h-8 text-xs gap-1.5"
+                    title="Download JSON"
+                  >
+                    <FileCode className="h-3.5 w-3.5 text-primary" />
+                    Export JSON
+                  </Button>
+                </>
+              )}
             </div>
           </CardHeader>
 

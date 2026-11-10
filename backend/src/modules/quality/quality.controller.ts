@@ -13,8 +13,9 @@ export class QualityController {
   constructor(private readonly qualityService: QualityService) {}
 
   @Get()
-  async listReviews(@CurrentWorkspace() workspaceId: string) {
-    return this.qualityService.listReviews(workspaceId);
+  @RequirePermissions('quality:view')
+  async listReviews(@CurrentWorkspace() workspaceId: string, @Request() req: any) {
+    return this.qualityService.listReviews(workspaceId, req.userContext);
   }
 
   @Post()
@@ -32,6 +33,6 @@ export class QualityController {
       feedback?: string;
     },
   ) {
-    return this.qualityService.submitReview(workspaceId, req.membershipId, body);
+    return this.qualityService.submitReview(workspaceId, req.membershipId, body, req.userContext);
   }
 }

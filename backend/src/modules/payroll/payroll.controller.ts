@@ -22,6 +22,7 @@ export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Get('config')
+  @RequirePermissions('payroll:view')
   async getConfig(@CurrentWorkspace() workspaceId: string) {
     return this.payrollService.getConfig(workspaceId);
   }
@@ -55,8 +56,8 @@ export class PayrollController {
   }
 
   @Get('periods')
-  async listPeriods(@CurrentWorkspace() workspaceId: string) {
-    return this.payrollService.listPeriods(workspaceId);
+  async listPeriods(@CurrentWorkspace() workspaceId: string, @Request() req: any) {
+    return this.payrollService.listPeriods(workspaceId, req.userContext);
   }
 
   @Post('periods')
@@ -71,9 +72,10 @@ export class PayrollController {
   @Get('periods/:id')
   async getPeriodById(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Param('id') id: string,
   ) {
-    return this.payrollService.getPeriodById(workspaceId, id);
+    return this.payrollService.getPeriodById(workspaceId, id, req.userContext);
   }
 
   @Post('periods/:id/calculate')

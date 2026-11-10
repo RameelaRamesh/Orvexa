@@ -54,8 +54,15 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
+import { checkPermission } from '@/lib/permissions';
 
 const DEFAULT_PERMISSIONS_CATALOG = [
+  // Scope (4)
+  { id: 'perm_scope_own', code: 'scope:own', name: 'Own Records Scope (Personal & directly assigned items only)', module: 'Scope' },
+  { id: 'perm_scope_team', code: 'scope:team', name: 'Team Scope (Own team, led teams & direct reports)', module: 'Scope' },
+  { id: 'perm_scope_dept', code: 'scope:department', name: 'Department Scope (All members & work within own department)', module: 'Scope' },
+  { id: 'perm_scope_ws', code: 'scope:workspace', name: 'Workspace Scope (Cross-department & full workspace visibility)', module: 'Scope' },
+
   // Assets (5)
   { id: 'perm_assets_view', code: 'assets:view', name: 'View company assets', module: 'Assets' },
   { id: 'perm_assets_create', code: 'assets:create', name: 'Register new assets', module: 'Assets' },
@@ -80,6 +87,7 @@ const DEFAULT_PERMISSIONS_CATALOG = [
 
   // People
   { id: 'perm_people_view', code: 'people:view', name: 'View Employee Directory & Profiles', module: 'People' },
+  { id: 'perm_people_view_sensitive', code: 'people:view_sensitive', name: 'View Sensitive Banking, Tax & Statutory ID PII', module: 'People' },
   { id: 'perm_people_create', code: 'people:create', name: 'Add & Onboard Employees', module: 'People' },
   { id: 'perm_people_edit', code: 'people:edit', name: 'Edit Employee Records & Assignments', module: 'People' },
   { id: 'perm_people_delete', code: 'people:delete', name: 'Deactivate & Offboard Employees', module: 'People' },
@@ -167,12 +175,16 @@ const DEFAULT_PERMISSIONS_CATALOG = [
   { id: 'perm_cal_view_all', code: 'calendar:view:all', name: 'View All Organization Calendar Events', module: 'Calendar' },
   { id: 'perm_cal_view_dept', code: 'calendar:view:department', name: 'View Department Calendar Events', module: 'Calendar' },
   { id: 'perm_cal_view_team', code: 'calendar:view:team', name: 'View Team Calendar Events', module: 'Calendar' },
+  { id: 'perm_cal_view_sched', code: 'calendar:view:schedules', name: 'View Team Shift Schedules', module: 'Calendar' },
   { id: 'perm_cal_create', code: 'calendar:create', name: 'Schedule Meetings & Events', module: 'Calendar' },
+  { id: 'perm_cal_invite', code: 'calendar:invite', name: 'Invite Workspace Members to Meetings', module: 'Calendar' },
   { id: 'perm_cal_holidays', code: 'calendar:holidays:manage', name: 'Manage Common Holidays & Festivals (Owner & Admin)', module: 'Calendar' },
+  { id: 'perm_cal_manage', code: 'calendar:manage', name: 'Manage & Edit All Workspace Calendar Events', module: 'Calendar' },
 
   // Admin & Org
   { id: 'perm_org_manage', code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
   { id: 'perm_inv_mgmt', code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
+  { id: 'perm_onboard_mgmt', code: 'onboarding:manage', name: 'Manage Onboarding Reminders & Checklists', module: 'Invitations' },
   { id: 'perm_role_manage', code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },
   { id: 'perm_dept_manage', code: 'departments:manage', name: 'Manage Departments & Teams', module: 'Departments' },
   { id: 'perm_sett_manage', code: 'settings:manage', name: 'Manage Workspace Settings', module: 'Settings' },
@@ -188,7 +200,7 @@ const DEFAULT_SYSTEM_ROLES = [
     isActive: true,
     _count: { memberships: 2 },
     permissions: DEFAULT_PERMISSIONS_CATALOG
-      .filter((p) => p.code !== 'billing:manage')
+      .filter((p) => p.code !== 'billing:manage' && !['scope:own', 'scope:team', 'scope:department'].includes(p.code))
       .map((p) => ({ permissionId: p.id, code: p.code, permission: p })),
   },
   {
@@ -199,6 +211,7 @@ const DEFAULT_SYSTEM_ROLES = [
     isActive: true,
     _count: { memberships: 2 },
     permissions: [
+      'scope:team',
       'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
       'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
       'projects:view', 'projects:create', 'projects:edit',
@@ -251,6 +264,7 @@ const DEFAULT_SYSTEM_ROLES = [
 ];
 
 const MODULE_DISPLAY_ORDER: Record<string, number> = {
+  Scope: 0,
   Assets: 1,
   Inventory: 2,
   Ledger: 3,
@@ -263,29 +277,127 @@ const MODULE_DISPLAY_ORDER: Record<string, number> = {
   People: 10,
   WorkQueue: 11,
   Leave: 12,
-  Quality: 13,
-  SLA: 14,
-  Clients: 15,
-  Reports: 16,
-  Payroll: 17,
-  Organization: 18,
-  Invitations: 19,
-  Roles: 20,
-  Departments: 21,
-  Settings: 22,
-  Billing: 23,
+  Calendar: 13,
+  Quality: 14,
+  SLA: 15,
+  Clients: 16,
+  Reports: 17,
+  Payroll: 18,
+  Organization: 19,
+  Invitations: 20,
+  Roles: 21,
+  Departments: 22,
+  Settings: 23,
+  Billing: 24,
 };
 
 const MODULE_DISPLAY_NAMES: Record<string, string> = {
+  Scope: 'DATA ACCESS SCOPE (ROW-LEVEL VISIBILITY)',
   Assets: 'COMPANY ASSETS',
   Inventory: 'INVENTORY & STOCK',
   Ledger: 'MOVEMENT LEDGER',
   Documents: 'DOCUMENT VAULT',
+  Invitations: 'INVITATIONS & ONBOARDING',
+  Calendar: 'CALENDAR & HOLIDAYS',
 };
+
+const ROLE_PRESET_TEMPLATES = [
+  {
+    key: 'payroll_admin',
+    name: 'Payroll Admin',
+    coreRole: 'ADMIN',
+    description: 'Compensation, salary runs, banking PII, tax compliance & payroll exports',
+    permissions: [
+      'scope:workspace',
+      'people:view', 'people:view_sensitive', 'people:export',
+      'payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage',
+      'attendance:view', 'attendance:export', 'time:view', 'time:export', 'leave:view', 'reports:view', 'reports:export',
+    ],
+  },
+  {
+    key: 'hr_generalist',
+    name: 'HR Generalist',
+    coreRole: 'ADMIN',
+    description: 'People lifecycle, attendance, leave approvals & workspace onboarding without payroll access',
+    permissions: [
+      'scope:workspace',
+      'people:view', 'people:create', 'people:edit', 'people:export', 'people:manage',
+      'invitations:manage', 'onboarding:manage', 'departments:manage',
+      'attendance:view', 'attendance:edit', 'attendance:export', 'attendance:manage',
+      'leave:view', 'leave:apply', 'leave:approve', 'leave:manage',
+      'calendar:view:all', 'calendar:create', 'calendar:invite', 'calendar:holidays:manage', 'reports:view',
+    ],
+  },
+  {
+    key: 'recruitment_admin',
+    name: 'Recruitment Admin',
+    coreRole: 'ADMIN',
+    description: 'Candidate invitations & onboarding checklists with read-only directory access',
+    permissions: [
+      'scope:workspace',
+      'people:view', 'invitations:manage', 'onboarding:manage',
+      'calendar:view:all', 'calendar:create', 'calendar:invite',
+    ],
+  },
+  {
+    key: 'team_lead',
+    name: 'Team Lead (Team Scope)',
+    coreRole: 'MANAGER',
+    description: 'Isolated strictly to own led team & direct reports across tasks, leave, attendance & schedules',
+    permissions: [
+      'scope:team',
+      'people:view', 'projects:view', 'projects:create', 'projects:edit',
+      'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+      'work_items:view', 'work_items:process', 'work_items:assign',
+      'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+      'attendance:view', 'attendance:clock', 'attendance:edit',
+      'leave:view', 'leave:apply', 'leave:approve', 'approvals:view', 'approvals:approve',
+      'quality:view', 'sla:view', 'reports:view',
+      'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite',
+    ],
+  },
+  {
+    key: 'department_lead',
+    name: 'Department Lead (Dept Scope)',
+    coreRole: 'MANAGER',
+    description: 'Full department visibility across all squads within their assigned department',
+    permissions: [
+      'scope:department',
+      'people:view', 'projects:view', 'projects:create', 'projects:edit', 'projects:manage',
+      'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export', 'tasks:manage',
+      'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:manage',
+      'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+      'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+      'leave:view', 'leave:apply', 'leave:approve', 'approvals:view', 'approvals:approve',
+      'quality:view', 'quality:review', 'sla:view', 'reports:view', 'reports:export',
+      'calendar:view:department', 'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite',
+    ],
+  },
+  {
+    key: 'qa_auditor',
+    name: 'QA Auditor',
+    coreRole: 'MANAGER',
+    description: 'Quality scorecards, ticket audits & SLA reviews within department scope',
+    permissions: [
+      'scope:department',
+      'people:view', 'tasks:view', 'work_items:view', 'work_items:process',
+      'quality:view', 'quality:audit', 'quality:review', 'quality:manage',
+      'sla:view', 'reports:view',
+    ],
+  },
+];
 
 export default function SettingsPage() {
 const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
   const [permissionSearch, setPermissionSearch] = useState('');
+  const [currentMembership, setCurrentMembership] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cachedWs = localStorage.getItem('orvexa_cached_workspace');
+      return cachedWs ? JSON.parse(cachedWs) : null;
+    } catch {}
+    return null;
+  });
   const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
     if (typeof window === 'undefined') return 'MEMBER';
     try {
@@ -297,7 +409,16 @@ const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 
     } catch {}
     return 'MEMBER';
   });
-  const isOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  const isOwner = currentMembership?.accessRole === 'OWNER' || currentUserRole === 'OWNER';
+  const canManageRoles = checkPermission(currentMembership, 'roles:manage');
+  const canManageSettings = checkPermission(currentMembership, 'settings:manage');
+  const canManageOrg = checkPermission(currentMembership, 'org:manage');
+  const canManageModules = canManageSettings || canManageOrg;
+  const canManageDepartments = checkPermission(currentMembership, 'departments:manage') || canManageOrg;
+  const canManagePeople = checkPermission(currentMembership, 'people:manage');
+  const canManageBilling = checkPermission(currentMembership, 'billing:manage');
+  const isOwnerOrAdmin = canManageRoles || canManageSettings || canManageOrg || canManageDepartments || canManageBilling;
+  const [applyingPresetKey, setApplyingPresetKey] = useState<string | null>(null);
 
   // Loading states
   const [loading, setLoading] = useState(true);
@@ -666,8 +787,24 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
           if (meData.email) setPersonalEmail(meData.email);
           if (meData.phone) setPersonalPhone(meData.phone);
           if (meData.avatarUrl || meData.avatar) setPersonalAvatar(meData.avatarUrl || meData.avatar);
-          const activeMem = meData.memberships?.find((m: any) => m.workspaceId === wsId) || meData.memberships?.[0];
-          if (activeMem?.accessRole) setCurrentUserRole(activeMem.accessRole);
+          const activeMem = meData.memberships?.find((m: any) => m.workspaceId === currentWsId) || meData.memberships?.[0];
+          if (activeMem) {
+            setCurrentMembership(activeMem);
+            if (activeMem.accessRole) setCurrentUserRole(activeMem.accessRole);
+            if (typeof window !== 'undefined' && typeof window.location !== 'undefined') {
+              const requestedTab = new URLSearchParams(window.location.search).get('tab');
+              const allowDetails = checkPermission(activeMem, 'settings:manage') || checkPermission(activeMem, 'org:manage');
+              const allowRoles = checkPermission(activeMem, 'roles:manage');
+              const allowStructure = checkPermission(activeMem, 'departments:manage') || checkPermission(activeMem, 'org:manage') || checkPermission(activeMem, 'people:manage');
+              const allowBilling = checkPermission(activeMem, 'billing:manage');
+              if (!requestedTab && !allowDetails) {
+                if (allowRoles) setActiveTab('roles');
+                else if (allowStructure) setActiveTab('structure');
+                else if (allowBilling) setActiveTab('billing');
+                else setActiveTab('personal');
+              }
+            }
+          }
           if (activeMem?.designation?.title) {
             setPersonalDesignation(activeMem.designation.title);
           } else if (activeMem?.role?.name) {
@@ -978,11 +1115,11 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     const targetCode = targetPerm?.code || '';
     const [targetGroup] = targetCode.split(':');
 
+    const catalogList = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
     if (isCurrentlyChecked) {
       // Unchecking
       if (dependencyGroups.includes(targetGroup) && targetCode === `${targetGroup}:view`) {
-        // Unchecking view unchecks all permissions in that group
-        const groupPermIds = allPermissions
+        const groupPermIds = catalogList
           .filter((p) => p.code.startsWith(`${targetGroup}:`))
           .map((p) => p.id);
         updatedPermIds = currentPermIds.filter((id) => !groupPermIds.includes(id));
@@ -991,11 +1128,18 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       }
     } else {
       // Checking
-      updatedPermIds = [...currentPermIds, permId];
+      if (targetGroup === 'scope') {
+        // Enforce single active scope:* permission so team vs department vs workspace intent is unambiguous
+        const otherScopeIds = catalogList
+          .filter((p) => p.code.startsWith('scope:') && p.id !== permId)
+          .map((p) => p.id);
+        updatedPermIds = [...currentPermIds.filter((id) => !otherScopeIds.includes(id)), permId];
+      } else {
+        updatedPermIds = [...currentPermIds, permId];
+      }
 
       if (dependencyGroups.includes(targetGroup) && targetCode !== `${targetGroup}:view`) {
-        // Checking any non-view permission automatically checks the view permission
-        const viewPerm = allPermissions.find((p) => p.code === `${targetGroup}:view`);
+        const viewPerm = catalogList.find((p) => p.code === `${targetGroup}:view`);
         if (viewPerm && !updatedPermIds.includes(viewPerm.id)) {
           updatedPermIds.push(viewPerm.id);
         }
@@ -1025,6 +1169,42 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       toast.success('Role permissions updated');
     } catch (err: any) {
       toast.error(err.message || 'Error updating role permission');
+    }
+  };
+
+  // Handler 5a-extra: Create or Select 1-Click Preset Role Template
+  const handleApplyRoleTemplate = async (tpl: (typeof ROLE_PRESET_TEMPLATES)[number]) => {
+    const existing = roles.find((r) => (r.name || '').toLowerCase() === tpl.name.toLowerCase());
+    if (existing) {
+      setSelectedRoleId(existing.id);
+      toast.info(`Selected existing "${existing.name}" role. Toggle individual checkboxes below to customize.`);
+      return;
+    }
+    setApplyingPresetKey(tpl.key);
+    try {
+      const catalogList = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
+      const permIds = tpl.permissions
+        .map((code) => catalogList.find((p) => p.code === code)?.id)
+        .filter(Boolean) as string[];
+      const res = await fetch(`${BRANDING.apiUrl}/roles`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          name: tpl.name,
+          description: `[${tpl.coreRole} Policy] ${tpl.description}`,
+          permissionIds: permIds,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Failed to apply preset role');
+      const created = data.data !== undefined ? data.data : data;
+      setRoles((prev) => [...prev, created]);
+      setSelectedRoleId(created.id);
+      toast.success(`Created "${tpl.name}" role with ${permIds.length} pre-checked permissions!`);
+    } catch (err: any) {
+      toast.error(err.message || 'Error creating preset role');
+    } finally {
+      setApplyingPresetKey(null);
     }
   };
 
@@ -1662,16 +1842,18 @@ const selectedRoleObj =
       {/* Topics (Tabs) & Badge - Single Unified Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border pb-1 gap-2">
         <div className="flex flex-wrap gap-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
-        <button
-          onClick={() => setActiveTab('details')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'details'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Building2 className="h-4 w-4" /> Organization Details
-        </button>
+        {canManageModules && (
+          <button
+            onClick={() => setActiveTab('details')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+              activeTab === 'details'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Building2 className="h-4 w-4" /> Organization Details
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('personal')}
           className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
@@ -1682,17 +1864,19 @@ const selectedRoleObj =
         >
           <User className="h-4 w-4" /> Personal Details
         </button>
-        <button
-          onClick={() => setActiveTab('modules')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'modules'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Sliders className="h-4 w-4" /> Modules & Features
-        </button>
-        {isOwnerOrAdmin && (
+        {canManageModules && (
+          <button
+            onClick={() => setActiveTab('modules')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+              activeTab === 'modules'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Sliders className="h-4 w-4" /> Modules & Features
+          </button>
+        )}
+        {canManageRoles && (
           <button
             onClick={() => setActiveTab('roles')}
             className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
@@ -1704,26 +1888,30 @@ const selectedRoleObj =
             <Shield className="h-4 w-4" /> Roles & Permissions
           </button>
         )}
-        <button
-          onClick={() => setActiveTab('structure')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'structure'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <Users className="h-4 w-4" /> Org Structure
-        </button>
-        <button
-          onClick={() => setActiveTab('billing')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'billing'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <CreditCard className="h-4 w-4" /> Subscription & Billing
-        </button>
+        {(canManageDepartments || canManagePeople) && (
+          <button
+            onClick={() => setActiveTab('structure')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+              activeTab === 'structure'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <Users className="h-4 w-4" /> Org Structure
+          </button>
+        )}
+        {canManageBilling && (
+          <button
+            onClick={() => setActiveTab('billing')}
+            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+              activeTab === 'billing'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            <CreditCard className="h-4 w-4" /> Subscription & Billing
+          </button>
+        )}
         <button
           onClick={() => setActiveTab('security')}
           className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
@@ -1743,7 +1931,7 @@ const selectedRoleObj =
       </div>
 
       {/* TAB 1: Organization Details */}
-      {activeTab === 'details' && (
+      {activeTab === 'details' && canManageModules && (
         <div className="space-y-6">
           <Card className="border-border">
             <CardHeader>
@@ -2063,7 +2251,7 @@ const selectedRoleObj =
       )}
 
       {/* TAB 2: Modules & Features */}
-      {activeTab === 'modules' && (
+      {activeTab === 'modules' && canManageModules && (
         <Card className="border-border">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
@@ -2126,8 +2314,53 @@ const selectedRoleObj =
       )}
 
       {/* TAB 3: Roles & Permissions */}
-      {activeTab === 'roles' && isOwnerOrAdmin && (
+      {activeTab === 'roles' && canManageRoles && (
         <div className="space-y-6">
+          {/* 1-Click Role Policy Presets */}
+          <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-primary flex items-center gap-1.5">
+                  <Sparkles className="h-3.5 w-3.5" /> 1-Click Role Policy Presets
+                </h3>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Create scoped Admin or Lead roles (e.g. Payroll Admin, HR Generalist, Recruitment Admin, Team Lead) and fine-tune checkboxes below.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+              {ROLE_PRESET_TEMPLATES.map((tpl) => {
+                const alreadyExists = roles.some((r) => (r.name || '').toLowerCase() === tpl.name.toLowerCase());
+                return (
+                  <button
+                    key={tpl.key}
+                    type="button"
+                    disabled={applyingPresetKey === tpl.key}
+                    onClick={() => handleApplyRoleTemplate(tpl)}
+                    className="text-left p-3 rounded-lg border border-border/80 bg-card hover:border-primary/60 hover:bg-muted/20 transition-all flex flex-col justify-between gap-2"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold text-foreground">{tpl.name}</span>
+                        <Badge variant="outline" className="text-[9px] font-mono px-1.5 py-0">
+                          {tpl.coreRole}
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-1 leading-snug">{tpl.description}</p>
+                    </div>
+                    <div className="flex items-center justify-between pt-1 border-t border-border/50 text-[10px]">
+                      <span className="font-mono text-primary">
+                        {tpl.permissions.find((c) => c.startsWith('scope:')) || 'scope:team'} • {tpl.permissions.length} perms
+                      </span>
+                      <span className="font-semibold text-primary">
+                        {applyingPresetKey === tpl.key ? 'Applying...' : alreadyExists ? 'Select / Clone' : '+ Create'}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
           <div className="grid gap-6 md:grid-cols-3">
             {/* Roles List & Create */}
             <div className="space-y-4">
@@ -2644,7 +2877,7 @@ const selectedRoleObj =
       )}
 
       {/* TAB 4: Org Structure */}
-      {activeTab === 'structure' && (
+      {activeTab === 'structure' && (canManageDepartments || canManagePeople) && (
         <div className="grid gap-6 md:grid-cols-3">
           {/* Departments */}
           <Card className="border-border">
@@ -2656,6 +2889,7 @@ const selectedRoleObj =
               <CardDescription className="text-xs">Operational units</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {canManageDepartments && (
               <form onSubmit={handleAddDept} className="space-y-2 border-b border-border pb-3">
                 <input
                   type="text"
@@ -2676,6 +2910,7 @@ const selectedRoleObj =
                   <Button type="submit" size="sm" className="h-8 text-xs px-3">Add</Button>
                 </div>
               </form>
+              )}
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {departments.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No departments created yet.</p>
@@ -2740,6 +2975,7 @@ const selectedRoleObj =
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{d.name}</span>
                           {d.code && <span className="text-[10px] font-mono text-muted-foreground ml-2">({d.code})</span>}
                         </div>
+                        {canManageDepartments && (
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
@@ -2758,6 +2994,7 @@ const selectedRoleObj =
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
+                        )}
                       </div>
                     );
                   })
@@ -2776,6 +3013,7 @@ const selectedRoleObj =
               <CardDescription className="text-xs">Functional teams</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {canManageDepartments && (
               <form onSubmit={handleAddTeam} className="space-y-2 border-b border-border pb-3">
                 <input
                   type="text"
@@ -2804,6 +3042,7 @@ const selectedRoleObj =
                   <Button type="submit" size="sm" className="h-8 text-xs px-3">Add</Button>
                 </div>
               </form>
+              )}
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {teams.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No teams created yet.</p>
@@ -2878,6 +3117,7 @@ const selectedRoleObj =
                             <span className="text-[10px] text-muted-foreground ml-2">({t.department?.name || t.departmentName})</span>
                           )}
                         </div>
+                        {canManageDepartments && (
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
@@ -2896,6 +3136,7 @@ const selectedRoleObj =
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
+                        )}
                       </div>
                     );
                   })
@@ -2914,6 +3155,7 @@ const selectedRoleObj =
               <CardDescription className="text-xs">Job titles & levels</CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
+              {canManagePeople && (
               <form onSubmit={handleAddDesig} className="space-y-2 border-b border-border pb-3">
                 <input
                   type="text"
@@ -2936,6 +3178,7 @@ const selectedRoleObj =
                   <Button type="submit" size="sm" className="h-8 text-xs px-3 w-full">Add Title</Button>
                 </div>
               </form>
+              )}
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
                 {designations.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No designations created yet.</p>
@@ -3002,6 +3245,7 @@ const selectedRoleObj =
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{d.title}</span>
                           <span className="text-[10px] text-muted-foreground ml-2">(Level {d.level || 1})</span>
                         </div>
+                        {canManagePeople && (
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
@@ -3020,6 +3264,7 @@ const selectedRoleObj =
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
                         </div>
+                        )}
                       </div>
                     );
                   })
@@ -3031,7 +3276,7 @@ const selectedRoleObj =
       )}
 
       {/* TAB 5: Subscription & Billing */}
-      {activeTab === 'billing' && (
+      {activeTab === 'billing' && canManageBilling && (
         <div className="space-y-6">
           {/* Current Subscription Card */}
           <Card className="border-primary/50 bg-card">
@@ -3663,8 +3908,8 @@ const selectedRoleObj =
             </CardContent>
           </Card>
 
-          {/* Section 3: Workspace Member 2FA Administration (For Owners/Admins) */}
-          {workspace?.memberships && (
+          {/* Section 3: Workspace Member 2FA Administration (Requires people:manage) */}
+          {canManagePeople && workspace?.memberships && (
             <Card className="border-border">
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">

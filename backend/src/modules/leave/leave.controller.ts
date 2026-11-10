@@ -17,6 +17,7 @@ import { CurrentWorkspace } from '../../common/decorators/current-workspace.deco
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { LeaveType, LeaveStatus } from '@prisma/client';
+import { hasPermission } from '../../common/utils/access-scope.util';
 
 @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('leave')
@@ -42,7 +43,7 @@ export class LeaveController {
     @Query('year') year?: number,
   ) {
     const membershipId = targetMembershipId || req.membershipId;
-    return this.leaveService.getMemberBalances(workspaceId, membershipId, year ? Number(year) : undefined);
+    return this.leaveService.getMemberBalances(workspaceId, membershipId, year ? Number(year) : undefined, req.userContext);
   }
 
   @Post('balances/adjust')
@@ -57,6 +58,7 @@ export class LeaveController {
   @Get('calendar')
   async getLeaveCalendar(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Query('month') month?: number,
     @Query('year') year?: number,
   ) {
@@ -64,20 +66,24 @@ export class LeaveController {
       workspaceId,
       month !== undefined ? Number(month) : undefined,
       year !== undefined ? Number(year) : undefined,
+      req.userContext,
     );
   }
 
   @Get()
+  @RequirePermissions('leave:view')
   async list(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Query('membershipId') membershipId?: string,
     @Query('status') status?: string,
     @Query('departmentId') departmentId?: string,
   ) {
-    return this.leaveService.list(workspaceId, { membershipId, status, departmentId });
+    return this.leaveService.list(workspaceId, { membershipId, status, departmentId }, req.userContext);
   }
 
   @Post()
+  @RequirePermissions('leave:apply')
   async create(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -92,26 +98,23 @@ export class LeaveController {
       status?: LeaveStatus;
     },
   ) {
-    const isOwnerOrAdmin =
-      req.user?.role === 'ADMIN' ||
-      req.user?.role === 'OWNER' ||
-      req.membership?.accessRole === 'ADMIN' ||
-      req.membership?.accessRole === 'OWNER';
-
-    const targetMembershipId = (isOwnerOrAdmin && body.membershipId)
+    const canActOnBehalf = hasPermission(req.userContext, ['leave:manage', 'leave:approve']);
+    const sanitizedBody = canActOnBehalf ? body : { ...body, status: undefined };
+    const targetMembershipId = (canActOnBehalf && body.membershipId)
       ? body.membershipId
       : req.membershipId;
 
-    return this.leaveService.create(workspaceId, targetMembershipId, body, req.membershipId);
+    return this.leaveService.create(workspaceId, targetMembershipId, sanitizedBody, req.membershipId);
   }
 
   @Patch(':id/status')
+  @RequirePermissions('leave:approve')
   async updateStatus(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
     @Param('id') id: string,
     @Body('status') status: LeaveStatus,
   ) {
-    return this.leaveService.updateStatus(id, workspaceId, req.membershipId, status);
+    return this.leaveService.updateStatus(id, workspaceId, req.membershipId, status, req.userContext);
   }
 }

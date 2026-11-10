@@ -9,8 +9,10 @@ import {
   Query,
   UseGuards,
   Req,
+  ForbiddenException,
 } from '@nestjs/common';
 import { PeopleService } from './people.service';
+import { hasPermission } from '../../common/utils/access-scope.util';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
@@ -84,8 +86,10 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Get('invitations')
-  @RequirePermissions('people:manage')
-  async listInvitations(@CurrentWorkspace() workspaceId: string) {
+  async listInvitations(@CurrentWorkspace() workspaceId: string, @Req() req: any) {
+    if (!hasPermission(req.userContext, ['invitations:manage', 'people:manage'])) {
+      throw new ForbiddenException('Insufficient permissions: invitations:manage or people:manage required');
+    }
     return this.peopleService.listInvitations(workspaceId);
   }
 
@@ -108,9 +112,47 @@ export class PeopleController {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      saveDesignationMapping?: boolean;
     },
   ) {
     return this.peopleService.inviteMember(workspaceId, invitedByUserId, body);
+  }
+
+  @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
+  @Post('invite/bulk')
+  @RequirePermissions('invitations:manage')
+  async bulkInviteMembers(
+    @CurrentWorkspace() workspaceId: string,
+    @CurrentUser('id') invitedByUserId: string,
+    @Body()
+    body: {
+      members: Array<{
+        email: string;
+        firstName: string;
+        lastName: string;
+        accessRole?: SystemAccessRole;
+        roleId?: string;
+        departmentId?: string;
+        teamId?: string;
+        designationId?: string;
+        designationTitle?: string;
+        reportsToId?: string;
+        dataScope?: string;
+      }>;
+      shared?: {
+        accessRole?: SystemAccessRole;
+        roleId?: string;
+        departmentId?: string;
+        teamId?: string;
+        designationId?: string;
+        designationTitle?: string;
+        reportsToId?: string;
+        dataScope?: string;
+        saveDesignationMapping?: boolean;
+      };
+    },
+  ) {
+    return this.peopleService.bulkInviteMembers(workspaceId, invitedByUserId, body);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -149,8 +191,9 @@ export class PeopleController {
   async getMemberById(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
+    @Req() req: any,
   ) {
-    return this.peopleService.getMemberById(workspaceId, membershipId);
+    return this.peopleService.getMemberById(workspaceId, membershipId, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -159,8 +202,9 @@ export class PeopleController {
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
     @Body() body: any,
+    @Req() req: any,
   ) {
-    return this.peopleService.updateMemberProfile(workspaceId, membershipId, body);
+    return this.peopleService.updateMemberProfile(workspaceId, membershipId, body, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -168,8 +212,9 @@ export class PeopleController {
   async getProfileCompleteness(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
+    @Req() req: any,
   ) {
-    return this.peopleService.getProfileCompleteness(workspaceId, membershipId);
+    return this.peopleService.getProfileCompleteness(workspaceId, membershipId, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -179,7 +224,7 @@ export class PeopleController {
     @Req() req: any,
     @Param('id') membershipId: string,
   ) {
-    return this.peopleService.sendIncompleteProfileReminder(workspaceId, membershipId, req.membershipId);
+    return this.peopleService.sendIncompleteProfileReminder(workspaceId, membershipId, req.membershipId, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -188,8 +233,9 @@ export class PeopleController {
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
     @Body('tasks') tasks: any[],
+    @Req() req: any,
   ) {
-    return this.peopleService.updateOnboardingTasks(workspaceId, membershipId, tasks);
+    return this.peopleService.updateOnboardingTasks(workspaceId, membershipId, tasks, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -216,13 +262,14 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Patch(':id/org-details')
-  @RequirePermissions('people:manage')
+  @RequirePermissions('people:edit')
   async updateMemberOrgDetails(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
     @Body() body: any,
+    @Req() req: any,
   ) {
-    return this.peopleService.updateMemberOrgDetails(workspaceId, membershipId, body);
+    return this.peopleService.updateMemberOrgDetails(workspaceId, membershipId, body, req.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)

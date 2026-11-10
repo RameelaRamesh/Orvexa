@@ -24,6 +24,7 @@ import {
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { generateMfaSecret, generateRecoveryCodes, verifyTOTP } from './totp.util';
+import { buildUserContextFromMembership, hasPermission } from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class AuthService {
@@ -189,7 +190,11 @@ export class AuthService {
         memberships: {
           include: {
             workspace: true,
-            role: true,
+            role: {
+              include: {
+                permissions: { include: { permission: true } },
+              },
+            },
             department: true,
             team: true,
             designation: true,
@@ -225,7 +230,11 @@ export class AuthService {
             memberships: {
               include: {
                 workspace: true,
-                role: true,
+                role: {
+                  include: {
+                    permissions: { include: { permission: true } },
+                  },
+                },
                 department: true,
                 team: true,
                 designation: true,
@@ -384,7 +393,11 @@ export class AuthService {
         memberships: {
           include: {
             workspace: true,
-            role: true,
+            role: {
+              include: {
+                permissions: { include: { permission: true } },
+              },
+            },
             department: true,
             team: true,
             designation: true,
@@ -515,12 +528,20 @@ export class AuthService {
           userId: adminUserId,
           workspaceId,
           status: 'ACTIVE',
-          accessRole: { in: ['OWNER', 'ADMIN'] },
+        },
+        include: {
+          role: { include: { permissions: { include: { permission: true } } } },
         },
       });
 
-      if (!adminMembership) {
-        throw new ForbiddenException('Only workspace Owners and Admins can reset user two-factor authentication');
+      const adminCtx = adminMembership ? buildUserContextFromMembership(adminMembership) : undefined;
+      const isAuthorized =
+        adminMembership &&
+        (adminMembership.accessRole === 'OWNER' ||
+          hasPermission(adminCtx, ['roles:manage', 'settings:manage', 'people:manage']));
+
+      if (!isAuthorized) {
+        throw new ForbiddenException('Insufficient permissions to reset user two-factor authentication');
       }
     }
 

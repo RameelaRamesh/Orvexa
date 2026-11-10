@@ -34,6 +34,14 @@ export class RolesController {
     return this.rolesService.listAllPermissions();
   }
 
+  @Get('recommend')
+  async recommendForDesignation(
+    @CurrentWorkspace() workspaceId: string,
+    @Query('designation') designation?: string,
+  ) {
+    return this.rolesService.recommendForDesignation(workspaceId, designation);
+  }
+
   /**
    * Diagnostic Access Inspector: reviews effective access and explains WHY a user can or cannot perform an action
    */

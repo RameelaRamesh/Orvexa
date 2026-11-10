@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { WorkItemStatus, PriorityLevel } from '@prisma/client';
+import {
+  hasPermission,
+  isTargetWithinScope,
+  resolveEffectiveScope,
+  resolveLedTeamIds,
+} from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class WorkItemsService {
@@ -9,13 +15,14 @@ export class WorkItemsService {
   async list(
     workspaceId: string,
     filter?: { clientId?: string; status?: WorkItemStatus; assignedMembershipId?: string },
+    userContext?: any,
   ) {
     const where: any = { workspaceId };
     if (filter?.clientId) where.clientId = filter.clientId;
     if (filter?.status) where.status = filter.status;
     if (filter?.assignedMembershipId) where.assignedMembershipId = filter.assignedMembershipId;
 
-    return this.prisma.workItem.findMany({
+    const items = await this.prisma.workItem.findMany({
       where,
       include: {
         client: true,
@@ -25,6 +32,23 @@ export class WorkItemsService {
         qualityReviews: { take: 1, orderBy: { reviewedAt: 'desc' } },
       },
       orderBy: { createdAt: 'desc' },
+    });
+
+    if (!userContext || resolveEffectiveScope(userContext) === 'GLOBAL') return items;
+    const effectiveScope = resolveEffectiveScope(userContext);
+    const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
+
+    return items.filter((item: any) => {
+      if (userContext.membershipId && item.assignedMembershipId === userContext.membershipId) return true;
+      if (item.assignedMembership) {
+        return isTargetWithinScope(userContext, item.assignedMembership, ledTeamIds);
+      }
+      const metaDept = (item.metadata as any)?.departmentId;
+      if (metaDept && userContext.departmentId) {
+        return metaDept === userContext.departmentId;
+      }
+      if (effectiveScope === 'ASSIGNED') return false;
+      return hasPermission(userContext, ['work_items:assign', 'work_items:manage']);
     });
   }
 

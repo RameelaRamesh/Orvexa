@@ -7,11 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Layers, Plus, ShieldAlert, Award, Clock, ArrowRight } from 'lucide-react';
 import { toast } from 'sonner';
+import { checkPermission } from '@/lib/permissions';
 
 export default function WorkQueuePage() {
   const [workItems, setWorkItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [newItem, setNewItem] = useState({ title: '', batchId: '', quantity: 1, currentStage: 'PROCESSING' });
 
   const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -20,11 +22,24 @@ export default function WorkQueuePage() {
   const loadItems = async () => {
     if (!token || !wsId) return;
     try {
-      const res = await fetch(`${BRANDING.apiUrl}/work-items`, {
-        headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId },
-      });
+      const [res, meRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/work-items`, {
+          headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId },
+        }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, {
+          headers: { Authorization: `Bearer ${token}`, 'x-workspace-id': wsId },
+        }).catch(() => null),
+      ]);
       const data = await res.json();
       if (data.success) setWorkItems(data.data || []);
+      if (meRes && meRes.ok) {
+        const meJson = await meRes.json().catch(() => null);
+        const me = meJson?.data !== undefined ? meJson.data : meJson;
+        if (me?.memberships) {
+          const liveMem = me.memberships.find((m: any) => m.workspaceId === wsId) || me.memberships[0];
+          if (liveMem) setCurrentMembership(liveMem);
+        }
+      }
     } catch (err: any) {
       console.error(err);
     } finally {
@@ -33,8 +48,16 @@ export default function WorkQueuePage() {
   };
 
   useEffect(() => {
+    try {
+      const wsCache = localStorage.getItem('orvexa_cached_workspace');
+      if (wsCache) setCurrentMembership(JSON.parse(wsCache));
+    } catch {}
     loadItems();
   }, []);
+
+  const canProcessWorkItems =
+    checkPermission(currentMembership, 'work_items:process') ||
+    checkPermission(currentMembership, 'work_items:manage');
 
   const handleCreateWorkItem = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,11 +105,13 @@ export default function WorkQueuePage() {
   return (
     <div className="space-y-6">
       {/* Pipeline Stage Columns Overview & Action */}
-      <div className="flex items-center justify-end pb-1">
-        <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
-          <Plus className="h-4 w-4" /> Add Batch / Work Queue
-        </Button>
-      </div>
+      {canProcessWorkItems && (
+        <div className="flex items-center justify-end pb-1">
+          <Button onClick={() => setShowModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
+            <Plus className="h-4 w-4" /> Add Batch / Work Queue
+          </Button>
+        </div>
+      )}
       {/* Pipeline Stage Columns Overview */}
       <div className="grid gap-4 md:grid-cols-4">
         {['PROCESSING', 'QA_REVIEW', 'REWORK', 'COMPLETED'].map((stage) => {
@@ -136,7 +161,7 @@ export default function WorkQueuePage() {
                       </Badge>
                     </td>
                     <td className="py-3 px-4 text-right space-x-2">
-                      {item.status !== 'COMPLETED' && (
+                      {canProcessWorkItems && item.status !== 'COMPLETED' && (
                         <Button
                           size="sm"
                           variant="outline"

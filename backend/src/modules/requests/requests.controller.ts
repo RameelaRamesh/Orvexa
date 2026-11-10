@@ -96,7 +96,7 @@ export class RequestsController {
     @Request() req: any,
     @Param('id') id: string,
   ) {
-    return this.requestsService.acceptRequest(workspaceId, id, req.membershipId, req.user);
+    return this.requestsService.acceptRequest(workspaceId, id, req.membershipId, req.user, undefined, req.userContext);
   }
 
   @Post(':id/acknowledge')

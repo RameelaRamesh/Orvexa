@@ -9,6 +9,12 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { MailService } from '../../infrastructure/mail/mail.service';
+import {
+  buildUserContextFromMembership,
+  isTargetWithinScope,
+  resolveEffectiveScope,
+  resolveLedTeamIds,
+} from '../../common/utils/access-scope.util';
 
 export interface RequestCategory {
   id: string;
@@ -469,6 +475,7 @@ export class RequestsService {
       ownerMembershipId: undefined,
       responsibleTeamId: resolvedTeamId,
       responsibleTeamName: resolvedTeamName,
+      departmentId: data.departmentId || requester.departmentId || undefined,
       priority,
       status: 'SUBMITTED',
       dueDate: data.dueDate ? new Date(data.dueDate) : undefined,
@@ -539,8 +546,19 @@ export class RequestsService {
         }
       }
     } else {
-      // Group target: notify everyone in the group
+      // Group target: notify eligible members in the target group (respecting team/dept isolation for MANAGER)
       for (const tm of activeTargetMembers) {
+        if (
+          normalizedTargetRole === 'MANAGER' &&
+          tm.id !== requesterMembershipId &&
+          (requester.departmentId || requester.teamId) &&
+          (tm.departmentId || tm.teamId) &&
+          tm.dataScope !== 'GLOBAL'
+        ) {
+          const sameDept = !requester.departmentId || !tm.departmentId || tm.departmentId === requester.departmentId;
+          const sameTeam = !requester.teamId || !tm.teamId || tm.teamId === requester.teamId;
+          if (!sameDept || (tm.dataScope !== 'DEPARTMENT' && !sameTeam)) continue;
+        }
         await this.sendNotificationSafely(
           workspaceId,
           tm.id,
@@ -586,21 +604,26 @@ export class RequestsService {
     const settings = (ws?.settings as any) || {};
     let requests: ServiceRequest[] = settings.serviceRequests || [];
 
-    // Backend Privacy Gate (Requirement 3):
-    // A ticket is visible to:
-    // 1. The requester
-    // 2. Anyone whose role equals target_role
-    // 3. The target_user_id
-    // 4. The assigned_to person
-    // 5. System OWNER
+    // Backend Privacy Gate with strict Team / Department scope isolation
+    let memMap = new Map<string, any>();
+    let ledTeamIds: string[] = [];
+    const effectiveScope = userContext ? resolveEffectiveScope(userContext) : 'GLOBAL';
     if (userContext && userContext.accessRole !== 'OWNER') {
+      if (effectiveScope === 'TEAM' || effectiveScope === 'DEPARTMENT') {
+        const [allMems, led] = await Promise.all([
+          this.prisma.membership.findMany({ where: { workspaceId }, select: { id: true, departmentId: true, teamId: true, reportsToId: true } }).catch(() => []),
+          resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId),
+        ]);
+        memMap = new Map((allMems || []).map((m: any) => [m.id, m]));
+        ledTeamIds = led;
+      }
+
       const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
       const currentMemId = userContext.membershipId;
       const currentUserId = userContext.userId || currentMemId;
 
       requests = requests.filter((r) => {
         const isRequester = r.requesterMembershipId === currentMemId;
-        const isTargetRole = r.targetRole && r.targetRole.toUpperCase() === userRole;
         const isTargetUser =
           r.targetUserId === currentUserId ||
           r.targetUserId === currentMemId;
@@ -608,26 +631,32 @@ export class RequestsService {
           r.assignedTo === currentMemId ||
           r.assignedTo === currentUserId ||
           r.ownerMembershipId === currentMemId;
+        if (isRequester || isTargetUser || isAssigned) return true;
 
-        return isRequester || isTargetRole || isTargetUser || isAssigned;
+        const isTargetRole = r.targetRole && r.targetRole.toUpperCase() === userRole;
+        if (!isTargetRole) return false;
+
+        if (effectiveScope === 'GLOBAL') return true;
+        if (effectiveScope === 'ASSIGNED') return false;
+
+        const reqMem = memMap.get(r.requesterMembershipId);
+        if (effectiveScope === 'DEPARTMENT') {
+          if (!userContext.departmentId) return false;
+          if (r.departmentId) return r.departmentId === userContext.departmentId;
+          return reqMem ? reqMem.departmentId === userContext.departmentId : false;
+        }
+        // TEAM scope
+        if (r.responsibleTeamId && (r.responsibleTeamId === userContext.teamId || ledTeamIds.includes(r.responsibleTeamId))) {
+          return true;
+        }
+        return reqMem ? isTargetWithinScope(userContext, reqMem, ledTeamIds) : false;
       });
     }
 
     // Apply Filter: All / Sent to me / Sent by me (Requirement 3)
     if (query?.scope === 'SENT_TO_ME' && userContext) {
-      const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
       const currentMemId = userContext.membershipId;
-      const currentUserId = userContext.userId || currentMemId;
-
-      requests = requests.filter(
-        (r) =>
-          r.requesterMembershipId !== currentMemId &&
-          (r.targetRole?.toUpperCase() === userRole ||
-            r.targetUserId === currentUserId ||
-            r.targetUserId === currentMemId ||
-            r.assignedTo === currentMemId ||
-            r.assignedTo === currentUserId),
-      );
+      requests = requests.filter((r) => r.requesterMembershipId !== currentMemId);
     } else if (query?.scope === 'SENT_BY_ME' && userContext) {
       requests = requests.filter(
         (r) => r.requesterMembershipId === userContext.membershipId,
@@ -667,11 +696,12 @@ export class RequestsService {
       throw new NotFoundException('Service request not found in this workspace');
     }
 
-    // Backend Privacy Check (Requirement 3)
+    // Backend Privacy & Team/Department Scope Check
     if (userContext && userContext.accessRole !== 'OWNER') {
       const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
       const currentMemId = userContext.membershipId;
       const currentUserId = userContext.userId || currentMemId;
+      const effectiveScope = resolveEffectiveScope(userContext);
 
       const isRequester = request.requesterMembershipId === currentMemId;
       const isTargetRole = request.targetRole && request.targetRole.toUpperCase() === userRole;
@@ -683,7 +713,26 @@ export class RequestsService {
         request.assignedTo === currentUserId ||
         request.ownerMembershipId === currentMemId;
 
-      if (!isRequester && !isTargetRole && !isTargetUser && !isAssigned) {
+      let scopeAuthorized = isRequester || isTargetUser || isAssigned;
+      if (!scopeAuthorized && isTargetRole) {
+        if (effectiveScope === 'GLOBAL') {
+          scopeAuthorized = true;
+        } else if (effectiveScope === 'DEPARTMENT') {
+          const reqMem = await this.prisma.membership.findFirst({ where: { id: request.requesterMembershipId, workspaceId } });
+          scopeAuthorized = Boolean(
+            userContext.departmentId &&
+            (request.departmentId === userContext.departmentId || reqMem?.departmentId === userContext.departmentId),
+          );
+        } else if (effectiveScope === 'TEAM') {
+          const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, currentMemId);
+          const reqMem = await this.prisma.membership.findFirst({ where: { id: request.requesterMembershipId, workspaceId } });
+          scopeAuthorized =
+            Boolean(request.responsibleTeamId && (request.responsibleTeamId === userContext.teamId || ledTeamIds.includes(request.responsibleTeamId))) ||
+            (reqMem ? isTargetWithinScope(userContext, reqMem, ledTeamIds) : false);
+        }
+      }
+
+      if (!scopeAuthorized) {
         throw new ForbiddenException('Access denied: You are not authorized to view this service request.');
       }
     }
@@ -701,7 +750,11 @@ export class RequestsService {
     actorMembershipId: string,
     actorUser?: any,
     notes?: string,
+    userContext?: any,
   ) {
+    if (userContext) {
+      await this.getRequestById(workspaceId, requestId, userContext);
+    }
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { settings: true },

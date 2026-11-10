@@ -40,6 +40,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           team: 'teams',
           department: 'departments',
           designation: 'designations',
+          invitation: 'invitations',
           notification: 'notifications',
           ticket: 'tickets',
           file: 'files',
@@ -52,6 +53,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
           holiday: 'holidays',
           attendance: 'attendances',
           qualityReview: 'qualityReviews',
+          workItem: 'workItems',
           calendarEvent: 'calendarEvents',
         };
 

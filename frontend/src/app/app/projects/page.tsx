@@ -41,6 +41,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
+import { checkPermission, getEffectiveScope } from '@/lib/permissions';
 
 // Status Types
 type TaskStatusType = 'TODO' | 'IN_PROGRESS' | 'IN_REVIEW' | 'BLOCKED' | 'COMPLETED';
@@ -232,6 +233,7 @@ export default function ProjectsAndTasksPage() {
 
   // Auth & Context
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [userRole, setUserRole] = useState<string>('MEMBER');
 
   const getHeaders = () => {
@@ -247,12 +249,22 @@ export default function ProjectsAndTasksPage() {
   // Load User Context
   useEffect(() => {
     try {
-      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
       const ws = localStorage.getItem('activeWorkspaceId');
+      const wsCache = localStorage.getItem('orvexa_cached_workspace');
+      if (wsCache) {
+        const wsObj = JSON.parse(wsCache);
+        if (wsObj && (!ws || wsObj.workspaceId === ws || wsObj.id)) {
+          setCurrentMembership(wsObj);
+          if (wsObj.id || wsObj.membershipId) setCurrentMembershipId(wsObj.id || wsObj.membershipId);
+          setUserRole(wsObj.accessRole || wsObj.role?.name || 'MEMBER');
+        }
+      }
+      const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
       const mem = (p.memberships || []).find((m: any) => m.workspaceId === ws) || p.memberships?.[0];
       if (mem) {
-        setCurrentMembershipId(mem.id);
-        setUserRole(mem.accessRole || 'MEMBER');
+        setCurrentMembership((prev: any) => prev || mem);
+        setCurrentMembershipId((prev) => prev || mem.id);
+        setUserRole((prev) => (prev === 'MEMBER' ? (mem.accessRole || 'MEMBER') : prev));
       }
     } catch {}
   }, []);
@@ -261,12 +273,27 @@ export default function ProjectsAndTasksPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [tasksRes, projectsRes, membersRes, deptsRes] = await Promise.all([
+      const [tasksRes, projectsRes, membersRes, deptsRes, meRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/tasks`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/projects`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/people?limit=100`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: getHeaders() }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers: getHeaders() }).catch(() => null),
       ]);
+
+      if (meRes && meRes.ok) {
+        const meJson = await meRes.json().catch(() => null);
+        const me = meJson?.data !== undefined ? meJson.data : meJson;
+        if (me?.memberships) {
+          const ws = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+          const liveMem = (ws ? me.memberships.find((m: any) => m.workspaceId === ws) : null) || me.memberships[0];
+          if (liveMem) {
+            setCurrentMembership(liveMem);
+            if (liveMem.id) setCurrentMembershipId(liveMem.id);
+            if (liveMem.accessRole) setUserRole(liveMem.accessRole);
+          }
+        }
+      }
 
       if (tasksRes.ok) {
         const data = await tasksRes.json();
@@ -346,10 +373,31 @@ export default function ProjectsAndTasksPage() {
     }
   };
 
-  // Check if current user is manager / team lead / admin
-  const isManagerOrAdmin = useMemo(() => {
-    return ['OWNER', 'ADMIN', 'MANAGER'].includes(userRole.toUpperCase()) || userRole.toUpperCase().includes('LEAD');
-  }, [userRole]);
+  // Strictly permission- and scope-driven capabilities (zero ADMIN auto-bypass)
+  const effectiveScope = useMemo(() => getEffectiveScope(currentMembership), [currentMembership]);
+  const canViewTeamWork = useMemo(() => {
+    if (!currentMembership) return false;
+    return (
+      effectiveScope !== 'ASSIGNED' ||
+      checkPermission(currentMembership, 'tasks:assign') ||
+      checkPermission(currentMembership, 'tasks:manage') ||
+      checkPermission(currentMembership, 'projects:manage')
+    );
+  }, [currentMembership, effectiveScope]);
+  const canCreateTask = useMemo(() => {
+    return currentMembership ? checkPermission(currentMembership, 'tasks:create') : false;
+  }, [currentMembership]);
+  const canCreateProject = useMemo(() => {
+    return currentMembership ? checkPermission(currentMembership, 'projects:create') : false;
+  }, [currentMembership]);
+  const canReviewOrApproveTasks = useMemo(() => {
+    return (
+      checkPermission(currentMembership, 'approvals:approve') ||
+      checkPermission(currentMembership, 'tasks:manage') ||
+      checkPermission(currentMembership, 'tasks:assign') ||
+      checkPermission(currentMembership, 'projects:manage')
+    );
+  }, [currentMembership]);
 
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
@@ -831,7 +879,7 @@ export default function ProjectsAndTasksPage() {
             </span>
           </button>
 
-          {isManagerOrAdmin && (
+          {canViewTeamWork && (
             <button
               type="button"
               onClick={() => {
@@ -888,22 +936,26 @@ export default function ProjectsAndTasksPage() {
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={() => setCreateTaskModalOpen(true)}
-            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            New Task
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreateProjectModalOpen(true)}
-            className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-          >
-            <Briefcase className="h-3.5 w-3.5" />
-            New Project
-          </button>
+          {canCreateTask && (
+            <button
+              type="button"
+              onClick={() => setCreateTaskModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              New Task
+            </button>
+          )}
+          {canCreateProject && (
+            <button
+              type="button"
+              onClick={() => setCreateProjectModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-900 text-xs font-semibold shadow-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+            >
+              <Briefcase className="h-3.5 w-3.5" />
+              New Project
+            </button>
+          )}
         </div>
       </div>
 
@@ -1199,13 +1251,15 @@ export default function ProjectsAndTasksPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Create your first project to organize deliverables and team tasks.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setCreateProjectModalOpen(true)}
-                  className="mt-3 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
-                >
-                  Create Project
-                </button>
+                {canCreateProject && (
+                  <button
+                    type="button"
+                    onClick={() => setCreateProjectModalOpen(true)}
+                    className="mt-3 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold"
+                  >
+                    Create Project
+                  </button>
+                )}
               </div>
             ) : (
               filteredProjects.map((p) => (
@@ -1741,7 +1795,7 @@ export default function ProjectsAndTasksPage() {
                   <p className="text-xs text-amber-800 dark:text-amber-300">
                     Reason: {selectedTask.extensionRequest.reason}
                   </p>
-                  {isManagerOrAdmin && (
+                  {canReviewOrApproveTasks && (
                     <div className="flex items-center gap-2 pt-1">
                       <button
                         type="button"
@@ -1871,7 +1925,7 @@ export default function ProjectsAndTasksPage() {
                   )}
 
                   {/* Manager Review Controls */}
-                  {selectedTask.status === 'IN_REVIEW' && isManagerOrAdmin && (
+                  {selectedTask.status === 'IN_REVIEW' && canReviewOrApproveTasks && (
                     <>
                       <button
                         type="button"

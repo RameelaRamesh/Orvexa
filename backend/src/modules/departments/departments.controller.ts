@@ -17,7 +17,7 @@ export class DepartmentsController {
   }
 
   @Post()
-  @RequirePermissions('people:manage')
+  @RequirePermissions('departments:manage')
   async create(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: { name: string; code?: string; description?: string },
@@ -26,7 +26,7 @@ export class DepartmentsController {
   }
 
   @Patch(':id')
-  @RequirePermissions('people:manage')
+  @RequirePermissions('departments:manage')
   async update(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') id: string,
@@ -36,7 +36,7 @@ export class DepartmentsController {
   }
 
   @Delete(':id')
-  @RequirePermissions('people:manage')
+  @RequirePermissions('departments:manage')
   async delete(@CurrentWorkspace() workspaceId: string, @Param('id') id: string) {
     return this.departmentsService.delete(id, workspaceId);
   }

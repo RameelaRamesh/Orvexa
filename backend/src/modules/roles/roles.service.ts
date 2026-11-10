@@ -1,5 +1,10 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  buildUserContextFromMembership,
+  hasPermission,
+  resolveEffectiveScope,
+} from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class RolesService {
@@ -305,11 +310,12 @@ export class RolesService {
       throw new NotFoundException('Membership not found in workspace');
     }
 
-    const isPlatformAdmin = membership.accessRole === 'OWNER' || membership.accessRole === 'ADMIN';
-    const isRoleActive = !membership.role?.description?.startsWith('[DEACTIVATED]');
-    const assignedPermissions = membership.role?.permissions?.map((rp) => rp.permission.code) || [];
+    const isPlatformAdmin = membership.accessRole === 'OWNER';
+    const userCtx = buildUserContextFromMembership(membership);
+    const isRoleActive = userCtx.isRoleActive !== false;
+    const assignedPermissions = userCtx.permissionCodes || [];
 
-    // Compute effective granted permissions
+    // Compute effective granted permissions (strictly permission-based for non-OWNER, including ADMIN subtypes)
     let effectivePermissions: string[] = [];
     const permissionSources: Record<string, string> = {};
 
@@ -318,12 +324,6 @@ export class RolesService {
       effectivePermissions = allPerms.map((p) => p.code);
       effectivePermissions.forEach((code) => {
         permissionSources[code] = 'PLATFORM_OWNER_AUTHORITY (Unrestricted platform authority)';
-      });
-    } else if (membership.accessRole === 'ADMIN') {
-      const allPerms = await this.prisma.permission.findMany({ select: { code: true } });
-      effectivePermissions = allPerms.map((p) => p.code);
-      effectivePermissions.forEach((code) => {
-        permissionSources[code] = 'PLATFORM_ADMIN_AUTHORITY (Full operational administration)';
       });
     } else if (isRoleActive) {
       effectivePermissions = [...assignedPermissions];
@@ -334,10 +334,10 @@ export class RolesService {
       effectivePermissions = [];
     }
 
-    // Data scope description
-    const scope = membership.dataScope || 'ASSIGNED';
+    // Data scope derived from OWNER / scope:* permissions with legacy fallback
+    const scope = resolveEffectiveScope(userCtx);
     let scopeDescription = 'Restricted to records directly assigned to or created by this member';
-    if (scope === 'GLOBAL' || scope === 'ALL') {
+    if (scope === 'GLOBAL') {
       scopeDescription = 'Global access to all records across all departments in the organization';
     } else if (scope === 'DEPARTMENT') {
       scopeDescription = `Restricted to records within the member's department: ${membership.department?.name || 'Unassigned'}`;
@@ -345,7 +345,7 @@ export class RolesService {
       scopeDescription = `Restricted to records within the member's team (${membership.team?.name || 'Unassigned'}) and direct reports (${membership.directReports?.length || 0} reports)`;
     }
 
-    // Permission evaluation
+    // Permission evaluation (no hardcoded ADMIN bypass)
     let evaluation: any = undefined;
     if (testPermission) {
       const required = testPermission.trim();
@@ -355,16 +355,21 @@ export class RolesService {
       if (membership.accessRole === 'OWNER') {
         isAllowed = true;
         reason = 'Allowed: Organization Owner holds absolute platform authority';
-      } else if (membership.accessRole === 'ADMIN') {
-        isAllowed = true;
-        reason = 'Allowed: Workspace Administrator holds operational authority';
       } else if (!isRoleActive) {
         isAllowed = false;
         reason = `Denied: Assigned role "${membership.role?.name}" is currently deactivated. All permissions suspended.`;
       } else {
-        const [mod, action] = required.split(':');
+        const [mod] = required.split(':');
+        const isSensitiveOrScopedPerm =
+          required === 'people:view_sensitive' ||
+          required.startsWith('calendar:view:') ||
+          required === 'calendar:holidays:manage';
         const hasDirect = assignedPermissions.includes(required);
-        const hasManage = assignedPermissions.includes(`${mod}:manage`) || assignedPermissions.includes(`${mod}:administer`);
+        const hasManage =
+          mod !== 'scope' &&
+          !isSensitiveOrScopedPerm &&
+          (assignedPermissions.includes(`${mod}:manage`) || assignedPermissions.includes(`${mod}:administer`));
+        const viaUtil = hasPermission(userCtx, required);
 
         if (hasDirect) {
           isAllowed = true;
@@ -372,6 +377,9 @@ export class RolesService {
         } else if (hasManage) {
           isAllowed = true;
           reason = `Allowed: Granted via module administrator permission "${mod}:manage"`;
+        } else if (viaUtil) {
+          isAllowed = true;
+          reason = `Allowed: Granted via aliased permission in role "${membership.role?.name}"`;
         } else {
           isAllowed = false;
           reason = `Denied: Role "${membership.role?.name}" does not grant this permission "${required}"`;
@@ -472,6 +480,8 @@ export class RolesService {
       'inventory:view', 'inventory:move',
       'ledger:view', 'ledger:export',
       'documents:view', 'documents:upload', 'documents:download',
+      'scope:team',
+      'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
     ];
 
     const memberPermCodes = [
@@ -483,6 +493,8 @@ export class RolesService {
       'leave:view', 'leave:apply',
       'approvals:view',
       'people:view',
+      'scope:own',
+      'calendar:create', 'calendar:invite',
     ];
 
     for (const r of platformRoles) {
@@ -542,6 +554,24 @@ export class RolesService {
       { code: 'people:delete', name: 'Deactivate & Offboard Employees', module: 'People' },
       { code: 'people:export', name: 'Export Employee Records', module: 'People' },
       { code: 'people:manage', name: 'Full People Administration', module: 'People' },
+      { code: 'onboarding:manage', name: 'Manage Employee Onboarding & Checklists', module: 'People' },
+      { code: 'people:view_sensitive', name: 'View Bank Account, PAN, Aadhaar & Compensation PII', module: 'People' },
+
+      // Scope
+      { code: 'scope:own', name: 'View Own Records Only', module: 'Scope' },
+      { code: 'scope:team', name: 'View Assigned Team & Direct Reports Records', module: 'Scope' },
+      { code: 'scope:department', name: 'View Assigned Department Records', module: 'Scope' },
+      { code: 'scope:workspace', name: 'View Entire Workspace Records', module: 'Scope' },
+
+      // Calendar
+      { code: 'calendar:view:all', name: 'View All Company Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:department', name: 'View Department Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:team', name: 'View Team Calendar Events', module: 'Calendar' },
+      { code: 'calendar:view:schedules', name: 'View Individual Employee Schedules', module: 'Calendar' },
+      { code: 'calendar:create', name: 'Create Calendar Events & Meetings', module: 'Calendar' },
+      { code: 'calendar:invite', name: 'Invite Participants to Meetings', module: 'Calendar' },
+      { code: 'calendar:manage', name: 'Edit and Cancel Events', module: 'Calendar' },
+      { code: 'calendar:holidays:manage', name: 'Manage Company Holidays', module: 'Calendar' },
 
       // Restricted Payroll Data
       { code: 'payroll:view', name: 'View Restricted Payroll & Salaries', module: 'Payroll' },
@@ -659,5 +689,215 @@ export class RolesService {
         create: p,
       });
     }
+  }
+
+  async recommendForDesignation(workspaceId: string, designationTitle?: string) {
+    const title = (designationTitle || '').trim();
+    const lower = title.toLowerCase();
+
+    const [ws, roles, allPermissions] = await Promise.all([
+      this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } }),
+      this.listWorkspaceRoles(workspaceId),
+      this.listAllPermissions(),
+    ]);
+
+    const settings = (ws?.settings as any) || {};
+    const savedMap: Record<string, string> = settings.designationRoleMap || {};
+    const allCodes = allPermissions.map((p: any) => p.code);
+    const nonBillingCodes = allCodes.filter((c: string) => c !== 'billing:manage');
+
+    const templates = [
+      {
+        key: 'PAYROLL_ADMIN',
+        match: ['payroll', 'compensation', 'salary', 'finance admin'],
+        suggestedRoleName: 'Payroll Admin',
+        accessRole: 'ADMIN',
+        dataScope: 'GLOBAL',
+        description: 'Manages salary structures, payslip runs, attendance/leave verification, and payroll exports without user/role administration access.',
+        permissionCodes: [
+          'payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage',
+          'people:view', 'people:view_sensitive',
+          'time:view', 'attendance:view', 'leave:view',
+          'reports:view', 'reports:export',
+          'scope:workspace', 'calendar:create', 'calendar:invite',
+        ],
+      },
+      {
+        key: 'RECRUITMENT_ADMIN',
+        match: ['recruit', 'talent', 'hiring', 'ta specialist', 'acquisition'],
+        suggestedRoleName: 'Recruitment Admin',
+        accessRole: 'ADMIN',
+        dataScope: 'GLOBAL',
+        description: 'Handles invitations, new hire onboarding, and department placement without payroll or existing profile edit rights unless checked.',
+        permissionCodes: [
+          'invitations:manage', 'onboarding:manage', 'people:view', 'departments:manage',
+          'scope:workspace', 'calendar:create', 'calendar:invite',
+        ],
+      },
+      {
+        key: 'HR_GENERALIST',
+        match: ['generalist', 'hr manager', 'hr executive', 'people ops', 'human resource'],
+        suggestedRoleName: 'HR Generalist',
+        accessRole: 'ADMIN',
+        dataScope: 'GLOBAL',
+        description: 'Manages employee directory, profile edits, onboarding, leave policies/approvals, and attendance without payroll disbursement controls.',
+        permissionCodes: [
+          'people:view', 'people:create', 'people:edit', 'people:delete', 'people:export', 'people:manage',
+          'onboarding:manage', 'people:view_sensitive', 'invitations:manage',
+          'leave:view', 'leave:approve', 'leave:manage',
+          'attendance:view', 'attendance:edit', 'attendance:export', 'time:view',
+          'departments:manage', 'assets:view', 'assets:assign',
+          'documents:view', 'documents:upload', 'documents:download',
+          'reports:view', 'scope:workspace',
+          'calendar:view:all', 'calendar:create', 'calendar:invite', 'calendar:holidays:manage',
+        ],
+      },
+      {
+        key: 'OPERATIONS_ADMIN',
+        match: ['operations head', 'coo', 'workspace admin', 'system admin', 'chief'],
+        suggestedRoleName: 'Operations Admin',
+        accessRole: 'ADMIN',
+        dataScope: 'GLOBAL',
+        description: 'Full operational administration across departments, workflows, and modules (excluding subscription billing).',
+        permissionCodes: nonBillingCodes,
+      },
+      {
+        key: 'DEPARTMENT_LEAD',
+        match: ['department head', 'dept head', 'department lead', 'hod', 'vp ', 'director'],
+        suggestedRoleName: 'Department Lead',
+        accessRole: 'MANAGER',
+        dataScope: 'DEPARTMENT',
+        description: 'Full visibility and approvals across their assigned Department (including all teams within that department).',
+        permissionCodes: [
+          'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+          'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
+          'projects:view', 'projects:create', 'projects:edit',
+          'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+          'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+          'leave:view', 'leave:apply', 'leave:approve',
+          'approvals:view', 'approvals:approve',
+          'quality:view', 'quality:audit', 'quality:review', 'sla:view', 'reports:view', 'people:view',
+          'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+          'inventory:view', 'inventory:move', 'ledger:view', 'ledger:export',
+          'documents:view', 'documents:upload', 'documents:download',
+          'scope:department', 'calendar:view:department', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
+        ],
+      },
+      {
+        key: 'TEAM_LEAD',
+        match: ['team lead', 'tech lead', 'tl', 'marketing lead', 'engineering lead', 'squad lead', 'manager', 'supervisor'],
+        suggestedRoleName: 'Team Lead',
+        accessRole: 'MANAGER',
+        dataScope: 'TEAM',
+        description: 'Restricted strictly to their own Team and direct reports. Check scope:department if they should manage the entire department.',
+        permissionCodes: [
+          'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+          'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
+          'projects:view', 'projects:create', 'projects:edit',
+          'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+          'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+          'leave:view', 'leave:apply', 'leave:approve',
+          'approvals:view', 'approvals:approve',
+          'quality:view', 'quality:audit', 'quality:review', 'sla:view', 'reports:view', 'people:view',
+          'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+          'inventory:view', 'inventory:move', 'ledger:view', 'ledger:export',
+          'documents:view', 'documents:upload', 'documents:download',
+          'scope:team', 'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
+        ],
+      },
+      {
+        key: 'QA_AUDITOR',
+        match: ['qa', 'quality', 'auditor', 'tester', 'qc'],
+        suggestedRoleName: 'QA Auditor',
+        accessRole: 'MEMBER',
+        dataScope: 'TEAM',
+        description: 'Conducts quality scorecards, QA reviews, and audits within assigned team scope.',
+        permissionCodes: [
+          'tasks:view', 'work_items:view', 'work_items:process',
+          'quality:view', 'quality:audit', 'quality:review', 'sla:view',
+          'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply',
+          'people:view', 'scope:team', 'calendar:create', 'calendar:invite',
+        ],
+      },
+    ];
+
+    const defaultTemplate = {
+      key: 'MEMBER',
+      suggestedRoleName: 'Member',
+      accessRole: 'MEMBER',
+      dataScope: 'ASSIGNED',
+      description: 'Individual contributor with access to assigned tasks, attendance, leave applications, and own profile.',
+      permissionCodes: [
+        'tasks:view', 'tasks:create', 'tasks:edit',
+        'projects:view', 'work_items:view', 'work_items:process',
+        'time:view', 'time:log', 'attendance:view', 'attendance:clock',
+        'leave:view', 'leave:apply', 'approvals:view', 'people:view',
+        'scope:own', 'calendar:create', 'calendar:invite',
+      ],
+    };
+
+    const savedRoleId = savedMap[lower];
+    const savedRole = savedRoleId ? roles.find((r: any) => r.id === savedRoleId && r.isActive !== false) : null;
+    const inferCoreRole = (codes: string[]) => {
+      if (codes.some((c: string) => c.startsWith('payroll:') || c.startsWith('invitations:') || c.startsWith('roles:') || c.startsWith('people:manage') || c.startsWith('settings:'))) return 'ADMIN';
+      if (codes.some((c: string) => c.includes(':approve') || c === 'scope:team' || c === 'scope:department')) return 'MANAGER';
+      return 'MEMBER';
+    };
+
+    if (savedRole) {
+      const roleCodes = (savedRole.permissions || []).map((rp: any) => rp.permission?.code).filter(Boolean);
+      const sysName = savedRole.name?.toUpperCase();
+      const mappedCore = savedRole.isSystemRole && ['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'].includes(sysName) ? sysName : inferCoreRole(roleCodes);
+      return {
+        source: 'SAVED_WORKSPACE_MAPPING',
+        designation: title,
+        existingRoleId: savedRole.id,
+        existingRoleName: savedRole.name,
+        suggestedRoleName: savedRole.name,
+        accessRole: mappedCore,
+        dataScope: resolveEffectiveScope({ permissionCodes: roleCodes, dataScope: 'ASSIGNED' }),
+        permissionCodes: roleCodes,
+        description: savedRole.description || `Matched saved workspace role "${savedRole.name}" for "${title}".`,
+        templates: templates.map((t) => ({ key: t.key, name: t.suggestedRoleName, accessRole: t.accessRole, dataScope: t.dataScope, description: t.description, permissionCodes: t.permissionCodes })),
+      };
+    }
+
+    if (lower) {
+      const customMatch = roles.find(
+        (r: any) => !r.isSystemRole && r.isActive !== false && (r.name.toLowerCase() === lower || lower.includes(r.name.toLowerCase()) || r.name.toLowerCase().includes(lower)),
+      );
+      if (customMatch) {
+        const roleCodes = (customMatch.permissions || []).map((rp: any) => rp.permission?.code).filter(Boolean);
+        return {
+          source: 'EXISTING_CUSTOM_ROLE',
+          designation: title,
+          existingRoleId: customMatch.id,
+          existingRoleName: customMatch.name,
+          suggestedRoleName: customMatch.name,
+          accessRole: roleCodes.some((c: string) => c.startsWith('payroll:') || c.startsWith('invitations:') || c.startsWith('roles:') || c.startsWith('people:manage')) ? 'ADMIN' : roleCodes.some((c: string) => c.includes(':approve')) ? 'MANAGER' : 'MEMBER',
+          dataScope: resolveEffectiveScope({ permissionCodes: roleCodes, dataScope: 'ASSIGNED' }),
+          permissionCodes: roleCodes,
+          description: customMatch.description || `Matched existing custom role "${customMatch.name}".`,
+          templates: templates.map((t) => ({ key: t.key, name: t.suggestedRoleName, accessRole: t.accessRole, dataScope: t.dataScope, description: t.description, permissionCodes: t.permissionCodes })),
+        };
+      }
+    }
+
+    const matched = lower ? templates.find((t) => t.match.some((kw) => lower.includes(kw))) : null;
+    const chosen = matched || defaultTemplate;
+    const existingSystemOrNamed = roles.find((r: any) => r.name.toLowerCase() === chosen.suggestedRoleName.toLowerCase() && r.isActive !== false);
+
+    return {
+      source: matched ? 'SMART_DESIGNATION_TEMPLATE' : 'DEFAULT_TEMPLATE',
+      designation: title,
+      existingRoleId: existingSystemOrNamed?.id || null,
+      existingRoleName: existingSystemOrNamed?.name || null,
+      suggestedRoleName: chosen.suggestedRoleName,
+      accessRole: chosen.accessRole,
+      dataScope: chosen.dataScope,
+      permissionCodes: chosen.permissionCodes,
+      description: chosen.description,
+      templates: templates.map((t) => ({ key: t.key, name: t.suggestedRoleName, accessRole: t.accessRole, dataScope: t.dataScope, description: t.description, permissionCodes: t.permissionCodes })),
+    };
   }
 }

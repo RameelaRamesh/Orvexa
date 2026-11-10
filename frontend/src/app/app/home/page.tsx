@@ -26,6 +26,7 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
+import { getDisplayRoleName } from '@/lib/permissions';
 import { toast } from 'sonner';
 
 export default function HomePage() {
@@ -143,7 +144,7 @@ export default function HomePage() {
   };
 
   const role = activeWorkspace?.accessRole || 'MEMBER';
-  const roleLabel = role === 'ADMIN' ? 'Admin' : role === 'OWNER' ? 'Owner' : role === 'MANAGER' ? 'Manager' : 'Team Member';
+  const roleLabel = getDisplayRoleName(activeWorkspace);
   const departmentName = activeWorkspace?.department?.name || 'Engineering';
 
   // Fallback demo tasks if workspace tasks list is empty

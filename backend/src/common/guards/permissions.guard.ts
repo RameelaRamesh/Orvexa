@@ -2,6 +2,7 @@ import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@
 import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { PrismaService } from '../../database/prisma.service';
+import { buildUserContextFromMembership, hasAllPermissions } from '../utils/access-scope.util';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -16,12 +17,15 @@ export class PermissionsGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
-      return true;
-    }
-
     const request = context.switchToHttp().getRequest();
     let membership = request.membership;
+
+    if (!requiredPermissions || requiredPermissions.length === 0) {
+      if (membership && !request.userContext) {
+        request.userContext = buildUserContextFromMembership(membership);
+      }
+      return true;
+    }
 
     if (!membership && request.user?.id) {
       const rawWsId =
@@ -50,6 +54,9 @@ export class PermissionsGuard implements CanActivate {
               },
             },
           },
+          department: true,
+          team: true,
+          designation: true,
         },
       });
 
@@ -64,17 +71,9 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Workspace membership context required for permission check');
     }
 
-    // Attach userContext to request for downstream services and tenant-scoped queries
-    request.userContext = {
-      membershipId: membership.id,
-      userId: membership.userId,
-      accessRole: membership.accessRole,
-      roleId: membership.roleId,
-      roleName: membership.role?.name,
-      dataScope: membership.dataScope || 'ASSIGNED',
-      departmentId: membership.departmentId,
-      teamId: membership.teamId,
-    };
+    // Attach unified userContext with permissionCodes & permission-derived effectiveScope
+    const userContext = buildUserContextFromMembership(membership);
+    request.userContext = userContext;
 
     // Platform-level security controls: OWNER holds root organization authority for recovery protection
     if (membership.accessRole === 'OWNER') {
@@ -82,37 +81,13 @@ export class PermissionsGuard implements CanActivate {
     }
 
     // Role lifecycle check: if role is deactivated, permissions are inactive
-    const isRoleActive = !membership.role?.description?.startsWith('[DEACTIVATED]');
-    if (!isRoleActive) {
+    if (!userContext.isRoleActive) {
       throw new ForbiddenException(
         `Role "${membership.role?.name || 'Assigned Role'}" is currently deactivated. Access denied.`,
       );
     }
 
-    const userPermissionCodes =
-      membership.role?.permissions?.map(
-        (rp: { permission: { code: string } }) => rp.permission.code,
-      ) || [];
-
-    const hasPermission = requiredPermissions.every((perm) => {
-      if (userPermissionCodes.includes(perm)) return true;
-
-      // Module-level manager permission grants sub-actions (e.g. people:manage grants people:view, people:edit)
-      const [mod] = perm.split(':');
-      if (
-        userPermissionCodes.includes(`${mod}:manage`) ||
-        userPermissionCodes.includes(`${mod}:administer`)
-      ) {
-        return true;
-      }
-
-      if (perm === 'settings:manage' && (userPermissionCodes.includes('org:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-      if (perm === 'org:manage' && (userPermissionCodes.includes('settings:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-      if (perm === 'quality:manage' && userPermissionCodes.includes('quality:review')) return true;
-      if (perm === 'quality:review' && userPermissionCodes.includes('quality:manage')) return true;
-
-      return false;
-    });
+    const hasPermission = hasAllPermissions(userContext, requiredPermissions);
 
     if (!hasPermission) {
       throw new ForbiddenException(

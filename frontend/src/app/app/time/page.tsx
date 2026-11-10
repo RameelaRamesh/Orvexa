@@ -37,6 +37,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { checkPermission, getEffectiveScope, getDisplayRoleName } from '@/lib/permissions';
 
 export default function TimeAttendancePage() {
   const [activeTab, setActiveTab] = useState<'team_logs' | 'corrections' | 'shifts_policy' | 'leave'>('team_logs');
@@ -71,6 +72,7 @@ export default function TimeAttendancePage() {
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: true });
   };
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [showApplyLeaveModal, setShowApplyLeaveModal] = useState(false);
@@ -314,14 +316,10 @@ export default function TimeAttendancePage() {
       const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
       let currentMembershipObj: any = null;
       if (meData?.memberships) {
-        const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
+        const mem = meData.memberships.find((m: any) => m.workspaceId === wsId) || meData.memberships[0];
         if (mem) {
-          const isHR =
-            mem.designation?.title?.toLowerCase().includes('hr') ||
-            mem.department?.name?.toLowerCase().includes('hr') ||
-            mem.user?.email?.toLowerCase().includes('hr');
-          const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
-          setCurrentUserRole(effectiveRole);
+          setCurrentMembership(mem);
+          setCurrentUserRole(mem.accessRole || 'MEMBER');
           setCurrentMembershipId(mem.id);
           setCurrentUserDesignation(mem.designation?.title || '');
           const isOwner = mem.accessRole === 'OWNER';
@@ -443,6 +441,7 @@ export default function TimeAttendancePage() {
   };
 
   const hasPerm = (perm: string) => {
+    if (currentMembership) return checkPermission(currentMembership, perm);
     if (isPlatformAdmin) return true;
     const [mod] = perm.split(':');
     return (
@@ -451,6 +450,8 @@ export default function TimeAttendancePage() {
       userPermissions.includes(`${mod}:administer`)
     );
   };
+
+  const effectiveScope = getEffectiveScope(currentMembership);
 
   const canAccessShiftTracker = !isAttendanceDisabled && (
     isPlatformAdmin ||
@@ -468,20 +469,20 @@ export default function TimeAttendancePage() {
   const canManageShiftsPolicy = !isAttendanceDisabled && (
     isPlatformAdmin ||
     hasPerm('time:manage') ||
-    hasPerm('attendance:manage') ||
-    currentUserRole === 'OWNER' ||
-    currentUserRole === 'ADMIN' ||
-    currentUserRole === 'MANAGER'
+    hasPerm('attendance:manage')
   );
 
   const canViewCorrections = !isAttendanceDisabled && (
     isPlatformAdmin ||
     hasPerm('attendance:edit') ||
-    hasPerm('attendance:manage') ||
-    currentUserRole === 'OWNER' ||
-    currentUserRole === 'ADMIN' ||
-    currentUserRole === 'MANAGER'
+    hasPerm('attendance:manage')
   );
+
+  const canManageRoles = hasPerm('roles:manage');
+  const canManageSettings = hasPerm('settings:manage');
+  const canApproveLeave = hasPerm('leave:approve') || hasPerm('leave:manage');
+  const canViewLeave = hasPerm('leave:view');
+  const canExportTime = hasPerm('time:export') || hasPerm('reports:export') || hasPerm('attendance:manage') || hasPerm('time:manage');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1207,20 +1208,24 @@ export default function TimeAttendancePage() {
               </p>
             </div>
           </div>
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || isPlatformAdmin) && (
+          {(canManageRoles || canManageSettings) && (
             <div className="flex items-center gap-2 shrink-0">
-              <a
-                href="/app/settings?tab=roles"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors shadow-sm"
-              >
-                Roles &amp; Permissions &rarr;
-              </a>
-              <a
-                href="/app/settings?tab=modules"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-600/50 bg-background/50 hover:bg-background text-amber-800 dark:text-amber-200 text-xs font-semibold transition-colors shadow-sm"
-              >
-                Modules
-              </a>
+              {canManageRoles && (
+                <a
+                  href="/app/settings?tab=roles"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold transition-colors shadow-sm"
+                >
+                  Roles &amp; Permissions &rarr;
+                </a>
+              )}
+              {canManageSettings && (
+                <a
+                  href="/app/settings?tab=modules"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-600/50 bg-background/50 hover:bg-background text-amber-800 dark:text-amber-200 text-xs font-semibold transition-colors shadow-sm"
+                >
+                  Modules
+                </a>
+              )}
             </div>
           )}
         </div>
@@ -1287,9 +1292,11 @@ export default function TimeAttendancePage() {
         </button>
       </div>
         <div className="flex items-center gap-2 justify-end self-end sm:self-center pb-1 sm:pb-0">
-          <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-1.5 text-xs h-8">
-            <Download className="h-3.5 w-3.5" /> Export CSV
-          </Button>
+          {canExportTime && (
+            <Button variant="outline" size="sm" onClick={handleExportCSV} className="gap-1.5 text-xs h-8">
+              <Download className="h-3.5 w-3.5" /> Export CSV
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={loadAllData} className="gap-1.5 text-xs h-8 text-muted-foreground hover:text-foreground">
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </Button>
@@ -1862,20 +1869,20 @@ export default function TimeAttendancePage() {
             })}
           </div>
 
-          {/* Team Approvals Inbox (Visible for Managers, Admins & Owner) */}
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') && (
+          {/* Team Approvals Inbox (Visible for permitted reviewers & scoped leads) */}
+          {(canApproveLeave || (canViewLeave && effectiveScope !== 'ASSIGNED')) && (
             <Card className="border-border shadow-xs">
               <CardHeader className="pb-3 border-b border-border/60">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-sm font-bold flex items-center gap-2">
                       <Users className="h-4 w-4 text-primary" />
-                      Team Leave Approvals {currentUserRole === 'MANAGER' ? '(Team Lead — View Only)' : currentUserRole === 'ADMIN' ? '(Admin Approvals)' : '(Owner Approvals)'}
+                      Team Leave Approvals {!canApproveLeave ? `(${getDisplayRoleName(currentMembership)} — View Only)` : isPlatformAdmin ? '(Owner Approvals)' : `(${getDisplayRoleName(currentMembership)} Approvals)`}
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
-                      {currentUserRole === 'MANAGER'
-                        ? 'View pending and approved leave applications submitted by your team (Approvals handled by HR / Owner)'
-                        : 'Review, approve, or reject leave applications submitted by team members'}
+                      {!canApproveLeave
+                        ? 'View pending and approved leave applications within your visibility scope'
+                        : 'Review, approve, or reject leave applications submitted within your permitted scope'}
                     </CardDescription>
                   </div>
                   <Badge variant="secondary" className="text-xs">
@@ -1957,14 +1964,11 @@ export default function TimeAttendancePage() {
                                     );
                                   }
 
-                                  // 2. Team Lead / Manager: "team lead cant acces the leave approve, they will see only"
-                                  const isTeamLeadOrManager =
-                                    currentUserRole === 'MANAGER' ||
-                                    (currentUserDesignation && /lead/i.test(currentUserDesignation) && currentUserRole !== 'OWNER' && currentUserRole !== 'ADMIN');
-                                  if (isTeamLeadOrManager) {
+                                  // 2. Permission check: strict leave:approve / leave:manage enforcement (zero role-name hardcoding)
+                                  if (!canApproveLeave) {
                                     return (
                                       <Badge variant="outline" className="text-[10px] text-muted-foreground border-border">
-                                        View Only (Team Lead)
+                                        View Only
                                       </Badge>
                                     );
                                   }
@@ -1972,10 +1976,11 @@ export default function TimeAttendancePage() {
                                   // 3. HR Leave: "if hr wants to apply leave the owner will be approve or disapprove"
                                   const isApplicantHR =
                                     req.membership?.accessRole === 'ADMIN' ||
+                                    req.membership?.accessRole === 'OWNER' ||
                                     req.membership?.designation?.title?.toLowerCase().includes('hr') ||
                                     req.membership?.user?.email?.toLowerCase().includes('hr');
 
-                                  if (isApplicantHR && currentUserRole !== 'OWNER') {
+                                  if (isApplicantHR && !isPlatformAdmin) {
                                     return (
                                       <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-600 dark:text-amber-400">
                                         Owner Approval Required

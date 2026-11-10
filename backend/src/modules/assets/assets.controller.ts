@@ -68,9 +68,10 @@ export class AssetsController {
   @RequirePermissions('assets:view')
   async getAssetById(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Param('id') id: string,
   ) {
-    return this.assetsService.getAssetById(workspaceId, id);
+    return this.assetsService.getAssetById(workspaceId, id, req.userContext);
   }
 
   @Post(':id/assign')

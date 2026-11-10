@@ -6,6 +6,13 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { LeaveType, LeaveStatus } from '@prisma/client';
+import {
+  buildUserContextFromMembership,
+  hasPermission,
+  isTargetWithinScope,
+  resolveEffectiveScope,
+  resolveLedTeamIds,
+} from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class LeaveService {
@@ -73,7 +80,17 @@ export class LeaveService {
 
   // BALANCES
 
-  async getMemberBalances(workspaceId: string, membershipId: string, year?: number) {
+  async getMemberBalances(workspaceId: string, membershipId: string, year?: number, userContext?: any) {
+    if (userContext && userContext.membershipId && membershipId !== userContext.membershipId) {
+      const effectiveScope = resolveEffectiveScope(userContext);
+      if (effectiveScope !== 'GLOBAL') {
+        const target = await this.prisma.membership.findFirst({ where: { id: membershipId, workspaceId } });
+        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
+        if (!target || !isTargetWithinScope(userContext, target, ledTeamIds)) {
+          throw new ForbiddenException('Access denied: Cannot inspect leave balances outside your visibility scope');
+        }
+      }
+    }
     const currentYear = year || new Date().getFullYear();
     const policies = await this.listPolicies(workspaceId);
 
@@ -134,6 +151,7 @@ export class LeaveService {
   async list(
     workspaceId: string,
     query?: { membershipId?: string; status?: string; departmentId?: string },
+    userContext?: any,
   ) {
     const where: any = { workspaceId };
     if (query?.membershipId) where.membershipId = query.membershipId;
@@ -143,13 +161,14 @@ export class LeaveService {
       where.membership = { departmentId: query.departmentId };
     }
 
-    return this.prisma.leaveRequest.findMany({
+    const requests = await this.prisma.leaveRequest.findMany({
       where,
       include: {
         membership: {
           include: {
             user: { select: { firstName: true, lastName: true, email: true, avatarUrl: true } },
             department: true,
+            team: true,
             designation: true,
           },
         },
@@ -158,6 +177,16 @@ export class LeaveService {
         },
       },
       orderBy: { createdAt: 'desc' },
+    });
+
+    if (!userContext) return requests;
+    const effectiveScope = resolveEffectiveScope(userContext);
+    if (effectiveScope === 'GLOBAL') return requests;
+
+    const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
+    return requests.filter((r: any) => {
+      if (r.membershipId === userContext.membershipId) return true;
+      return r.membership ? isTargetWithinScope(userContext, r.membership, ledTeamIds) : false;
     });
   }
 
@@ -291,20 +320,29 @@ export class LeaveService {
 
       const isApplicantHR =
         applicant?.accessRole === 'ADMIN' ||
+        applicant?.accessRole === 'OWNER' ||
         (applicant?.designation?.title && /hr/i.test(applicant.designation.title));
 
-      // If HR applies for leave, only OWNER is notified to approve/disapprove
-      // Otherwise, both OWNER and HR (ADMIN) are notified
-      const approverMembers = await this.prisma.membership.findMany({
+      // Notify active members who hold OWNER or leave:approve/leave:manage AND whose scope covers applicant
+      const candidateApprovers = await this.prisma.membership.findMany({
         where: {
           workspaceId,
           status: 'ACTIVE',
-          accessRole: isApplicantHR ? 'OWNER' : { in: ['OWNER', 'ADMIN'] },
+        },
+        include: {
+          role: { include: { permissions: { include: { permission: true } } } },
         },
       });
 
-      for (const approver of approverMembers) {
+      for (const approver of (candidateApprovers || [])) {
         if (approver.id === membershipId) continue;
+        if (isApplicantHR && approver.accessRole !== 'OWNER') continue;
+        const aCtx = buildUserContextFromMembership(approver);
+        if (aCtx.accessRole !== 'OWNER' && !hasPermission(aCtx, ['leave:approve', 'leave:manage'])) continue;
+        if (applicant && aCtx.accessRole !== 'OWNER') {
+          const aLedTeams = await resolveLedTeamIds(this.prisma, workspaceId, approver.id);
+          if (!isTargetWithinScope(aCtx, applicant, aLedTeams)) continue;
+        }
         await this.prisma.notification.create({
           data: {
             workspaceId,
@@ -332,10 +370,15 @@ export class LeaveService {
     workspaceId: string,
     approverMembershipId: string,
     status: LeaveStatus,
+    userContext?: any,
   ) {
     const approver = await this.prisma.membership.findFirst({
       where: { id: approverMembershipId, workspaceId, status: 'ACTIVE' },
-      include: { user: true, designation: true },
+      include: {
+        user: true,
+        designation: true,
+        role: { include: { permissions: { include: { permission: true } } } },
+      },
     });
 
     if (!approver) {
@@ -363,33 +406,35 @@ export class LeaveService {
       throw new ForbiddenException('You cannot approve or reject your own leave application.');
     }
 
-    // Rule 2: Team Leads / Managers have view-only access, cannot approve or reject
-    const isApproverTeamLeadOrManager =
-      approver.accessRole === 'MANAGER' ||
-      (approver.designation?.title && /lead/i.test(approver.designation.title) && approver.accessRole !== 'OWNER' && approver.accessRole !== 'ADMIN');
+    // Rule 2: Strict permission & visibility scope check (no ADMIN bypass, permission-driven)
+    const approverCtx = approver.role?.permissions
+      ? buildUserContextFromMembership(approver)
+      : userContext || buildUserContextFromMembership(approver);
 
-    if (isApproverTeamLeadOrManager || approver.accessRole === 'MEMBER') {
-      throw new ForbiddenException(
-        'Team Leads and Managers have view-only access to leave applications. Approvals can only be performed by HR Executives or the Organization Owner.',
-      );
+    if (approver.accessRole !== 'OWNER') {
+      if (!hasPermission(approverCtx, ['leave:approve', 'leave:manage'])) {
+        throw new ForbiddenException(
+          'Access denied: Your role does not include leave approval permission (`leave:approve`).',
+        );
+      }
+      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, approverMembershipId);
+      if (!isTargetWithinScope(approverCtx, request.membership, ledTeamIds)) {
+        throw new ForbiddenException(
+          'Access denied: You can only approve or reject leave applications within your assigned visibility scope.',
+        );
+      }
     }
 
-    // Rule 3: HR leave applications must ONLY be approved or disapproved by the OWNER
+    // Rule 3: HR/ADMIN/OWNER leave applications must ONLY be approved or disapproved by the OWNER
     const isApplicantHR =
       request.membership.accessRole === 'ADMIN' ||
+      request.membership.accessRole === 'OWNER' ||
       (request.membership.designation?.title && /hr/i.test(request.membership.designation.title)) ||
       (request.membership.user?.email && /hr/i.test(request.membership.user.email));
 
     if (isApplicantHR && approver.accessRole !== 'OWNER') {
       throw new ForbiddenException(
-        'Leave applications for HR Executives can only be approved or rejected by the Organization Owner.',
-      );
-    }
-
-    // Rule 4: For regular team members, only OWNER and ADMIN (HR Executive) are authorized
-    if (approver.accessRole !== 'OWNER' && approver.accessRole !== 'ADMIN') {
-      throw new ForbiddenException(
-        'Only HR Executives and the Organization Owner are authorized to approve or reject leave applications.',
+        'Leave applications for Administrators & HR Executives can only be approved or rejected by the Organization Owner.',
       );
     }
 
@@ -477,13 +522,13 @@ export class LeaveService {
     return updated;
   }
 
-  async getLeaveCalendar(workspaceId: string, month?: number, year?: number) {
+  async getLeaveCalendar(workspaceId: string, month?: number, year?: number, userContext?: any) {
     const y = year || new Date().getFullYear();
     const m = month !== undefined ? month : new Date().getMonth();
     const start = new Date(y, m, 1);
     const end = new Date(y, m + 1, 0, 23, 59, 59);
 
-    const leaves = await this.prisma.leaveRequest.findMany({
+    let leaves = await this.prisma.leaveRequest.findMany({
       where: {
         workspaceId,
         status: 'APPROVED',
@@ -500,6 +545,14 @@ export class LeaveService {
         },
       },
     });
+
+    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
+      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
+      leaves = leaves.filter((l: any) => {
+        if (l.membershipId === userContext.membershipId) return true;
+        return l.membership ? isTargetWithinScope(userContext, l.membership, ledTeamIds) : false;
+      });
+    }
 
     const holidays = await this.prisma.holiday.findMany({
       where: {
