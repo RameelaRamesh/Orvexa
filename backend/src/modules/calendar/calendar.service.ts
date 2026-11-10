@@ -135,9 +135,19 @@ export class CalendarService {
       userRole ||
       'MEMBER'
     ).toUpperCase();
-    const isOwnerOrAdmin = accessRole === 'OWNER' || accessRole === 'ADMIN' || accessRole.includes('OWNER') || accessRole.includes('ADMIN');
-    const isManager = accessRole === 'MANAGER' || accessRole.includes('MANAGER');
-    const isLead = accessRole.includes('LEAD');
+    const roleNameUpper = ((membership?.role as any)?.name || userRole || '').toUpperCase();
+    const isOwnerOrAdmin =
+      accessRole === 'OWNER' ||
+      accessRole === 'ADMIN' ||
+      accessRole.includes('OWNER') ||
+      accessRole.includes('ADMIN');
+    const isManager =
+      accessRole === 'MANAGER' ||
+      accessRole.includes('MANAGER') ||
+      roleNameUpper.includes('MANAGER') ||
+      roleNameUpper.includes('DIRECTOR') ||
+      roleNameUpper.includes('HEAD');
+    const isLead = accessRole.includes('LEAD') || roleNameUpper.includes('LEAD');
 
     // Extract permission codes
     const permCodes: string[] = [];
@@ -270,6 +280,9 @@ export class CalendarService {
       let isVisible = false;
       const isCompanyWide = evt.audience === 'ALL' || evt.type === 'COMPANY_EVENT' || evt.type === 'HOLIDAY';
 
+      const canBrowseWorkspace =
+        userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead;
+
       if (isCompanyWide) {
         isVisible = true; // Company wide events always visible in all scopes
       } else if (scope === 'MY_SCHEDULE') {
@@ -285,10 +298,27 @@ export class CalendarService {
         isVisible = (deptId && evt.departmentId === deptId) ||
           evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
-      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
-        isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||
-          (evt.participants && evt.participants.some((p: any) => filters.memberIds!.includes(p.membershipId)));
-      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
+      } else if (scope === 'SELECT_PEOPLE') {
+        if (filters.memberIds && filters.memberIds.length > 0) {
+          isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||
+            (evt.participants && evt.participants.some((p: any) => filters.memberIds!.includes(p.membershipId)));
+        } else if (canBrowseWorkspace) {
+          isVisible = true;
+        } else if (userCtx.canViewDept && (filters.departmentId || userCtx.departmentId)) {
+          const deptId = filters.departmentId || userCtx.departmentId;
+          isVisible = evt.departmentId === deptId ||
+            evt.organizerMembershipId === membershipId ||
+            (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        } else if (userCtx.canViewTeam) {
+          const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+          isVisible = (teamId && evt.teamId === teamId) ||
+            evt.organizerMembershipId === membershipId ||
+            (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        } else {
+          isVisible = evt.organizerMembershipId === membershipId ||
+            (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        }
+      } else if (scope === 'ENTIRE_WORKSPACE' && canBrowseWorkspace) {
         isVisible = true;
       } else {
         isVisible = evt.organizerMembershipId === membershipId ||
@@ -350,57 +380,12 @@ export class CalendarService {
 
     // --- B. TASKS & DEADLINES (MULTI-DAY TASK CONTINUITY) ---
     try {
-      const taskWhere: any = { workspaceId };
-
-      if (scope === 'MY_SCHEDULE') {
-        taskWhere.OR = [
-          { assigneeMembershipId: membershipId },
-          { assignee: { userId: userCtx.membership?.userId } },
-        ];
-      } else if (scope === 'MY_TEAM') {
-        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
-        if (teamId) {
-          taskWhere.assignee = {
-            OR: [
-              { id: membershipId },
-              { teamId: teamId },
-              { reportsToId: membershipId },
-            ],
-          };
-        } else if (userCtx.isManager || userCtx.isLead) {
-          taskWhere.assignee = {
-            OR: [
-              { id: membershipId },
-              { reportsToId: membershipId },
-            ],
-          };
-        } else {
-          taskWhere.assigneeMembershipId = membershipId;
-        }
-      } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
-        if (deptId) {
-          taskWhere.assignee = {
-            OR: [
-              { departmentId: deptId },
-              { team: { departmentId: deptId } },
-              { id: membershipId },
-            ],
-          };
-        } else {
-          taskWhere.assigneeMembershipId = membershipId;
-        }
-      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
-        taskWhere.assigneeMembershipId = { in: filters.memberIds };
-      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
-        // all workspace tasks
-      } else {
-        taskWhere.assigneeMembershipId = membershipId;
-      }
+      const canBrowseWorkspaceTasks =
+        userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead;
 
       const [tasks, workspaceMemberships] = await Promise.all([
         this.prisma.task.findMany({
-          where: taskWhere,
+          where: { workspaceId },
           include: {
             project: { select: { id: true, name: true } },
             assignee: {
@@ -412,16 +397,104 @@ export class CalendarService {
           where: { workspaceId },
           include: {
             user: { select: { firstName: true, lastName: true, email: true } },
-            team: { select: { name: true } },
-            department: { select: { name: true } },
+            team: { select: { id: true, name: true, departmentId: true } },
+            department: { select: { id: true, name: true } },
           },
         }),
       ]);
+
+      const memberById = new Map<string, any>();
+      for (const m of workspaceMemberships) {
+        memberById.set(m.id, m);
+      }
+
+      const myTeamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+      const myDeptId =
+        filters.departmentId ||
+        userCtx.departmentId ||
+        userCtx.membership?.departmentId ||
+        userCtx.membership?.team?.departmentId;
 
       for (const t of tasks) {
         if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
 
         const sla = (t.sla as any) || {};
+        const taskAssigneeIds: string[] = Array.from(
+          new Set(
+            [
+              t.assigneeMembershipId,
+              ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
+            ].filter(Boolean),
+          ),
+        );
+
+        const isMyTask =
+          taskAssigneeIds.includes(membershipId) ||
+          Boolean(userCtx.membership?.userId && (t as any).assignee?.userId === userCtx.membership?.userId);
+
+        const belongsToDept = (deptId?: string | null) => {
+          if (!deptId) return false;
+          if (sla.departmentId === deptId) return true;
+          return taskAssigneeIds.some((aId) => {
+            const mem = memberById.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
+            return mem?.departmentId === deptId || mem?.team?.departmentId === deptId;
+          });
+        };
+
+        const belongsToTeam = (teamId?: string | null) => {
+          return taskAssigneeIds.some((aId) => {
+            if (aId === membershipId) return true;
+            const mem = memberById.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
+            if (mem?.reportsToId === membershipId) return true;
+            return Boolean(teamId && mem?.teamId === teamId);
+          });
+        };
+
+        let taskVisible = false;
+        if (scope === 'MY_SCHEDULE') {
+          taskVisible = isMyTask;
+        } else if (scope === 'MY_TEAM') {
+          if (myTeamId) {
+            taskVisible = isMyTask || belongsToTeam(myTeamId);
+          } else if (userCtx.isManager || userCtx.isLead || userCtx.isOwnerOrAdmin) {
+            taskVisible = isMyTask || belongsToTeam(null);
+          } else {
+            taskVisible = isMyTask;
+          }
+        } else if (scope === 'MY_DEPARTMENT') {
+          if (myDeptId) {
+            taskVisible = isMyTask || belongsToDept(myDeptId);
+          } else {
+            taskVisible = isMyTask;
+          }
+        } else if (scope === 'SELECT_PEOPLE') {
+          if (filters.memberIds && filters.memberIds.length > 0) {
+            const targetIds =
+              canBrowseWorkspaceTasks || userCtx.canViewDept || userCtx.canViewTeam
+                ? filters.memberIds
+                : filters.memberIds.filter((id) => id === membershipId);
+            taskVisible = taskAssigneeIds.some((aId) => targetIds.includes(aId));
+          } else if (canBrowseWorkspaceTasks) {
+            taskVisible = true;
+          } else if (userCtx.canViewDept && myDeptId) {
+            taskVisible = isMyTask || belongsToDept(myDeptId);
+          } else if (userCtx.canViewTeam) {
+            taskVisible = isMyTask || belongsToTeam(myTeamId);
+          } else {
+            taskVisible = isMyTask;
+          }
+        } else if (scope === 'ENTIRE_WORKSPACE' && canBrowseWorkspaceTasks) {
+          taskVisible = true;
+        } else {
+          taskVisible = isMyTask;
+        }
+
+        if (taskVisible && filters.departmentId && scope !== 'MY_DEPARTMENT') {
+          taskVisible = belongsToDept(filters.departmentId);
+        }
+
+        if (!taskVisible) continue;
+
         const rawStart = sla.startDate || (t as any).startDate || (t.dueDate ? t.dueDate : t.createdAt) || new Date();
         const rawEnd = t.dueDate || rawStart;
 
@@ -488,6 +561,7 @@ export class CalendarService {
             priority: t.priority || 'MEDIUM',
             assigneeName,
             assigneeId: t.assigneeMembershipId,
+            assigneeMembershipIds: taskAssigneeIds,
             assignerName,
             creatorMembershipId: creatorId,
             dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : (t.dueDate as any).toISOString()) : null,
@@ -495,7 +569,7 @@ export class CalendarService {
             deadline: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : (t.dueDate as any).toISOString()) : null,
             progress,
             isOverdue,
-            isMyTask: t.assigneeMembershipId === membershipId || userCtx.membership?.userId === (t as any).assignee?.userId,
+            isMyTask,
             hasDueDate: Boolean(t.dueDate),
           },
         });
@@ -603,6 +677,9 @@ export class CalendarService {
 
     // --- E. LEAVE REQUESTS ---
     try {
+      const canBrowseLeaves =
+        userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead;
+
       const leaveWhere: any = {
         workspaceId,
         startDate: { lte: end },
@@ -610,67 +687,92 @@ export class CalendarService {
         status: { notIn: ['CANCELLED', 'REJECTED'] },
       };
 
-      if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
-        leaveWhere.membershipId = { in: filters.memberIds };
-      } else if (scope === 'MY_SCHEDULE') {
-        leaveWhere.membershipId = membershipId;
-      } else if (scope === 'MY_TEAM') {
-        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
-        if (teamId) {
-          leaveWhere.OR = [
-            { membershipId },
-            { membership: { teamId } },
-            { membership: { reportsToId: membershipId } },
-          ];
-        } else {
-          leaveWhere.OR = [
-            { membershipId },
-            { membership: { reportsToId: membershipId } },
-          ];
-        }
-      } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
-        if (deptId) {
-          leaveWhere.OR = [
-            { membershipId },
-            { membership: { departmentId: deptId } },
-            { membership: { team: { departmentId: deptId } } },
-          ];
-        } else {
-          leaveWhere.membershipId = membershipId;
-        }
-      } else if (!userCtx.canViewAll) {
-        if (userCtx.canViewDept && userCtx.departmentId) {
-          leaveWhere.OR = [
-            { membershipId },
-            { membership: { departmentId: userCtx.departmentId } },
-          ];
-        } else if (userCtx.canViewTeam && userCtx.teamId) {
-          leaveWhere.OR = [
-            { membershipId },
-            { membership: { teamId: userCtx.teamId } },
-          ];
-        } else {
-          leaveWhere.membershipId = membershipId;
-        }
-      }
-
-      const leaves = await this.prisma.leaveRequest.findMany({
-        where: leaveWhere,
-        include: {
-          membership: {
-            include: { user: { select: { firstName: true, lastName: true } } },
+      const [leaves, leaveMemberships] = await Promise.all([
+        this.prisma.leaveRequest.findMany({
+          where: leaveWhere,
+          include: {
+            membership: {
+              include: {
+                user: { select: { firstName: true, lastName: true } },
+                team: { select: { id: true, departmentId: true } },
+              },
+            },
           },
-        },
-      });
+        }),
+        this.prisma.membership.findMany({
+          where: { workspaceId },
+          include: {
+            user: { select: { firstName: true, lastName: true } },
+            team: { select: { id: true, departmentId: true } },
+          },
+        }),
+      ]);
+
+      const leaveMemberById = new Map<string, any>();
+      for (const m of leaveMemberships) {
+        leaveMemberById.set(m.id, m);
+      }
+      const leaveTeamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+      const leaveDeptId =
+        filters.departmentId ||
+        userCtx.departmentId ||
+        userCtx.membership?.departmentId ||
+        userCtx.membership?.team?.departmentId;
 
       for (const l of leaves) {
         if (l.id?.startsWith('leave_seed_') || l.id?.startsWith('seed_') || l.id?.includes('seed')) continue;
-        const memberName = l.membership?.user
-          ? `${l.membership.user.firstName} ${l.membership.user.lastName}`.trim()
+
+        const mem = leaveMemberById.get(l.membershipId) || l.membership;
+        const isOwn = l.membershipId === membershipId;
+
+        let leaveVisible = false;
+        if (scope === 'SELECT_PEOPLE') {
+          if (filters.memberIds && filters.memberIds.length > 0) {
+            const targetIds =
+              canBrowseLeaves || userCtx.canViewDept || userCtx.canViewTeam
+                ? filters.memberIds
+                : filters.memberIds.filter((id) => id === membershipId);
+            leaveVisible = targetIds.includes(l.membershipId);
+          } else if (canBrowseLeaves) {
+            leaveVisible = true;
+          } else if (userCtx.canViewDept && leaveDeptId) {
+            leaveVisible = isOwn || mem?.departmentId === leaveDeptId || mem?.team?.departmentId === leaveDeptId;
+          } else if (userCtx.canViewTeam) {
+            leaveVisible = isOwn || mem?.reportsToId === membershipId || Boolean(leaveTeamId && mem?.teamId === leaveTeamId);
+          } else {
+            leaveVisible = isOwn;
+          }
+        } else if (scope === 'MY_SCHEDULE') {
+          leaveVisible = isOwn;
+        } else if (scope === 'MY_TEAM') {
+          leaveVisible =
+            isOwn ||
+            mem?.reportsToId === membershipId ||
+            Boolean(leaveTeamId && mem?.teamId === leaveTeamId);
+        } else if (scope === 'MY_DEPARTMENT') {
+          leaveVisible =
+            isOwn ||
+            Boolean(leaveDeptId && (mem?.departmentId === leaveDeptId || mem?.team?.departmentId === leaveDeptId));
+        } else if (canBrowseLeaves) {
+          leaveVisible = true;
+        } else if (userCtx.canViewDept && leaveDeptId) {
+          leaveVisible = isOwn || mem?.departmentId === leaveDeptId || mem?.team?.departmentId === leaveDeptId;
+        } else if (userCtx.canViewTeam) {
+          leaveVisible = isOwn || mem?.reportsToId === membershipId || Boolean(leaveTeamId && mem?.teamId === leaveTeamId);
+        } else {
+          leaveVisible = isOwn;
+        }
+
+        if (leaveVisible && filters.departmentId && scope !== 'MY_DEPARTMENT') {
+          leaveVisible = mem?.departmentId === filters.departmentId || mem?.team?.departmentId === filters.departmentId;
+        }
+
+        if (!leaveVisible) continue;
+
+        const memberName = mem?.user
+          ? `${mem.user.firstName} ${mem.user.lastName}`.trim()
           : 'Team Member';
 
-        const isOwn = l.membershipId === membershipId;
         // Do not expose private medical reason to others
         const displayReason = isOwn || userCtx.isOwnerOrAdmin ? l.reason : 'Out of Office';
 
@@ -687,6 +789,8 @@ export class CalendarService {
           description: displayReason,
           details: {
             memberName,
+            assigneeId: l.membershipId,
+            membershipId: l.membershipId,
             leaveType: l.leaveType,
             days: l.totalDays,
             isMyLeave: isOwn,

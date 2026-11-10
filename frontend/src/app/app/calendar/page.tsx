@@ -212,7 +212,11 @@ export default function UnifiedCalendarPage() {
   const [userTeamId, setUserTeamId] = useState<string>('');
 
   const roleUpper = (currentUserRole || 'MEMBER').toUpperCase();
-  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
+  const canViewWorkspace =
+    ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper) ||
+    roleUpper.includes('OWNER') ||
+    roleUpper.includes('ADMIN') ||
+    roleUpper.includes('MANAGER');
   const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
   const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
   const canSelectPeople = canViewWorkspace || roleUpper.includes('LEAD');
@@ -304,42 +308,125 @@ export default function UnifiedCalendarPage() {
     setSelectedDate(today);
   }, []);
 
-  // Initialize Auth & Workspace from localStorage
+  // Normalize member payloads consistently across /people fetches (preserving reporting/team/department hierarchy)
+  const normalizeCalendarMembers = (rawList: any[]) =>
+    rawList.map((m: any) => ({
+      id: m.id,
+      userId: m.user?.id || m.userId,
+      user: {
+        id: m.user?.id || m.userId,
+        firstName: m.user?.firstName || m.firstName || '',
+        lastName: m.user?.lastName || m.lastName || '',
+        email: m.user?.email || m.email || '',
+        avatarUrl: m.user?.avatarUrl || m.avatarUrl || '',
+      },
+      accessRole: m.accessRole || (typeof m.role === 'string' ? m.role : m.role?.name) || 'MEMBER',
+      role: m.role,
+      departmentId: m.departmentId || m.department?.id || null,
+      teamId: m.teamId || m.team?.id || null,
+      reportsToId: m.reportsToId || m.reportsTo?.id || null,
+      designation: m.designation,
+      department: m.department,
+      team: m.team,
+    }));
+
+  // Initialize Auth & Workspace from storage and verify via /auth/me (tab-isolated safe)
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    let cancelled = false;
+
     const t = localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token');
     const activeWs = localStorage.getItem('activeWorkspaceId');
     const cachedWs = localStorage.getItem('orvexa_cached_workspace');
     const p = localStorage.getItem('orvexa_cached_profile') || localStorage.getItem('user');
 
     if (t) setToken(t);
-    if (activeWs) setWsId(activeWs);
+
+    let resolvedWs = activeWs || '';
+    let resolvedMemId = '';
+    let resolvedRole = '';
+    let resolvedDeptId = '';
+    let resolvedTeamId = '';
+
     if (cachedWs) {
       try {
         const wsObj = JSON.parse(cachedWs);
-        if (!activeWs && (wsObj?.workspaceId || wsObj?.id)) setWsId(wsObj.workspaceId || wsObj.id);
-        if (wsObj?.id) setCurrentMembershipId(wsObj.id);
-        if (wsObj?.membershipId) setCurrentMembershipId(wsObj.membershipId);
-        if (wsObj?.accessRole || wsObj?.role) setCurrentUserRole(wsObj.accessRole || wsObj.role);
-      } catch {}
-    }
-    if (p) {
-      try {
-        const prof = JSON.parse(p);
-        if (prof?.memberships && prof.memberships[0]?.id) {
-          if (!currentMembershipId) setCurrentMembershipId(prof.memberships[0].id);
-          if (prof.memberships[0].accessRole) setCurrentUserRole(prof.memberships[0].accessRole);
+        const wsObjWorkspaceId = wsObj?.workspaceId || wsObj?.id || '';
+        if (!resolvedWs && wsObjWorkspaceId) resolvedWs = wsObjWorkspaceId;
+        if (!resolvedWs || wsObjWorkspaceId === resolvedWs) {
+          resolvedMemId = wsObj?.membershipId || (wsObj?.workspaceId ? wsObj?.id : '') || '';
+          resolvedRole = wsObj?.accessRole || wsObj?.role?.name || wsObj?.role || '';
+          resolvedDeptId = wsObj?.departmentId || wsObj?.department?.id || '';
+          resolvedTeamId = wsObj?.teamId || wsObj?.team?.id || '';
         }
       } catch {}
     }
 
-    if (typeof window !== 'undefined') {
-      const q = new URLSearchParams(window.location.search);
-      if (q.get('openHolidays') === 'true') {
-        setHolidayActiveTab('LIST');
-        setIsHolidayModalOpen(true);
-      }
+    if (p) {
+      try {
+        const prof = JSON.parse(p);
+        const membershipsList = Array.isArray(prof?.memberships) ? prof.memberships : [];
+        const matched =
+          (resolvedWs && membershipsList.find((m: any) => m.workspaceId === resolvedWs)) ||
+          (!resolvedWs ? membershipsList[0] : null);
+        if (matched) {
+          if (!resolvedWs && matched.workspaceId) resolvedWs = matched.workspaceId;
+          if (matched.id) resolvedMemId = matched.id;
+          if (matched.accessRole || matched.role?.name) {
+            resolvedRole = matched.accessRole || matched.role?.name;
+          }
+          if (matched.departmentId || matched.department?.id) {
+            resolvedDeptId = matched.departmentId || matched.department?.id;
+          }
+          if (matched.teamId || matched.team?.id) {
+            resolvedTeamId = matched.teamId || matched.team?.id;
+          }
+        }
+      } catch {}
     }
+
+    if (resolvedWs) setWsId(resolvedWs);
+    if (resolvedMemId) setCurrentMembershipId(resolvedMemId);
+    if (resolvedRole) setCurrentUserRole(resolvedRole);
+    if (resolvedDeptId) setUserDepartmentId(resolvedDeptId);
+    if (resolvedTeamId) setUserTeamId(resolvedTeamId);
+
+    const q = new URLSearchParams(window.location.search);
+    if (q.get('openHolidays') === 'true') {
+      setHolidayActiveTab('LIST');
+      setIsHolidayModalOpen(true);
+    }
+
+    if (t) {
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: { Authorization: `Bearer ${t}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const prof = json.data !== undefined ? json.data : json;
+          const membershipsList = Array.isArray(prof?.memberships) ? prof.memberships : [];
+          const targetWs = activeWs || resolvedWs || membershipsList[0]?.workspaceId || '';
+          const activeMem =
+            membershipsList.find((m: any) => m.workspaceId === targetWs) || membershipsList[0];
+          if (activeMem) {
+            const finalWs = activeMem.workspaceId || targetWs;
+            if (finalWs) setWsId(finalWs);
+            if (activeMem.id) setCurrentMembershipId(activeMem.id);
+            const liveRole = activeMem.accessRole || activeMem.role?.name;
+            if (liveRole) setCurrentUserRole(liveRole);
+            const dId = activeMem.departmentId || activeMem.department?.id;
+            const tId = activeMem.teamId || activeMem.team?.id;
+            if (dId) setUserDepartmentId(dId);
+            if (tId) setUserTeamId(tId);
+          }
+        })
+        .catch(() => null);
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Fetch Calendar Events & Concurrently Fetch Workspace Tasks for Complete Visibility
@@ -402,7 +489,7 @@ export default function UnifiedCalendarPage() {
         fetch(`${BRANDING.apiUrl}/tasks${taskParams.toString() ? `?${taskParams.toString()}` : ''}`, { headers }).catch(() => null),
       ]);
 
-      // Ensure live members list is available for accurate assigner name resolution
+      // Ensure live members list is available for accurate assigner and team/department resolution
       let liveMembers = members;
       if (!liveMembers || liveMembers.length === 0) {
         try {
@@ -411,20 +498,7 @@ export default function UnifiedCalendarPage() {
             const pJson = await pRes.json();
             const rawList = pJson.data !== undefined ? pJson.data : (Array.isArray(pJson) ? pJson : pJson.members || []);
             if (Array.isArray(rawList)) {
-              liveMembers = rawList.map((m: any) => ({
-                id: m.id,
-                userId: m.user?.id || m.userId,
-                user: {
-                  id: m.user?.id || m.userId,
-                  firstName: m.user?.firstName || m.firstName || '',
-                  lastName: m.user?.lastName || m.lastName || '',
-                  email: m.user?.email || m.email || '',
-                },
-                accessRole: m.accessRole || m.role || 'MEMBER',
-                designation: m.designation,
-                department: m.department,
-                team: m.team,
-              }));
+              liveMembers = normalizeCalendarMembers(rawList);
               setMembers(liveMembers);
             }
           }
@@ -450,7 +524,11 @@ export default function UnifiedCalendarPage() {
           setCanManageHolidaysServer(Boolean(data.metadata.canManageHolidays));
         }
         if (data.metadata?.userRole) {
-          setCurrentUserRole(data.metadata.userRole);
+          setCurrentUserRole((prev) =>
+            data.metadata.userRole === 'MEMBER' && /LEAD|MANAGER|DIRECTOR|HEAD/i.test(prev || '')
+              ? prev
+              : data.metadata.userRole,
+          );
         }
       } else {
         // Fallback to analytics calendar
@@ -467,7 +545,7 @@ export default function UnifiedCalendarPage() {
         }
       }
 
-      // Merge tasks from /tasks (including "End to end flow of HRMS Portal" and any task without an explicit deadline)
+      // Merge tasks from /tasks (including multi-assignee tasks and tasks without an explicit deadline)
       if (tasksRes && tasksRes.ok) {
         const tJson = await tasksRes.json().catch(() => ({}));
         const taskList: any[] = Array.isArray(tJson) ? tJson : tJson.tasks || tJson.data || [];
@@ -475,35 +553,66 @@ export default function UnifiedCalendarPage() {
         for (const t of taskList) {
           if (t.id?.startsWith('task_seed_') || t.id?.startsWith('seed_') || t.id?.includes('seed')) continue;
 
-          // Scope-based filtering to ensure strict permission compliance
+          const sla = (t.sla as any) || {};
+          const taskAssigneeIds: string[] = Array.from(
+            new Set(
+              [
+                t.assigneeMembershipId,
+                ...(Array.isArray(t.assigneeMembershipIds) ? t.assigneeMembershipIds : []),
+                ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
+              ].filter(Boolean),
+            ),
+          );
+          const matchingMembers = taskAssigneeIds
+            .map((id) => liveMembers.find((m: any) => m.id === id || m.user?.id === id))
+            .filter(Boolean);
+
+          // Scope-based filtering aligned with calendar view scope & hierarchy
           if (selectedScope === 'SELECT_PEOPLE') {
-            if (selectedMemberIds.length > 0 && !selectedMemberIds.includes(t.assigneeMembershipId)) {
+            if (selectedMemberIds.length > 0 && !taskAssigneeIds.some((id) => selectedMemberIds.includes(id))) {
               continue;
             }
           } else if (selectedScope === 'MY_SCHEDULE') {
-            if (t.assigneeMembershipId !== currentMembershipId) {
+            if (currentMembershipId && !taskAssigneeIds.includes(currentMembershipId)) {
               continue;
             }
           } else if (selectedScope === 'MY_TEAM') {
-            const member = liveMembers.find((m: any) => m.id === t.assigneeMembershipId || m.user?.id === t.assigneeMembershipId);
-            const isMine = t.assigneeMembershipId === currentMembershipId;
-            const isInMyTeam = userTeamId && (member?.team?.id === userTeamId || member?.teamId === userTeamId);
-            const reportsToMe = member?.reportsToId === currentMembershipId;
+            const isMine = Boolean(currentMembershipId && taskAssigneeIds.includes(currentMembershipId));
+            const isInMyTeam = Boolean(
+              userTeamId &&
+                matchingMembers.some((m: any) => m?.team?.id === userTeamId || m?.teamId === userTeamId),
+            );
+            const reportsToMe = Boolean(
+              currentMembershipId && matchingMembers.some((m: any) => m?.reportsToId === currentMembershipId),
+            );
             if (!isMine && !isInMyTeam && !reportsToMe) {
               continue;
             }
           } else if (selectedScope === 'MY_DEPARTMENT') {
-            const member = liveMembers.find((m: any) => m.id === t.assigneeMembershipId || m.user?.id === t.assigneeMembershipId);
             const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
-            const isMine = t.assigneeMembershipId === currentMembershipId;
-            const isInMyDept = targetDept && (member?.department?.id === targetDept || member?.departmentId === targetDept);
+            const isMine = Boolean(currentMembershipId && taskAssigneeIds.includes(currentMembershipId));
+            const isInMyDept = Boolean(
+              targetDept &&
+                (sla.departmentId === targetDept ||
+                  matchingMembers.some((m: any) => m?.department?.id === targetDept || m?.departmentId === targetDept)),
+            );
             if (!isMine && !isInMyDept) {
               continue;
             }
           }
 
+          if (selectedDeptFilter !== 'ALL' && selectedScope !== 'MY_DEPARTMENT') {
+            const matchesSelectedDept =
+              sla.departmentId === selectedDeptFilter ||
+              matchingMembers.some(
+                (m: any) => m?.department?.id === selectedDeptFilter || m?.departmentId === selectedDeptFilter,
+              );
+            if (!matchesSelectedDept) {
+              continue;
+            }
+          }
+
           const tId = `task-${t.id}`;
-          const sla = (t.sla as any) || {};
           const rawStart = sla.startDate || t.startDate || t.createdAt || t.dueDate || new Date();
           const rawEnd = t.dueDate || sla.endDate || rawStart;
           const taskStartDate = new Date(rawStart);
@@ -517,7 +626,7 @@ export default function UnifiedCalendarPage() {
 
           const aName = t.assignee?.user
             ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
-            : t.assigneeName || (t.assignee?.name) || 'Assigned to you';
+            : t.assigneeName || t.assignee?.name || (taskAssigneeIds.length === 0 ? 'Unassigned' : 'Assigned to you');
 
           const creatorId = t.creatorMembershipId || sla.creatorMembershipId || (t as any).createdByMembershipId;
           let assignerName = t.assignerName || t.details?.assignerName;
@@ -552,13 +661,14 @@ export default function UnifiedCalendarPage() {
             priority: t.priority || 'MEDIUM',
             assigneeName: aName,
             assigneeId: t.assigneeMembershipId,
+            assigneeMembershipIds: taskAssigneeIds,
             assignerName,
             creatorMembershipId: creatorId,
             startDate: taskStartDate.toISOString(),
             dueDate: t.dueDate ? (typeof t.dueDate === 'string' ? t.dueDate : new Date(t.dueDate).toISOString()) : null,
             progress,
             isOverdue,
-            isMyTask: true,
+            isMyTask: Boolean(currentMembershipId && taskAssigneeIds.includes(currentMembershipId)),
             hasDueDate: Boolean(t.dueDate),
           };
 
@@ -592,16 +702,27 @@ export default function UnifiedCalendarPage() {
         }
       }
 
+      const getEventAssigneeIds = (e: CalendarEvent): string[] =>
+        Array.from(
+          new Set(
+            [
+              e.details?.assigneeId,
+              e.details?.assigneeMembershipId,
+              ...(Array.isArray(e.details?.assigneeMembershipIds) ? e.details.assigneeMembershipIds : []),
+            ].filter(Boolean),
+          ),
+        );
+
       let filteredEvents = allEvents;
 
       if (selectedScope === 'SELECT_PEOPLE' && selectedMemberIds.length > 0) {
         filteredEvents = allEvents.filter((e) => {
           if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
-          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          const aIds = getEventAssigneeIds(e);
           const orgId = e.organizer?.id;
           const pIds = (e.participants || []).map((p: any) => p.membershipId);
           return (
-            (aId && selectedMemberIds.includes(aId)) ||
+            aIds.some((id) => selectedMemberIds.includes(id)) ||
             (orgId && selectedMemberIds.includes(orgId)) ||
             pIds.some((pId: string) => selectedMemberIds.includes(pId))
           );
@@ -609,11 +730,14 @@ export default function UnifiedCalendarPage() {
       } else if (selectedScope === 'MY_SCHEDULE') {
         filteredEvents = allEvents.filter((e) => {
           if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
-          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
+          const aIds = getEventAssigneeIds(e);
           const orgId = e.organizer?.id;
           const pIds = (e.participants || []).map((p: any) => p.membershipId);
+          if (!currentMembershipId) {
+            return Boolean(e.details?.isMyTask);
+          }
           return (
-            aId === currentMembershipId ||
+            aIds.includes(currentMembershipId) ||
             orgId === currentMembershipId ||
             pIds.includes(currentMembershipId)
           );
@@ -621,23 +745,36 @@ export default function UnifiedCalendarPage() {
       } else if (selectedScope === 'MY_TEAM') {
         filteredEvents = allEvents.filter((e) => {
           if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
-          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
-          if (!aId) return true;
-          const member = liveMembers.find((m: any) => m.id === aId || m.user?.id === aId);
-          const isMine = aId === currentMembershipId;
-          const isInMyTeam = userTeamId && (member?.team?.id === userTeamId || member?.teamId === userTeamId);
-          const reportsToMe = member?.reportsToId === currentMembershipId;
+          const aIds = getEventAssigneeIds(e);
+          if (aIds.length === 0) return true;
+          const matchingMembers = aIds
+            .map((id) => liveMembers.find((m: any) => m.id === id || m.user?.id === id))
+            .filter(Boolean);
+          const isMine = Boolean(currentMembershipId && aIds.includes(currentMembershipId));
+          const isInMyTeam = Boolean(
+            userTeamId &&
+              matchingMembers.some((m: any) => m?.team?.id === userTeamId || m?.teamId === userTeamId),
+          );
+          const reportsToMe = Boolean(
+            currentMembershipId && matchingMembers.some((m: any) => m?.reportsToId === currentMembershipId),
+          );
           return isMine || isInMyTeam || reportsToMe;
         });
       } else if (selectedScope === 'MY_DEPARTMENT') {
         filteredEvents = allEvents.filter((e) => {
           if (e.layer === 'HOLIDAYS' || e.type === 'HOLIDAY') return true;
-          const aId = e.details?.assigneeId || e.details?.assigneeMembershipId;
-          if (!aId) return true;
-          const member = liveMembers.find((m: any) => m.id === aId || m.user?.id === aId);
+          const aIds = getEventAssigneeIds(e);
+          if (aIds.length === 0) return true;
+          const matchingMembers = aIds
+            .map((id) => liveMembers.find((m: any) => m.id === id || m.user?.id === id))
+            .filter(Boolean);
           const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
-          const isMine = aId === currentMembershipId;
-          const isInMyDept = targetDept && (member?.department?.id === targetDept || member?.departmentId === targetDept);
+          const isMine = Boolean(currentMembershipId && aIds.includes(currentMembershipId));
+          const isInMyDept = Boolean(
+            targetDept &&
+              (e.departmentId === targetDept ||
+                matchingMembers.some((m: any) => m?.department?.id === targetDept || m?.departmentId === targetDept)),
+          );
           return isMine || isInMyDept;
         });
       }
@@ -685,25 +822,14 @@ export default function UnifiedCalendarPage() {
         const pJson = await peopleRes.json();
         const rawList = pJson.data !== undefined ? pJson.data : (Array.isArray(pJson) ? pJson : pJson.members || []);
         if (Array.isArray(rawList)) {
-          const mapped = rawList.map((m: any) => ({
-            id: m.id,
-            user: {
-              id: m.user?.id || m.userId,
-              firstName: m.user?.firstName || m.firstName || '',
-              lastName: m.user?.lastName || m.lastName || '',
-              email: m.user?.email || m.email || '',
-              avatarUrl: m.user?.avatarUrl || m.avatarUrl || '',
-            },
-            accessRole: m.accessRole || m.role || 'MEMBER',
-            designation: m.designation,
-            department: m.department,
-            team: m.team,
-          }));
+          const mapped = normalizeCalendarMembers(rawList);
           setMembers(mapped);
-          const myMem = mapped.find((m: any) => m.id === currentMembershipId || m.user?.id === currentMembershipId);
+          const myMem = mapped.find((m: any) => currentMembershipId && (m.id === currentMembershipId || m.user?.id === currentMembershipId));
           if (myMem) {
-            if (myMem.department?.id) setUserDepartmentId(myMem.department.id);
-            if (myMem.team?.id) setUserTeamId(myMem.team.id);
+            const dId = myMem.department?.id || myMem.departmentId;
+            const tId = myMem.team?.id || myMem.teamId;
+            if (dId) setUserDepartmentId(dId);
+            if (tId) setUserTeamId(tId);
           }
         }
       }
@@ -711,11 +837,39 @@ export default function UnifiedCalendarPage() {
   };
 
   useEffect(() => {
+    if (!currentMembershipId || members.length === 0) return;
+    const myMem = members.find((m: any) => m.id === currentMembershipId || m.user?.id === currentMembershipId);
+    if (myMem) {
+      const dId = myMem.department?.id || myMem.departmentId;
+      const tId = myMem.team?.id || myMem.teamId;
+      if (dId && !userDepartmentId) setUserDepartmentId(dId);
+      if (tId && !userTeamId) setUserTeamId(tId);
+    }
+  }, [members, currentMembershipId]);
+
+  useEffect(() => {
     if (token && wsId) {
-      fetchEvents();
       fetchWorkspaceMeta();
     }
-  }, [token, wsId, currentDate.getFullYear(), currentDate.getMonth(), selectedTypeFilter, selectedDeptFilter, selectedScope, selectedMemberIds]);
+  }, [token, wsId]);
+
+  useEffect(() => {
+    if (token && wsId) {
+      fetchEvents();
+    }
+  }, [
+    token,
+    wsId,
+    currentMembershipId,
+    userTeamId,
+    userDepartmentId,
+    currentDate.getFullYear(),
+    currentDate.getMonth(),
+    selectedTypeFilter,
+    selectedDeptFilter,
+    selectedScope,
+    selectedMemberIds,
+  ]);
 
   // Navigate Months / Weeks / Days
   const handlePrevMonth = () => {

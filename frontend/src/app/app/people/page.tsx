@@ -161,7 +161,7 @@ export default function PeoplePage() {
     setEmployeeTasks([]);
     try {
       const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
-      const wsId = typeof window !== 'undefined' ? localStorage.getItem('currentWorkspaceId') : null;
+      const wsId = typeof window !== 'undefined' ? (localStorage.getItem('activeWorkspaceId') || localStorage.getItem('currentWorkspaceId')) : null;
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };

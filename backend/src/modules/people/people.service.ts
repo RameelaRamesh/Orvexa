@@ -323,6 +323,16 @@ export class PeopleService {
       }
     }
 
+    let resolvedDataScope = data.dataScope;
+    if (!resolvedDataScope && data.accessRole && data.accessRole !== membership.accessRole) {
+      const nextRole = data.accessRole.toUpperCase();
+      if (nextRole === 'OWNER' || nextRole === 'ADMIN') {
+        resolvedDataScope = 'GLOBAL';
+      } else if (nextRole === 'MANAGER' && (!membership.dataScope || membership.dataScope === 'ASSIGNED')) {
+        resolvedDataScope = 'TEAM';
+      }
+    }
+
     return this.prisma.membership.update({
       where: { id: membershipId },
       data: {
@@ -332,7 +342,7 @@ export class PeopleService {
         ...(data.teamId !== undefined ? { teamId: cleanId(data.teamId) } : {}),
         ...(finalDesignationId !== undefined ? { designationId: finalDesignationId } : {}),
         ...(data.reportsToId !== undefined ? { reportsToId: cleanId(data.reportsToId) } : {}),
-        ...(data.dataScope ? { dataScope: data.dataScope } : {}),
+        ...(resolvedDataScope ? { dataScope: resolvedDataScope } : {}),
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true } },
@@ -593,6 +603,27 @@ export class PeopleService {
       ).id;
     }
 
+    let assignedRoleRecord: any = null;
+    if (roleId) {
+      try {
+        assignedRoleRecord = await this.prisma.role.findFirst({ where: { id: roleId } });
+      } catch {
+        assignedRoleRecord = null;
+      }
+    }
+    const roleUpper = (invitation.accessRole || 'MEMBER').toUpperCase();
+    const roleNameUpper = (assignedRoleRecord?.name || '').toUpperCase();
+    const defaultDataScope =
+      roleUpper === 'OWNER' || roleUpper === 'ADMIN' || roleNameUpper.includes('ADMIN')
+        ? 'GLOBAL'
+        : roleUpper === 'MANAGER' ||
+          roleNameUpper.includes('MANAGER') ||
+          roleNameUpper.includes('LEAD') ||
+          roleNameUpper.includes('DIRECTOR') ||
+          roleNameUpper.includes('HEAD')
+        ? 'TEAM'
+        : 'ASSIGNED';
+
     // Upsert membership
     const membership = await this.prisma.membership.upsert({
       where: { userId_workspaceId: { userId: user.id, workspaceId: invitation.workspaceId } },
@@ -603,6 +634,7 @@ export class PeopleService {
         teamId: invitation.teamId,
         designationId: invitation.designationId,
         reportsToId: invitation.reportsToId,
+        dataScope: defaultDataScope,
         status: 'ACTIVE',
       },
       create: {
@@ -615,6 +647,7 @@ export class PeopleService {
         designationId: invitation.designationId,
         reportsToId: invitation.reportsToId,
         invitedByUserId: invitation.invitedByUserId,
+        dataScope: defaultDataScope,
         status: 'ACTIVE',
       },
       include: {

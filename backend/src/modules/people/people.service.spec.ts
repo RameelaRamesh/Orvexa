@@ -198,4 +198,77 @@ describe('PeopleService - Security & Lifecycle Tests', () => {
       expect(result.membership.status).toBe('OFFBOARDED');
     });
   });
+
+  describe('DataScope Defaults on Invitation & Role Update', () => {
+    it('should assign TEAM dataScope when accepting a MANAGER invitation', async () => {
+      mockPrisma.invitation.findUnique.mockResolvedValue({
+        id: 'inv_mgr',
+        token: 'mgr_token',
+        status: 'PENDING',
+        email: 'lead@company.com',
+        firstName: 'Rameela',
+        lastName: 'R',
+        accessRole: 'MANAGER',
+        roleId: 'role_team_lead',
+        workspaceId: 'ws_1',
+        expiresAt: new Date(Date.now() + 3600000),
+        workspace: { id: 'ws_1', name: 'Vattara Solutions' },
+      });
+      mockPrisma.user.findUnique.mockResolvedValue({
+        id: 'user_mgr',
+        email: 'lead@company.com',
+        firstName: 'Rameela',
+        lastName: 'R',
+        tokenVersion: 1,
+      });
+      mockPrisma.role.findFirst.mockResolvedValue({
+        id: 'role_team_lead',
+        name: 'Team Lead',
+      });
+      mockPrisma.membership.upsert.mockResolvedValue({
+        id: 'mem_mgr',
+        accessRole: 'MANAGER',
+        dataScope: 'TEAM',
+        status: 'ACTIVE',
+      });
+      mockPrisma.invitation.update.mockResolvedValue({});
+
+      await service.acceptInvitation({ token: 'mgr_token' });
+
+      expect(mockPrisma.membership.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({ dataScope: 'TEAM', accessRole: 'MANAGER' }),
+          create: expect.objectContaining({ dataScope: 'TEAM', accessRole: 'MANAGER' }),
+        }),
+      );
+    });
+
+    it('should promote dataScope to GLOBAL when updating member accessRole to ADMIN without explicit dataScope', async () => {
+      mockPrisma.membership.findFirst.mockResolvedValue({
+        id: 'mem_promote',
+        userId: 'user_promote',
+        workspaceId: 'ws_1',
+        accessRole: 'MEMBER',
+        dataScope: 'ASSIGNED',
+      });
+      mockPrisma.membership.update.mockResolvedValue({
+        id: 'mem_promote',
+        accessRole: 'ADMIN',
+        dataScope: 'GLOBAL',
+      });
+
+      await service.updateMemberOrgDetails('ws_1', 'mem_promote', {
+        accessRole: 'ADMIN' as any,
+      });
+
+      expect(mockPrisma.membership.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            accessRole: 'ADMIN',
+            dataScope: 'GLOBAL',
+          }),
+        }),
+      );
+    });
+  });
 });

@@ -588,6 +588,7 @@ export class AnalyticsService {
           details: {
             projectName: t.project?.name || 'General',
             assigneeName: t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : 'Unassigned',
+            assigneeId: t.assigneeMembershipId,
             priority: t.priority,
             dueDate: t.dueDate ? t.dueDate.toISOString() : null,
           },
