@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { TaskStatus, PriorityLevel, ApprovalStatus } from '@prisma/client';
+import { isTaskDeadlinePassed, isTaskOverdue } from '../../common/utils/task-overdue.util';
 
 export interface WorkflowRule {
   id: string;
@@ -169,7 +170,7 @@ export class TasksService implements OnModuleInit {
     });
 
     if (filterOverdue) {
-      tasks = tasks.filter((t: any) => t.status !== TaskStatus.COMPLETED && t.dueDate && new Date(t.dueDate).getTime() < Date.now());
+      tasks = tasks.filter((t: any) => isTaskOverdue(t));
     } else if (filterBlocked) {
       tasks = tasks.filter((t: any) => (t.sla as any)?.isBlocked || (t.sla as any)?.dependsOnTaskIds?.length > 0);
     }
@@ -443,8 +444,8 @@ export class TasksService implements OnModuleInit {
     }
 
     const updatedMetadata = {
-      ...((isDueDateChanging && data.dueDate && new Date(data.dueDate).getTime() > Date.now()) ? { overdueNotifiedAt: null, isOverdue: false } : {}),
       ...currentMetadata,
+      ...((isDueDateChanging && data.dueDate && !isTaskDeadlinePassed(data.dueDate)) ? { overdueNotifiedAt: null, isOverdue: false } : {}),
       ...(newAssigneeIds !== undefined
         ? {
             assigneeMembershipIds: newAssigneeIds,
@@ -534,6 +535,7 @@ export class TasksService implements OnModuleInit {
         sla: {
           ...metadata,
           progress: 75,
+          isOverdue: false,
           reviewerMembershipId: reviewerMembershipId || metadata.reviewerMembershipId || null,
           activityLog,
         },
@@ -658,6 +660,7 @@ export class TasksService implements OnModuleInit {
         sla: {
           ...metadata,
           progress: 100,
+          isOverdue: false,
           completedAt: new Date(),
           completedByManagerMembershipId: actorMembershipId || null,
           activityLog,
@@ -1132,7 +1135,8 @@ export class TasksService implements OnModuleInit {
           ...metadata,
           extensionRequest: ext,
           activityLog,
-          isOverdue: updatedDueDate && new Date(updatedDueDate).getTime() > Date.now() ? false : metadata.isOverdue,
+          isOverdue: action === 'APPROVE' && updatedDueDate && !isTaskDeadlinePassed(updatedDueDate) ? false : metadata.isOverdue,
+          ...(action === 'APPROVE' && updatedDueDate && !isTaskDeadlinePassed(updatedDueDate) ? { overdueNotifiedAt: null } : {}),
         },
       },
     });
@@ -1424,12 +1428,7 @@ export class TasksService implements OnModuleInit {
     const dependsOnTaskIds = metadata.dependsOnTaskIds || [];
     const reworkCount = metadata.reworkCount || 0;
 
-    const isOverdue =
-      task.status !== 'COMPLETED' &&
-      task.status !== 'CANCELLED' &&
-      task.dueDate
-        ? new Date(task.dueDate).getTime() < Date.now()
-        : false;
+    const isOverdue = isTaskOverdue(task);
 
     return {
       ...task,
@@ -1465,15 +1464,16 @@ export class TasksService implements OnModuleInit {
   public async checkOverdueTasks(workspaceId?: string) {
     try {
       const now = new Date();
+      const overdueQueryCutoff = new Date(now.getTime() + 48 * 60 * 60 * 1000);
       const where: any = {
-        status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
-        dueDate: { lt: now },
+        status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED, TaskStatus.IN_REVIEW] },
+        dueDate: { lt: overdueQueryCutoff },
       };
       if (workspaceId) {
         where.workspaceId = workspaceId;
       }
 
-      const overdueTasks = await this.prisma.task.findMany({
+      const candidateTasks = await this.prisma.task.findMany({
         where,
         include: {
           assignee: {
@@ -1484,6 +1484,8 @@ export class TasksService implements OnModuleInit {
           project: { select: { id: true, name: true } },
         },
       });
+
+      const overdueTasks = candidateTasks.filter((task) => isTaskOverdue(task, now));
 
       for (const task of overdueTasks) {
         const metadata = (task.sla as any) || {};

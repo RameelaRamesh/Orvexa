@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ProjectStatus, PriorityLevel } from '@prisma/client';
+import { isTaskOverdue } from '../../common/utils/task-overdue.util';
 
 @Injectable()
 export class ProjectsService {
@@ -175,7 +176,7 @@ export class ProjectsService {
       inProgressTasks,
       inReviewTasks,
       todoTasks,
-      tasks,
+      tasks: tasks.map((t) => ({ ...t, isOverdue: isTaskOverdue(t) })),
       files: meta.files || [],
       activity: meta.activity || [],
     };

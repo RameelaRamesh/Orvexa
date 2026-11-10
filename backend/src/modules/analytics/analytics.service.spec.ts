@@ -151,6 +151,25 @@ describe('PHASE 11: Analytics, User Experience and Universal Calendar Acceptance
     expect(overview.kpis.tasks.overdue).toBe(1); // Task 3 is overdue
   });
 
+  it('TC-PHASE11-02B: Today deadline and IN_REVIEW submitted tasks are excluded from overdue overview and OVERDUE drilldown', async () => {
+    const now = new Date();
+    const todayUtc = new Date(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T00:00:00.000Z`);
+    const past = new Date(Date.now() - 48 * 3600 * 1000);
+
+    taskTable.push(
+      { id: 't_today', workspaceId: workspaceIdA, title: 'Due Today', status: 'TODO', priority: 'MEDIUM', dueDate: todayUtc, createdAt: now },
+      { id: 't_review', workspaceId: workspaceIdA, title: 'In Review', status: 'IN_REVIEW', priority: 'HIGH', dueDate: past, createdAt: now },
+      { id: 't_late', workspaceId: workspaceIdA, title: 'Missed Work', status: 'IN_PROGRESS', priority: 'URGENT', dueDate: past, createdAt: now },
+    );
+
+    const overview = await analyticsService.getOverview(workspaceIdA, memberAdminId, 'ADMIN');
+    expect(overview.kpis.tasks.overdue).toBe(1);
+
+    const drilldown = await analyticsService.getDrilldown(workspaceIdA, memberAdminId, 'ADMIN', 'tasks', { status: 'OVERDUE' });
+    expect(drilldown.total).toBe(1);
+    expect((drilldown.items[0] as any).id).toBe('t_late');
+  });
+
   it('TC-PHASE11-03: Quality reviews calculate genuine average score and SLA health', async () => {
     taskTable.push(
       { id: 't1', workspaceId: workspaceIdA, title: 'Task 1', status: 'COMPLETED', priority: 'MEDIUM', dueDate: null, createdAt: new Date() },

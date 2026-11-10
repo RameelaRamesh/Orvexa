@@ -5,6 +5,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { isTaskOverdue } from '../../common/utils/task-overdue.util';
 
 export interface DateFilter {
   startDate?: string;
@@ -173,7 +174,7 @@ export class AnalyticsService {
     const inReviewTasks = allTasks.filter((t) => t.status === 'IN_REVIEW').length;
     const now = new Date();
     const overdueTasks = allTasks.filter(
-      (t) => t.dueDate && new Date(t.dueDate) < now && t.status !== 'COMPLETED' && t.status !== 'CANCELLED',
+      (t) => isTaskOverdue(t, now),
     ).length;
 
     const taskCompletionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 1000) / 10 : 0;
@@ -729,8 +730,7 @@ export class AnalyticsService {
         if (targetMembershipId) where.assigneeMembershipId = targetMembershipId;
         if (filters.status && filters.status !== 'ALL') {
           if (filters.status === 'OVERDUE') {
-            where.dueDate = { lt: new Date() };
-            where.status = { notIn: ['COMPLETED', 'CANCELLED'] };
+            where.dueDate = { not: null };
           } else {
             where.status = filters.status;
           }
@@ -738,6 +738,40 @@ export class AnalyticsService {
         if (filters.priority && filters.priority !== 'ALL') where.priority = filters.priority;
         if (filters.search) {
           where.title = { contains: filters.search, mode: 'insensitive' };
+        }
+
+        if (filters.status === 'OVERDUE') {
+          const candidates = await this.prisma.task.findMany({
+            where,
+            include: {
+              project: { select: { id: true, name: true, key: true } },
+              assignee: {
+                include: { user: { select: { firstName: true, lastName: true, email: true } } },
+              },
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+
+          const overdueItems = candidates.filter((t) => isTaskOverdue(t));
+          const paginatedItems = overdueItems.slice(offset, offset + limit);
+
+          return {
+            category: 'tasks',
+            total: overdueItems.length,
+            limit,
+            offset,
+            items: paginatedItems.map((t) => ({
+              id: t.id,
+              title: t.title,
+              status: t.status,
+              priority: t.priority,
+              dueDate: t.dueDate,
+              projectName: t.project?.name || 'General',
+              assigneeName: t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : 'Unassigned',
+              assigneeEmail: t.assignee?.user?.email,
+              createdAt: t.createdAt,
+            })),
+          };
         }
 
         const [items, total] = await Promise.all([

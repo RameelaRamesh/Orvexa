@@ -769,7 +769,7 @@ export default function ProjectsAndTasksPage() {
         <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${base}`}>
           {label}
         </span>
-        {isOverdue && status !== 'COMPLETED' && (status as string) !== 'DONE' && (
+        {isOverdue && status !== 'COMPLETED' && (status as string) !== 'DONE' && status !== 'IN_REVIEW' && (status as string) !== 'CANCELLED' && (
           <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-500 text-white shadow-2xs">
             Overdue
           </span>
@@ -1114,7 +1114,7 @@ export default function ProjectsAndTasksPage() {
                               <span className="text-xs font-semibold text-foreground leading-snug line-clamp-2">
                                 {t.title}
                               </span>
-                              {t.isOverdue && (
+                              {t.isOverdue && t.status !== 'COMPLETED' && t.status !== 'IN_REVIEW' && (t.status as string) !== 'CANCELLED' && (
                                 <span className="px-1.5 py-0.2 rounded-md text-[9px] font-bold bg-rose-500 text-white shrink-0">
                                   Overdue
                                 </span>

@@ -82,6 +82,32 @@ interface CalendarEvent {
   _isMultiDay?: boolean;
 }
 
+const isCalendarTaskOverdue = (status?: string | null, dueDate?: string | Date | null): boolean => {
+  if (!dueDate) return false;
+  if (status === 'COMPLETED' || status === 'CANCELLED' || status === 'IN_REVIEW') {
+    return false;
+  }
+
+  let deadlineEnd: number;
+  if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate.trim())) {
+    const [year, month, day] = dueDate.trim().split('-').map(Number);
+    deadlineEnd = new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  } else {
+    const d = dueDate instanceof Date ? dueDate : new Date(dueDate);
+    if (isNaN(d.getTime())) return false;
+    const isUtcMidnight =
+      d.getUTCHours() === 0 &&
+      d.getUTCMinutes() === 0 &&
+      d.getUTCSeconds() === 0 &&
+      d.getUTCMilliseconds() === 0;
+    deadlineEnd = isUtcMidnight
+      ? new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999).getTime()
+      : new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
+  }
+
+  return Date.now() > deadlineEnd;
+};
+
 export default function UnifiedCalendarPage() {
   const router = useRouter();
 
@@ -486,7 +512,7 @@ export default function UnifiedCalendarPage() {
 
           const isMid = isMidnightUtc(rawEnd);
           const isUrgent = t.priority === 'URGENT' || t.priority === 'HIGH';
-          const isOverdue = t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && t.dueDate && new Date(t.dueDate).getTime() < Date.now();
+          const isOverdue = isCalendarTaskOverdue(t.status, t.dueDate);
           const progress = sla.progress !== undefined ? sla.progress : (t.status === 'COMPLETED' ? 100 : t.status === 'IN_PROGRESS' ? 25 : 0);
 
           const aName = t.assignee?.user

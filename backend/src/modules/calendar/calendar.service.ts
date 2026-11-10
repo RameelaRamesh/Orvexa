@@ -5,6 +5,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import { isTaskOverdue } from '../../common/utils/task-overdue.util';
 import {
   CreateCalendarEventDto,
   UpdateCalendarEventDto,
@@ -449,7 +450,7 @@ export class CalendarService {
           }
         }
 
-        const isOverdue = t.status !== 'COMPLETED' && t.status !== 'CANCELLED' && t.dueDate && new Date(t.dueDate).getTime() < Date.now();
+        const isOverdue = isTaskOverdue(t);
         const assigneeName = t.assignee?.user
           ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`.trim()
           : (t as any).assigneeName || 'Unassigned';

@@ -511,4 +511,118 @@ describe('PHASE 7: Universal Work and Workflow Engine Acceptance Suite', () => {
       });
     });
   });
+
+  // =========================================================================
+  // 7. OVERDUE DEADLINE & SUBMISSION RULES
+  // =========================================================================
+  describe('Overdue Deadline & Submission Rules', () => {
+    it('does not mark a task with today as deadline as overdue', async () => {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+      mockPrisma.task.create.mockImplementation((args: any) => ({
+        id: 'task_today_1',
+        ...args.data,
+      }));
+
+      const created = await tasksService.create(
+        'ws_alpha',
+        {
+          title: 'Finish report today',
+          dueDate: todayStr,
+        },
+        'mem_creator_1',
+      );
+
+      expect(created.isOverdue).toBe(false);
+    });
+
+    it('list with OVERDUE filter includes past-deadline unsubmitted tasks and excludes today, IN_REVIEW, COMPLETED, CANCELLED', async () => {
+      const now = new Date();
+      const todayUtc = new Date(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T00:00:00.000Z`);
+      const pastUtc = new Date(Date.now() - 48 * 3600 * 1000);
+
+      mockPrisma.task.findMany.mockResolvedValue([
+        { id: 't_today', workspaceId: 'ws_alpha', title: 'Due Today', status: TaskStatus.TODO, dueDate: todayUtc, sla: {} },
+        { id: 't_review', workspaceId: 'ws_alpha', title: 'Submitted', status: TaskStatus.IN_REVIEW, dueDate: pastUtc, sla: {} },
+        { id: 't_done', workspaceId: 'ws_alpha', title: 'Done', status: TaskStatus.COMPLETED, dueDate: pastUtc, sla: {} },
+        { id: 't_cancelled', workspaceId: 'ws_alpha', title: 'Cancelled', status: TaskStatus.CANCELLED, dueDate: pastUtc, sla: {} },
+        { id: 't_overdue', workspaceId: 'ws_alpha', title: 'Late', status: TaskStatus.IN_PROGRESS, dueDate: pastUtc, sla: {} },
+      ]);
+
+      jest.spyOn(tasksService, 'checkOverdueTasks').mockResolvedValueOnce(undefined);
+      const overdueList = await tasksService.list('ws_alpha', { status: 'OVERDUE' });
+
+      expect(overdueList).toHaveLength(1);
+      expect(overdueList[0].id).toBe('t_overdue');
+      expect(overdueList[0].isOverdue).toBe(true);
+    });
+
+    it('updating dueDate to today clears prior overdueNotifiedAt and isOverdue flags in sla metadata', async () => {
+      const now = new Date();
+      const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+      mockPrisma.task.findFirst.mockResolvedValue({
+        id: 'task_reset_1',
+        workspaceId: 'ws_alpha',
+        title: 'Rescheduled Task',
+        status: TaskStatus.IN_PROGRESS,
+        dueDate: new Date(Date.now() - 48 * 3600 * 1000),
+        sla: { overdueNotifiedAt: '2026-11-08T10:00:00.000Z', isOverdue: true, activityLog: [] },
+      });
+
+      mockPrisma.task.update.mockImplementation((args: any) => ({
+        id: 'task_reset_1',
+        workspaceId: 'ws_alpha',
+        status: TaskStatus.IN_PROGRESS,
+        dueDate: args.data.dueDate,
+        sla: args.data.sla,
+      }));
+
+      const updated = await tasksService.update('task_reset_1', 'ws_alpha', { dueDate: todayStr }, 'mem_lead_1');
+
+      expect(updated.isOverdue).toBe(false);
+      expect(mockPrisma.task.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            sla: expect.objectContaining({
+              overdueNotifiedAt: null,
+              isOverdue: false,
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('checkOverdueTasks does not notify for today deadline or IN_REVIEW tasks, only unsubmitted past deadlines', async () => {
+      const now = new Date();
+      const todayUtc = new Date(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}T00:00:00.000Z`);
+      const pastUtc = new Date(Date.now() - 48 * 3600 * 1000);
+
+      mockPrisma.task.findMany.mockResolvedValue([
+        { id: 't_today', workspaceId: 'ws_alpha', title: 'Due Today', status: TaskStatus.IN_PROGRESS, dueDate: todayUtc, sla: {}, assigneeMembershipId: 'mem_dev_1', assignee: { user: { firstName: 'Dev', lastName: 'One' } } },
+        { id: 't_review', workspaceId: 'ws_alpha', title: 'Submitted', status: TaskStatus.IN_REVIEW, dueDate: pastUtc, sla: {}, assigneeMembershipId: 'mem_dev_1', assignee: { user: { firstName: 'Dev', lastName: 'One' } } },
+        { id: 't_overdue', workspaceId: 'ws_alpha', title: 'Missed Deadline', status: TaskStatus.TODO, dueDate: pastUtc, sla: {}, assigneeMembershipId: 'mem_dev_1', assignee: { user: { firstName: 'Dev', lastName: 'One' } } },
+      ]);
+
+      mockPrisma.membership.findMany.mockResolvedValue([
+        { id: 'mem_mgr_1', accessRole: 'MANAGER' },
+      ]);
+      mockPrisma.task.update.mockResolvedValue({});
+
+      await tasksService.checkOverdueTasks('ws_alpha');
+
+      expect(mockPrisma.notification.create).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.notification.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          recipientMembershipId: 'mem_mgr_1',
+          title: '🚨 Deadline Missed: Missed Deadline',
+        }),
+      });
+      expect(mockPrisma.task.update).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.task.update).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 't_overdue' } }),
+      );
+    });
+  });
 });
