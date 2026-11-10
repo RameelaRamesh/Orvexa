@@ -69,7 +69,6 @@ export class TimeController {
   }
 
   @Get('attendance')
-  @RequirePermissions('attendance:view')
   async listWorkspaceAttendance(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -112,7 +111,6 @@ export class TimeController {
   // ---------------------------------------------------------------------------
 
   @Get('reports/summary')
-  @RequirePermissions('attendance:view')
   async getAttendanceReportSummary(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -177,36 +175,34 @@ export class TimeController {
   }
 
   @Get('corrections')
-  @RequirePermissions('attendance:view')
   async listCorrections(
     @CurrentWorkspace() workspaceId: string,
-    @Request() req: any,
     @Query('status') status?: string,
     @Query('membershipId') membershipId?: string,
   ) {
-    return this.timeService.listCorrections(workspaceId, { status, membershipId }, req.userContext);
+    return this.timeService.listCorrections(workspaceId, { status, membershipId });
   }
 
   @Patch('corrections/:id/approve')
-  @RequirePermissions('attendance:edit')
+  @RequirePermissions('time:manage')
   async approveCorrection(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
     @Param('id') correctionId: string,
     @Body('reviewNotes') reviewNotes?: string,
   ) {
-    return this.timeService.approveCorrection(workspaceId, correctionId, req.membershipId, reviewNotes, req.userContext);
+    return this.timeService.approveCorrection(workspaceId, correctionId, req.membershipId, reviewNotes);
   }
 
   @Patch('corrections/:id/reject')
-  @RequirePermissions('attendance:edit')
+  @RequirePermissions('time:manage')
   async rejectCorrection(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
     @Param('id') correctionId: string,
     @Body('rejectionReason') rejectionReason: string,
   ) {
-    return this.timeService.rejectCorrection(workspaceId, correctionId, req.membershipId, rejectionReason, req.userContext);
+    return this.timeService.rejectCorrection(workspaceId, correctionId, req.membershipId, rejectionReason);
   }
 
   @Post('missed-checkout/resolve')
@@ -263,17 +259,14 @@ export class TimeController {
   // ---------------------------------------------------------------------------
 
   @Get('timesheets')
-  @RequirePermissions('time:view')
   async listTimesheets(
     @CurrentWorkspace() workspaceId: string,
-    @Request() req: any,
     @Query('membershipId') membershipId?: string,
   ) {
-    return this.timeService.listTimesheets(workspaceId, membershipId, req.userContext);
+    return this.timeService.listTimesheets(workspaceId, membershipId);
   }
 
   @Post('timesheets')
-  @RequirePermissions('time:log')
   async createTimesheet(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -283,14 +276,14 @@ export class TimeController {
   }
 
   @Patch('timesheets/:id/status')
-  @RequirePermissions('time:approve')
+  @RequirePermissions('time:manage')
   async updateTimesheetStatus(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
     @Param('id') id: string,
     @Body('status') status: ApprovalStatus,
   ) {
-    return this.timeService.updateTimesheetStatus(workspaceId, id, req.membershipId, status, req.userContext);
+    return this.timeService.updateTimesheetStatus(workspaceId, id, req.membershipId, status);
   }
 
   // ---------------------------------------------------------------------------
@@ -298,17 +291,14 @@ export class TimeController {
   // ---------------------------------------------------------------------------
 
   @Get('overtime')
-  @RequirePermissions('time:view')
   async listOvertime(
     @CurrentWorkspace() workspaceId: string,
-    @Request() req: any,
     @Query('membershipId') membershipId?: string,
   ) {
-    return this.timeService.listOvertime(workspaceId, membershipId, req.userContext);
+    return this.timeService.listOvertime(workspaceId, membershipId);
   }
 
   @Post('overtime')
-  @RequirePermissions('time:log')
   async createOvertime(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -318,14 +308,14 @@ export class TimeController {
   }
 
   @Patch('overtime/:id/status')
-  @RequirePermissions('time:approve')
+  @RequirePermissions('time:manage')
   async updateOvertimeStatus(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
     @Param('id') id: string,
     @Body('status') status: ApprovalStatus,
   ) {
-    return this.timeService.updateOvertimeStatus(workspaceId, id, req.membershipId, status, req.userContext);
+    return this.timeService.updateOvertimeStatus(workspaceId, id, req.membershipId, status);
   }
 
   // ---------------------------------------------------------------------------

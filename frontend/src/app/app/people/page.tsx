@@ -57,7 +57,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
-import { checkPermission, getDisplayRoleName, getEffectiveScope } from '@/lib/permissions';
 
 export default function PeoplePage() {
   const searchParams = useSearchParams();
@@ -68,14 +67,6 @@ export default function PeoplePage() {
   const [designations, setDesignations] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
   const [roles, setRoles] = useState<any[]>([]);
-  const [allPermissions, setAllPermissions] = useState<any[]>([]);
-  const [currentMembership, setCurrentMembership] = useState<any>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const raw = localStorage.getItem('orvexa_cached_workspace');
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  });
   const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
     if (typeof window === 'undefined') return 'MEMBER';
     try {
@@ -112,16 +103,8 @@ export default function PeoplePage() {
   const [currentMemberId, setCurrentMemberId] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
-  // Strict RBAC Permission helpers (Only OWNER has implicit bypass; all other roles check granted permissions)
-  const isOwner = currentMembership?.accessRole === 'OWNER' || currentUserRole === 'OWNER';
-  const canInviteMembers = checkPermission(currentMembership, 'invitations:manage');
-  const canManageRoles = checkPermission(currentMembership, 'roles:manage');
-  const canEditOthers = checkPermission(currentMembership, 'people:edit') || checkPermission(currentMembership, 'people:manage');
-  const canEditOrgDetails = canEditOthers || checkPermission(currentMembership, 'departments:manage') || canManageRoles;
-  const canViewSensitive = checkPermission(currentMembership, 'people:view_sensitive') || checkPermission(currentMembership, 'payroll:view');
-  const canSendReminders = checkPermission(currentMembership, 'onboarding:manage') || checkPermission(currentMembership, 'people:manage');
-  const canVerifyDocs = canEditOthers || canSendReminders;
-  const isCurrentUserOwnerOrAdmin = canEditOthers || canEditOrgDetails;
+  // Permission helpers: Owner & HR (Admin) can edit any member; others can only edit their own profile
+  const isCurrentUserOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
 
   const isSelfMember = (m: any): boolean => {
     if (!m) return false;
@@ -146,8 +129,8 @@ export default function PeoplePage() {
     if (m.accessRole === 'OWNER') {
       return isSelfMember(m);
     }
-    // Editing other members strictly requires people:edit (or people:manage), even for ADMIN personas
-    return canEditOthers || isSelfMember(m);
+    // For other members, either the member themselves or an Admin/Owner can edit
+    return isCurrentUserOwnerOrAdmin || isSelfMember(m);
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -238,13 +221,6 @@ export default function PeoplePage() {
     senderName?: string;
     senderEmail?: string;
   } | null>(null);
-  const [bulkInviteResult, setBulkInviteResult] = useState<{
-    message: string;
-    totalRequested: number;
-    sentCount: number;
-    failedCount: number;
-    results: Array<{ email: string; firstName: string; lastName: string; status: 'SENT' | 'FAILED'; error?: string; inviteLink?: string }>;
-  } | null>(null);
 
   // Offboarding modal state
   const [showOffboardModal, setShowOffboardModal] = useState(false);
@@ -327,15 +303,7 @@ export default function PeoplePage() {
     docPassportPhoto: false,
   });
 
-  // Invite Form & Mode (Single / Bulk + Auto-Recommended Role & Permissions)
-  const [inviteMode, setInviteMode] = useState<'single' | 'bulk'>('single');
-  const [bulkRows, setBulkRows] = useState<Array<{ firstName: string; lastName: string; email: string }>>([
-    { firstName: '', lastName: '', email: '' },
-    { firstName: '', lastName: '', email: '' },
-  ]);
-  const [bulkPasteText, setBulkPasteText] = useState('');
-  const [showBulkPaste, setShowBulkPaste] = useState(false);
-
+  // Invite Form
   const [inviteForm, setInviteForm] = useState({
     email: '',
     firstName: '',
@@ -350,168 +318,127 @@ export default function PeoplePage() {
     dataScope: 'ASSIGNED',
   });
 
-  const [recommendedPolicyName, setRecommendedPolicyName] = useState('');
-  const [selectedPermCodes, setSelectedPermCodes] = useState<string[]>([
-    'tasks:view', 'tasks:create', 'tasks:edit', 'projects:view',
-    'time:view', 'time:log', 'attendance:view', 'attendance:clock',
-    'leave:view', 'leave:apply', 'people:view', 'scope:own',
-  ]);
-  const [recommendedPermCodes, setRecommendedPermCodes] = useState<string[]>([]);
-  const [showPermChecklist, setShowPermChecklist] = useState(true);
-  const [permSearchQuery, setPermSearchQuery] = useState('');
-  const [saveAsReusableRole, setSaveAsReusableRole] = useState(true);
-  const [saveDesignationMapping, setSaveDesignationMapping] = useState(true);
-  const [invitingSubmitting, setInvitingSubmitting] = useState(false);
-  const [loadingRecommend, setLoadingRecommend] = useState(false);
-
+  // =========================================================================
+  // SMART ROLE & SCOPE TEMPLATES BY DESIGNATION (AUTO-MAPPING)
+  // =========================================================================
   const SMART_DESIGNATION_TEMPLATES = [
-    {
-      keywords: ['payroll', 'compensation', 'salary', 'finance admin'],
-      role: 'ADMIN',
-      scope: 'WORKSPACE',
-      policyName: 'Payroll Admin',
-      label: 'Payroll Administration',
-      description: 'Salary structures, payslip runs, & payroll approvals without role or directory edit rights.',
-      permissionCodes: [
-        'payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage',
-        'people:view', 'people:view_sensitive',
-        'time:view', 'attendance:view', 'leave:view',
-        'reports:view', 'reports:export',
-        'scope:workspace', 'calendar:create', 'calendar:invite',
-      ],
-    },
-    {
-      keywords: ['recruit', 'talent', 'hiring', 'ta specialist', 'acquisition'],
-      role: 'ADMIN',
-      scope: 'WORKSPACE',
-      policyName: 'Recruitment Admin',
-      label: 'Recruitment & Onboarding Admin',
-      description: 'Manages invitations, onboarding checklists, and dept assignment without payroll or existing profile edits.',
-      permissionCodes: [
-        'invitations:manage', 'onboarding:manage', 'people:view', 'departments:manage',
-        'scope:workspace', 'calendar:create', 'calendar:invite',
-      ],
-    },
-    {
-      keywords: ['generalist', 'hr manager', 'hr executive', 'people ops', 'human resource'],
-      role: 'ADMIN',
-      scope: 'WORKSPACE',
-      policyName: 'HR Generalist',
-      label: 'HR Generalist',
-      description: 'Employee directory, profile edits, onboarding, leave approvals, and attendance across workspace.',
-      permissionCodes: [
-        'people:view', 'people:create', 'people:edit', 'people:delete', 'people:export', 'people:manage',
-        'onboarding:manage', 'people:view_sensitive', 'invitations:manage',
-        'leave:view', 'leave:approve', 'leave:manage',
-        'attendance:view', 'attendance:edit', 'attendance:export', 'time:view',
-        'departments:manage', 'assets:view', 'assets:assign',
-        'documents:view', 'documents:upload', 'documents:download',
-        'reports:view', 'scope:workspace',
-        'calendar:view:all', 'calendar:create', 'calendar:invite', 'calendar:holidays:manage',
-      ],
-    },
     {
       keywords: ['ceo', 'founder', 'co-founder', 'president', 'chief executive', 'owner'],
       role: 'OWNER',
       scope: 'WORKSPACE',
-      policyName: 'Owner',
-      label: 'Executive Ownership',
+      deptKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      label: 'Executive Leadership',
       description: 'Full organization-wide administrative ownership and global visibility across all records.',
-      permissionCodes: [],
     },
     {
-      keywords: ['department head', 'dept head', 'department lead', 'hod', 'vp ', 'vice president', 'director'],
+      keywords: ['director', 'vp', 'vice president', 'head of', 'general manager', 'coo', 'cto', 'cfo', 'cpo'],
+      role: 'MANAGER',
+      scope: 'WORKSPACE',
+      deptKeywords: ['management', 'executive', 'operations'],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      label: 'Senior Leadership',
+      description: 'Cross-functional leadership with enterprise-wide data access and operations management.',
+    },
+    {
+      keywords: ['operations manager', 'department manager', 'branch manager', 'delivery manager', 'program manager'],
       role: 'MANAGER',
       scope: 'DEPARTMENT',
-      policyName: 'Department Lead',
-      label: 'Department Lead',
-      description: 'Oversight and approvals across their entire Department (including all teams inside it).',
-      permissionCodes: [
-        'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
-        'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
-        'projects:view', 'projects:create', 'projects:edit',
-        'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
-        'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
-        'leave:view', 'leave:apply', 'leave:approve',
-        'approvals:view', 'approvals:approve',
-        'quality:view', 'quality:audit', 'quality:review', 'sla:view', 'reports:view', 'people:view',
-        'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
-        'scope:department', 'calendar:view:department', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
-      ],
+      deptKeywords: ['operations', 'general'],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      label: 'Department Management',
+      description: 'Departmental oversight, approvals, and cross-team workflow orchestration.',
     },
     {
-      keywords: ['tech lead', 'marketing lead', 'team lead', 'tl', 'engineering lead', 'squad lead', 'lead engineer', 'operations manager'],
+      keywords: ['hr', 'human resources', 'recruiter', 'people ops', 'talent', 'talent acquisition'],
+      role: 'ADMIN',
+      scope: 'DEPARTMENT',
+      deptKeywords: ['hr', 'human', 'people'],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      label: 'HR & People Operations',
+      description: 'Organization administration, employee records, onboarding, and leave approvals.',
+    },
+    {
+      keywords: ['tech lead', 'team lead', 'lead engineer', 'engineering lead', 'scrum master', 'lead developer', 'principal engineer', 'architect'],
       role: 'MANAGER',
       scope: 'TEAM',
-      policyName: 'Team Lead',
-      label: 'Team Lead (Isolated Team Scope)',
-      description: 'Restricted strictly to their own Team & direct reports. Check scope:department if they should manage the whole department.',
-      permissionCodes: [
-        'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
-        'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
-        'projects:view', 'projects:create', 'projects:edit',
-        'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
-        'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
-        'leave:view', 'leave:apply', 'leave:approve',
-        'approvals:view', 'approvals:approve',
-        'quality:view', 'quality:audit', 'quality:review', 'sla:view', 'reports:view', 'people:view',
-        'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
-        'scope:team', 'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
-      ],
+      deptKeywords: ['tech', 'engineering', 'development', 'software', 'it'],
+      teamKeywords: ['lead', 'core', 'engineering'],
+      label: 'Technical Team Lead',
+      description: 'Supervises squad work items, sprint tracking, and task delegation.',
     },
     {
-      keywords: ['software engineer', 'developer', 'frontend', 'backend', 'fullstack', 'ios', 'android', 'mobile engineer', 'programmer'],
+      keywords: ['software engineer', 'developer', 'frontend', 'backend', 'fullstack', 'ios', 'android', 'mobile engineer', 'web developer', 'programmer'],
       role: 'MEMBER',
       scope: 'TEAM',
-      policyName: 'Member',
+      deptKeywords: ['tech', 'engineering', 'development', 'software', 'it'],
+      teamKeywords: ['frontend', 'backend', 'mobile', 'web', 'dev'],
       label: 'Software Engineering',
       description: 'Collaborates on sprint deliverables and team work items.',
-      permissionCodes: [
-        'tasks:view', 'tasks:create', 'tasks:edit',
-        'projects:view', 'work_items:view', 'work_items:process',
-        'time:view', 'time:log', 'attendance:view', 'attendance:clock',
-        'leave:view', 'leave:apply', 'approvals:view', 'people:view',
-        'scope:team', 'calendar:create', 'calendar:invite',
-      ],
     },
     {
-      keywords: ['qa', 'quality', 'tester', 'test engineer', 'qa auditor', 'qc'],
+      keywords: ['qa', 'quality', 'tester', 'test engineer', 'qa auditor', 'automation engineer', 'qc'],
       role: 'MEMBER',
       scope: 'TEAM',
-      policyName: 'QA Auditor',
+      deptKeywords: ['tech', 'engineering', 'quality', 'qa'],
+      teamKeywords: ['qa', 'testing', 'quality'],
       label: 'Quality Assurance',
-      description: 'Conducts quality scorecards, QA reviews, and defect verification.',
-      permissionCodes: [
-        'tasks:view', 'work_items:view', 'work_items:process',
-        'quality:view', 'quality:audit', 'quality:review', 'sla:view',
-        'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply',
-        'people:view', 'scope:team', 'calendar:create', 'calendar:invite',
-      ],
+      description: 'Access to team work items for testing, defect tracking, and verification.',
     },
     {
-      keywords: ['contractor', 'freelancer', 'consultant', 'intern', 'temporary', 'vendor'],
+      keywords: ['product manager', 'product owner', 'associate product manager', 'pm'],
+      role: 'MANAGER',
+      scope: 'TEAM',
+      deptKeywords: ['product', 'tech', 'engineering'],
+      teamKeywords: ['product'],
+      label: 'Product Management',
+      description: 'Defines requirements, manages backlogs, and tracks feature milestones.',
+    },
+    {
+      keywords: ['designer', 'ui', 'ux', 'product designer', 'graphic designer', 'visual designer', 'creative'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['design', 'product', 'creative'],
+      teamKeywords: ['design', 'ui'],
+      label: 'Product Design',
+      description: 'Collaborates on design deliverables, assets, and design system tasks.',
+    },
+    {
+      keywords: ['marketing', 'sales', 'growth', 'social media', 'content', 'copywriter', 'seo', 'account executive', 'bdr', 'sdr'],
+      role: 'MEMBER',
+      scope: 'TEAM',
+      deptKeywords: ['marketing', 'sales', 'growth', 'commercial'],
+      teamKeywords: ['marketing', 'sales'],
+      label: 'Marketing & Sales',
+      description: 'Collaborates on campaigns, outbound deals, and promotional tasks.',
+    },
+    {
+      keywords: ['finance', 'accountant', 'accounts', 'billing', 'payroll', 'controller', 'auditor'],
+      role: 'MEMBER',
+      scope: 'DEPARTMENT',
+      deptKeywords: ['finance', 'accounts', 'billing'],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      label: 'Finance & Compliance',
+      description: 'Access to departmental financial records, billing, and accounting items.',
+    },
+    {
+      keywords: ['contractor', 'freelancer', 'consultant', 'intern', 'temporary', 'vendor', 'trainee'],
       role: 'MEMBER',
       scope: 'ASSIGNED',
-      policyName: 'Member',
+      deptKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
+      teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
       label: 'External Contributor / Intern',
-      description: 'Strictly restricted to explicitly assigned records with zero peer visibility.',
-      permissionCodes: [
-        'tasks:view', 'tasks:edit', 'time:view', 'time:log',
-        'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply',
-        'scope:own', 'calendar:create',
-      ],
+      description: 'Strictly restricted to explicitly assigned tasks with zero access to peer data.',
     },
   ];
 
   const QUICK_DESIGNATION_PRESETS = [
-    'Payroll Admin',
-    'HR Generalist',
-    'Recruitment Admin',
-    'Tech Lead',
-    'Marketing Lead',
-    'Department Head',
     'Software Engineer',
+    'Tech Lead',
     'QA Auditor',
+    'Product Manager',
+    'HR Executive',
+    'Operations Manager',
     'Contractor / Freelancer',
   ];
 
@@ -520,211 +447,67 @@ export default function PeoplePage() {
     description: string;
     role: string;
     scope: string;
-    source?: string;
   } | null>(null);
-
-  const normalizeScopeCode = (scopeVal: string) => {
-    const s = (scopeVal || '').toUpperCase();
-    if (s === 'WORKSPACE' || s === 'GLOBAL') return 'scope:workspace';
-    if (s === 'DEPARTMENT') return 'scope:department';
-    if (s === 'TEAM') return 'scope:team';
-    return 'scope:own';
-  };
-
-  const scopeValueFromCode = (code: string) => {
-    if (code === 'scope:workspace') return 'WORKSPACE';
-    if (code === 'scope:department') return 'DEPARTMENT';
-    if (code === 'scope:team') return 'TEAM';
-    return 'ASSIGNED';
-  };
-
-  const recommendTimerRef = React.useRef<any>(null);
-
-  const handleDataScopeChange = (newScope: string) => {
-    setInviteForm((prev) => ({ ...prev, dataScope: newScope }));
-    const scopeCode = normalizeScopeCode(newScope);
-    setSelectedPermCodes((prev) => {
-      const withoutScope = prev.filter((c) => !c.startsWith('scope:'));
-      return [...withoutScope, scopeCode];
-    });
-  };
-
-  const togglePermissionCode = (code: string) => {
-    setSelectedPermCodes((prev) => {
-      const exists = prev.includes(code);
-      if (code.startsWith('scope:')) {
-        const nextScopeVal = scopeValueFromCode(code);
-        setInviteForm((f) => ({ ...f, dataScope: nextScopeVal }));
-        const withoutScope = prev.filter((c) => !c.startsWith('scope:'));
-        return [...withoutScope, code];
-      }
-      if (exists) {
-        return prev.filter((c) => c !== code);
-      }
-      return [...prev, code];
-    });
-  };
-
-  const toggleModuleAllPermissions = (modulePerms: any[]) => {
-    const codes = modulePerms.map((p) => p.code);
-    if (codes.some((c) => c.startsWith('scope:'))) return;
-    const allChecked = codes.every((c) => selectedPermCodes.includes(c));
-    setSelectedPermCodes((prev) => {
-      if (allChecked) {
-        return prev.filter((c) => !codes.includes(c));
-      }
-      return Array.from(new Set([...prev, ...codes]));
-    });
-  };
 
   const handleDesignationChange = (title: string) => {
     const cleanTitle = title.trim().toLowerCase();
 
-    const autoDept = departments.find((rawD) => {
-      const d = rawD.data !== undefined ? rawD.data : rawD;
-      const dName = (d.name || '').toLowerCase();
-      if (cleanTitle.includes('tech') || cleanTitle.includes('engineer') || cleanTitle.includes('qa')) {
-        return dName.includes('tech') || dName.includes('eng') || dName.includes('dev');
-      }
-      if (cleanTitle.includes('marketing') || cleanTitle.includes('growth')) {
-        return dName.includes('market') || dName.includes('growth');
-      }
-      if (cleanTitle.includes('hr') || cleanTitle.includes('recruit') || cleanTitle.includes('generalist') || cleanTitle.includes('people')) {
-        return dName.includes('hr') || dName.includes('human') || dName.includes('people');
-      }
-      if (cleanTitle.includes('payroll') || cleanTitle.includes('finance')) {
-        return dName.includes('finance') || dName.includes('payroll') || dName.includes('account');
-      }
-      return false;
-    });
-    const matchedDeptId = autoDept ? (autoDept.data !== undefined ? autoDept.data : autoDept).id : undefined;
-
-    const autoTeam = teams.find((rawT) => {
-      const t = rawT.data !== undefined ? rawT.data : rawT;
-      const tName = (t.name || '').toLowerCase();
-      if (cleanTitle.includes('tech')) return tName.includes('tech') || tName.includes('eng') || tName.includes('platform');
-      if (cleanTitle.includes('marketing')) return tName.includes('market') || tName.includes('growth');
-      return false;
-    });
-    const matchedTeamId = autoTeam ? (autoTeam.data !== undefined ? autoTeam.data : autoTeam).id : undefined;
-
+    // Find matching template
     const template = SMART_DESIGNATION_TEMPLATES.find((tpl) =>
       tpl.keywords.some((kw) => cleanTitle.includes(kw))
     );
 
     if (template) {
-      const scopeVal = template.scope;
+      // Find matching department if possible
+      let matchedDeptId = inviteForm.departmentId;
+      if (template.deptKeywords && template.deptKeywords.length > 0) {
+        const foundDept = departments.find((rawD) => {
+          const d = rawD.data !== undefined ? rawD.data : rawD;
+          const dName = (d.name || '').toLowerCase();
+          return template.deptKeywords.some((dk) => dName.includes(dk));
+        });
+        if (foundDept) {
+          const dObj = foundDept.data !== undefined ? foundDept.data : foundDept;
+          matchedDeptId = dObj.id;
+        }
+      }
+
+      // Find matching team if possible
+      let matchedTeamId = inviteForm.teamId;
+      if (template.teamKeywords && template.teamKeywords.length > 0) {
+        const foundTeam = teams.find((rawT) => {
+          const t = rawT.data !== undefined ? rawT.data : rawT;
+          const tName = (t.name || '').toLowerCase();
+          return template.teamKeywords.some((tk) => tName.includes(tk));
+        });
+        if (foundTeam) {
+          const tObj = foundTeam.data !== undefined ? foundTeam.data : foundTeam;
+          matchedTeamId = tObj.id;
+        }
+      }
+
       setMatchedTemplate({
         label: template.label,
         description: template.description,
         role: template.role,
-        scope: scopeVal,
+        scope: template.scope,
       });
-      setRecommendedPolicyName(template.policyName);
-      if (template.permissionCodes.length > 0) {
-        setSelectedPermCodes(template.permissionCodes);
-        setRecommendedPermCodes(template.permissionCodes);
-      }
+
       setInviteForm((prev) => ({
         ...prev,
         designationTitle: title,
         accessRole: template.role,
-        dataScope: scopeVal,
-        ...(matchedDeptId ? { departmentId: matchedDeptId } : {}),
-        ...(matchedTeamId ? { teamId: matchedTeamId } : {}),
+        dataScope: template.scope,
+        departmentId: matchedDeptId,
+        teamId: matchedTeamId,
       }));
     } else {
       setMatchedTemplate(null);
       setInviteForm((prev) => ({
         ...prev,
         designationTitle: title,
-        ...(matchedDeptId ? { departmentId: matchedDeptId } : {}),
-        ...(matchedTeamId ? { teamId: matchedTeamId } : {}),
       }));
     }
-
-    if (recommendTimerRef.current) clearTimeout(recommendTimerRef.current);
-    if (!title.trim()) return;
-    recommendTimerRef.current = setTimeout(async () => {
-      try {
-        setLoadingRecommend(true);
-        const res = await fetch(`${BRANDING.apiUrl}/roles/recommend?designation=${encodeURIComponent(title.trim())}`, {
-          headers: getHeaders(),
-        });
-        if (!res.ok) return;
-        const raw = await res.json();
-        const rec = raw.data !== undefined ? raw.data : raw;
-        if (!rec || !Array.isArray(rec.permissionCodes)) return;
-
-        const mappedScope = rec.dataScope === 'GLOBAL' ? 'WORKSPACE' : (rec.dataScope || 'ASSIGNED');
-        setRecommendedPolicyName(rec.existingRoleName || rec.suggestedRoleName || '');
-        setSelectedPermCodes(rec.permissionCodes);
-        setRecommendedPermCodes(rec.permissionCodes);
-        setMatchedTemplate({
-          label: rec.suggestedRoleName || 'Smart Recommendation',
-          description: rec.description || 'Tailored permissions from workspace recommendation engine.',
-          role: rec.accessRole || 'MEMBER',
-          scope: mappedScope,
-          source: rec.source,
-        });
-        setInviteForm((prev) => ({
-          ...prev,
-          accessRole: rec.accessRole || prev.accessRole,
-          dataScope: mappedScope,
-          roleId: rec.existingRoleId || '',
-        }));
-      } catch {
-      } finally {
-        setLoadingRecommend(false);
-      }
-    }, 220);
-  };
-
-  const handleParseBulkPaste = () => {
-    const lines = bulkPasteText
-      .split(/\r?\n/)
-      .map((l) => l.trim())
-      .filter(Boolean);
-    const parsed: Array<{ firstName: string; lastName: string; email: string }> = [];
-    for (const line of lines) {
-      const angleMatch = line.match(/^([^<]+)<([^>]+)>$/);
-      if (angleMatch) {
-        const names = angleMatch[1].trim().split(/\s+/);
-        const email = angleMatch[2].trim();
-        parsed.push({
-          firstName: names[0] || email.split('@')[0],
-          lastName: names.slice(1).join(' ') || 'Member',
-          email,
-        });
-        continue;
-      }
-      const parts = line.split(/[,\t]+/).map((p) => p.trim()).filter(Boolean);
-      if (parts.length >= 3 && parts[2].includes('@')) {
-        parsed.push({ firstName: parts[0], lastName: parts[1], email: parts[2] });
-      } else if (parts.length === 2 && parts[1].includes('@')) {
-        const names = parts[0].split(/\s+/);
-        parsed.push({ firstName: names[0], lastName: names.slice(1).join(' ') || 'Member', email: parts[1] });
-      } else if (parts[0]?.includes('@')) {
-        const local = parts[0].split('@')[0];
-        const splitLocal = local.split(/[._-]+/);
-        parsed.push({
-          firstName: splitLocal[0] ? splitLocal[0][0].toUpperCase() + splitLocal[0].slice(1) : local,
-          lastName: splitLocal[1] ? splitLocal[1][0].toUpperCase() + splitLocal[1].slice(1) : 'Member',
-          email: parts[0],
-        });
-      }
-    }
-    if (parsed.length === 0) {
-      toast.error('No valid email addresses found. Paste lines like "alice@company.com" or "Alice,Smith,alice@company.com".');
-      return;
-    }
-    setBulkRows((prev) => {
-      const nonEmpty = prev.filter((r) => r.email.trim() || r.firstName.trim() || r.lastName.trim());
-      return [...nonEmpty, ...parsed];
-    });
-    setBulkPasteText('');
-    setShowBulkPaste(false);
-    toast.success(`Added ${parsed.length} recipient(s) to bulk invite list.`);
   };
 
   const getHeaders = () => {
@@ -769,26 +552,23 @@ export default function PeoplePage() {
     if (!token || !wsId) return;
     try {
       const activeHeaders = getHeaders();
-      const safeJson = async (p: Promise<Response>) => {
-        try {
-          const r = await p;
-          if (!r || !r.ok) return {};
-          return await r.json();
-        } catch {
-          return {};
-        }
-      };
-
-      const [rawMem, rawInv, rawDept, rawDesig, rawTeam, rawRole, rawPerms, rawMe] = await Promise.all([
-        safeJson(fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/people/invitations`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/designations`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/roles/permissions`, { headers: activeHeaders })),
-        safeJson(fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders })),
+      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, meRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/people/invitations`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/designations`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
       ]);
+
+      const rawMem = await memRes.json();
+      const rawInv = await invRes.json();
+      const rawDept = await deptRes.json();
+      const rawDesig = await desigRes.json();
+      const rawTeam = await teamRes.json();
+      const rawRole = await roleRes.json();
+      const rawMe = await meRes.json();
 
       const memData = rawMem.data !== undefined ? rawMem.data : rawMem;
       const invData = rawInv.data !== undefined ? rawInv.data : rawInv;
@@ -809,8 +589,6 @@ export default function PeoplePage() {
       setDesignations(Array.isArray(desigData) ? desigData : []);
       setTeams(Array.isArray(teamData) ? teamData : []);
       setRoles(Array.isArray(roleData) ? roleData : []);
-      const permData = rawPerms.data !== undefined ? rawPerms.data : rawPerms;
-      setAllPermissions(Array.isArray(permData) ? permData : []);
 
       const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
       if (meData) {
@@ -819,7 +597,6 @@ export default function PeoplePage() {
         if (meData.memberships) {
           const currentMem = meData.memberships.find((m: any) => m.workspaceId === wsId);
           if (currentMem) {
-            setCurrentMembership(currentMem);
             setCurrentUserRole(currentMem.accessRole);
             if (currentMem.id) setCurrentMemberId(currentMem.id);
             if (currentMem.userId) setCurrentUserId(currentMem.userId);
@@ -840,7 +617,6 @@ export default function PeoplePage() {
         if (matchingMem) {
           if (matchingMem.id) setCurrentMemberId(matchingMem.id);
           if (matchingMem.accessRole) setCurrentUserRole(matchingMem.accessRole);
-          setCurrentMembership((prev: any) => prev || matchingMem);
         }
       }
     } catch (err: any) {
@@ -913,143 +689,13 @@ export default function PeoplePage() {
     return () => window.removeEventListener('orvexa-navigate', handleNav);
   }, [members]);
 
-  const resolveCustomRoleForInvite = async (): Promise<string | undefined> => {
-    const normalizedSelected = Array.from(new Set(selectedPermCodes)).sort();
-    const policyName = (recommendedPolicyName || inviteForm.designationTitle || '').trim();
-
-    const exactMatch = roles.find((r: any) => {
-      if (r.isActive === false) return false;
-      const codes = (r.permissions || [])
-        .map((rp: any) => rp.permission?.code || rp.code)
-        .filter(Boolean)
-        .sort();
-      const samePerms = codes.length === normalizedSelected.length && codes.every((c: string, i: number) => c === normalizedSelected[i]);
-      if (!samePerms) return false;
-      if (!policyName) return true;
-      return r.name?.toLowerCase() === policyName.toLowerCase();
-    });
-
-    if (exactMatch) {
-      return exactMatch.id;
-    }
-
-    if (canManageRoles && (saveAsReusableRole || policyName) && allPermissions.length > 0 && normalizedSelected.length > 0) {
-      const codeToId = new Map(allPermissions.map((p: any) => [p.code, p.id]));
-      const permIds = normalizedSelected.map((c) => codeToId.get(c)).filter(Boolean) as string[];
-      if (permIds.length > 0) {
-        let candidateName = policyName || `${inviteForm.accessRole} Custom`;
-        const nameTaken = roles.some((r: any) => r.name?.toLowerCase() === candidateName.toLowerCase());
-        if (nameTaken) {
-          candidateName = `${candidateName} (${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })})`;
-          if (roles.some((r: any) => r.name?.toLowerCase() === candidateName.toLowerCase())) {
-            candidateName = `${candidateName} ${Math.floor(Math.random() * 90 + 10)}`;
-          }
-        }
-        try {
-          const createRes = await fetch(`${BRANDING.apiUrl}/roles`, {
-            method: 'POST',
-            headers: getHeaders(),
-            body: JSON.stringify({
-              name: candidateName,
-              description: `Role policy created during invite${inviteForm.designationTitle ? ` for ${inviteForm.designationTitle}` : ''}`,
-              permissionIds: permIds,
-            }),
-          });
-          if (createRes.ok) {
-            const rawCreated = await createRes.json();
-            const created = rawCreated.data !== undefined ? rawCreated.data : rawCreated;
-            if (created?.id) return created.id;
-          }
-        } catch {}
-      }
-    }
-
-    return inviteForm.roleId || undefined;
-  };
-
-  const resetInviteModalState = () => {
-    setShowInviteModal(false);
-    setMatchedTemplate(null);
-    setInviteMode('single');
-    setBulkRows([
-      { firstName: '', lastName: '', email: '' },
-      { firstName: '', lastName: '', email: '' },
-    ]);
-    setBulkPasteText('');
-    setShowBulkPaste(false);
-    setRecommendedPolicyName('');
-    setPermSearchQuery('');
-    setInviteForm({
-      email: '',
-      firstName: '',
-      lastName: '',
-      accessRole: 'MEMBER',
-      roleId: '',
-      departmentId: '',
-      teamId: '',
-      designationId: '',
-      designationTitle: '',
-      reportsToId: '',
-      dataScope: 'ASSIGNED',
-    });
-  };
-
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    setInvitingSubmitting(true);
     try {
-      const resolvedRoleId = await resolveCustomRoleForInvite();
-      const sharedPayload = {
-        accessRole: inviteForm.accessRole,
-        roleId: resolvedRoleId,
-        departmentId: inviteForm.departmentId || undefined,
-        teamId: inviteForm.teamId || undefined,
-        designationId: inviteForm.designationId || undefined,
-        designationTitle: inviteForm.designationTitle || undefined,
-        reportsToId: inviteForm.reportsToId || undefined,
-        dataScope: inviteForm.dataScope,
-        saveDesignationMapping,
-      };
-
-      if (inviteMode === 'bulk') {
-        const validMembers = bulkRows
-          .map((r) => ({
-            firstName: r.firstName.trim(),
-            lastName: r.lastName.trim(),
-            email: r.email.trim(),
-          }))
-          .filter((r) => r.email.includes('@'));
-
-        if (validMembers.length === 0) {
-          toast.error('Please enter at least one valid email address in Bulk Invite mode.');
-          return;
-        }
-
-        const res = await fetch(`${BRANDING.apiUrl}/people/invite/bulk`, {
-          method: 'POST',
-          headers: getHeaders(),
-          body: JSON.stringify({ members: validMembers, shared: sharedPayload }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.message || 'Bulk invitation failed');
-
-        const payload = data.data || data;
-        setBulkInviteResult(payload);
-        toast.success(payload.message || `Bulk invites sent: ${payload.sentCount}/${payload.totalRequested}`);
-        resetInviteModalState();
-        loadData();
-        return;
-      }
-
       const res = await fetch(`${BRANDING.apiUrl}/people/invite`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({
-          ...sharedPayload,
-          email: inviteForm.email,
-          firstName: inviteForm.firstName,
-          lastName: inviteForm.lastName,
-        }),
+        body: JSON.stringify(inviteForm),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Invitation failed');
@@ -1080,12 +726,24 @@ export default function PeoplePage() {
         toast.success('Invitation sent successfully!');
       }
 
-      resetInviteModalState();
+      setShowInviteModal(false);
+      setMatchedTemplate(null);
+      setInviteForm({
+        email: '',
+        firstName: '',
+        lastName: '',
+        accessRole: 'MEMBER',
+        roleId: '',
+        departmentId: '',
+        teamId: '',
+        designationId: '',
+        designationTitle: '',
+        reportsToId: '',
+        dataScope: 'ASSIGNED',
+      });
       loadData();
     } catch (err: any) {
       toast.error(err.message || 'Invitation failed');
-    } finally {
-      setInvitingSubmitting(false);
     }
   };
 
@@ -1244,7 +902,7 @@ export default function PeoplePage() {
       return;
     }
     setEditingMember(m);
-    if (!canEditOrgDetails && editModalTab === 'org') {
+    if (!isCurrentUserOwnerOrAdmin && editModalTab === 'org') {
       setEditModalTab('personal');
     }
     const extra = getMemberExtraData(m);
@@ -1301,8 +959,6 @@ export default function PeoplePage() {
     }
     setUpdatingMember(true);
 
-    const allowSensitiveWrite = isSelfMember(editingMember) || canViewSensitive;
-    const existingEc = editingMember?.emergencyContact || {};
     const extraData = {
       phone: editForm.phone.trim(),
       emergencyName: editForm.emergencyName.trim(),
@@ -1315,119 +971,121 @@ export default function PeoplePage() {
         district: editForm.district.trim(),
         statePostcode: editForm.statePostcode.trim(),
       },
-      bankDetails: allowSensitiveWrite
-        ? {
-            bankName: editForm.bankName.trim(),
-            branchName: editForm.branchName.trim(),
-            accountHolder: editForm.accountHolder.trim(),
-            accountNumber: editForm.accountNumber.trim(),
-            ifscCode: editForm.ifscCode.trim().toUpperCase(),
-          }
-        : existingEc.bankDetails || { redacted: true },
-      identityDocs: allowSensitiveWrite
-        ? {
-            aadhaarNumber: editForm.aadhaarNumber.trim(),
-            panNumber: editForm.panNumber.trim().toUpperCase(),
-            docApprovedId: editForm.docApprovedId,
-            docPanCard: editForm.docPanCard,
-            docPassportPhoto: editForm.docPassportPhoto,
-          }
-        : existingEc.identityDocs || { redacted: true },
+      bankDetails: {
+        bankName: editForm.bankName.trim(),
+        branchName: editForm.branchName.trim(),
+        accountHolder: editForm.accountHolder.trim(),
+        accountNumber: editForm.accountNumber.trim(),
+        ifscCode: editForm.ifscCode.trim().toUpperCase(),
+      },
+      identityDocs: {
+        aadhaarNumber: editForm.aadhaarNumber.trim(),
+        panNumber: editForm.panNumber.trim().toUpperCase(),
+        docApprovedId: editForm.docApprovedId,
+        docPanCard: editForm.docPanCard,
+        docPassportPhoto: editForm.docPassportPhoto,
+      },
     };
 
-    // 1. Cache locally only when sensitive fields are readable or for self
-    if (typeof window !== 'undefined' && allowSensitiveWrite) {
+    // 1. Immediately cache locally for offline/instant persistence
+    if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(`orvexa_member_extra_${editingMember.id}`, JSON.stringify(extraData));
       } catch {}
     }
 
     try {
-      // 2. Save org & role details via API (governed strictly by permissions)
-      if (canEditOrgDetails) {
-        const orgPayload: any = {
-          firstName: editForm.firstName.trim(),
-          lastName: editForm.lastName.trim(),
-          email: editForm.email.trim(),
-          departmentId: editForm.departmentId || null,
-          teamId: editForm.teamId || null,
-          designationId: editForm.designationId || null,
-          designationTitle: editForm.designationTitle || undefined,
-        };
-        if (canManageRoles) {
-          orgPayload.accessRole = editForm.accessRole;
-          orgPayload.roleId = editForm.roleId || undefined;
-          orgPayload.dataScope = editForm.dataScope;
-        }
-        const orgRes = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
-          method: 'PATCH',
-          headers: getHeaders(),
-          body: JSON.stringify(orgPayload),
-        }).catch(() => null);
-        if (orgRes && !orgRes.ok) {
-          const errJson = await orgRes.json().catch(() => ({}));
-          throw new Error(errJson.message || 'Failed to save organizational details');
-        }
-      }
-
-      // 3. Save profile & personal details via API (requires people:edit or self)
-      if (canEditOthers || isSelfMember(editingMember)) {
-        const profRes = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/profile`, {
+      // 2. Save org & role details via API (only authorized for Owner and HR/Admin)
+      if (isCurrentUserOwnerOrAdmin) {
+        await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
           method: 'PATCH',
           headers: getHeaders(),
           body: JSON.stringify({
             firstName: editForm.firstName.trim(),
             lastName: editForm.lastName.trim(),
             email: editForm.email.trim(),
-            phone: editForm.phone.trim(),
-            emergencyContact: extraData,
+            accessRole: editForm.accessRole,
+            roleId: editForm.roleId || undefined,
+            departmentId: editForm.departmentId || null,
+            teamId: editForm.teamId || null,
+            designationId: editForm.designationId || null,
+            designationTitle: editForm.designationTitle || undefined,
+            dataScope: editForm.dataScope,
           }),
         }).catch(() => null);
-        if (profRes && !profRes.ok) {
-          const errJson = await profRes.json().catch(() => ({}));
-          throw new Error(errJson.message || 'Failed to update employee profile');
-        }
       }
+
+      // 3. Save profile & personal details via API
+      await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/profile`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          firstName: editForm.firstName.trim(),
+          lastName: editForm.lastName.trim(),
+          email: editForm.email.trim(),
+          phone: editForm.phone.trim(),
+          emergencyContact: extraData,
+        }),
+      }).catch(() => null);
 
       toast.success(`Updated details for ${editForm.firstName || editingMember.user?.firstName || 'member'}`);
       setShowEditModal(false);
 
-      const applyLocalPatch = (prev: any) => ({
-        ...prev,
-        emergencyContact: extraData,
-        user: {
-          ...prev?.user,
-          firstName: editForm.firstName.trim() || prev?.user?.firstName,
-          lastName: editForm.lastName.trim() || prev?.user?.lastName,
-          email: editForm.email.trim() || prev?.user?.email,
-          phone: editForm.phone.trim() || prev?.user?.phone,
-        },
-        ...(canManageRoles
-          ? {
-              accessRole: editForm.accessRole,
-              roleId: editForm.roleId || prev?.roleId,
-              role: roles.find((r: any) => r.id === editForm.roleId) || prev?.role,
-              dataScope: editForm.dataScope,
-            }
-          : {}),
-        ...(canEditOrgDetails
-          ? {
-              designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || prev?.designation?.title || 'Unassigned' },
-              departmentId: editForm.departmentId || null,
-              department: editForm.departmentId ? (departments.find((d: any) => d.id === editForm.departmentId) || prev?.department) : null,
-              teamId: editForm.teamId || null,
-              team: editForm.teamId ? (teams.find((t: any) => t.id === editForm.teamId) || prev?.team) : null,
-            }
-          : {}),
-      });
-
       // 4. Update in local component state immediately
-      setMembers((prev) => prev.map((m) => (m.id === editingMember.id ? applyLocalPatch(m) : m)));
+      setMembers((prev) =>
+        prev.map((m) => {
+          if (m.id !== editingMember.id) return m;
+          return {
+            ...m,
+            emergencyContact: extraData,
+            user: {
+              ...m.user,
+              firstName: editForm.firstName.trim() || m.user?.firstName,
+              lastName: editForm.lastName.trim() || m.user?.lastName,
+              email: editForm.email.trim() || m.user?.email,
+              phone: editForm.phone.trim() || m.user?.phone,
+            },
+            accessRole: editForm.accessRole,
+            designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || m.designation?.title || 'Unassigned' },
+            department: departments.find((d: any) => d.id === editForm.departmentId) || m.department,
+            team: teams.find((t: any) => t.id === editForm.teamId) || m.team,
+          };
+        }),
+      );
+
       if (selectedMember && selectedMember.id === editingMember.id) {
-        setSelectedMember((prev: any) => applyLocalPatch(prev));
+        setSelectedMember((prev: any) => ({
+          ...prev,
+          emergencyContact: extraData,
+          user: {
+            ...prev?.user,
+            firstName: editForm.firstName.trim() || prev?.user?.firstName,
+            lastName: editForm.lastName.trim() || prev?.user?.lastName,
+            email: editForm.email.trim() || prev?.user?.email,
+            phone: editForm.phone.trim() || prev?.user?.phone,
+          },
+          accessRole: editForm.accessRole,
+          designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || prev?.designation?.title || 'Unassigned' },
+          department: departments.find((d: any) => d.id === editForm.departmentId) || prev?.department,
+          team: teams.find((t: any) => t.id === editForm.teamId) || prev?.team,
+        }));
       }
       if (viewingEmployee && viewingEmployee.id === editingMember.id) {
-        setViewingEmployee((prev: any) => applyLocalPatch(prev));
+        setViewingEmployee((prev: any) => ({
+          ...prev,
+          emergencyContact: extraData,
+          user: {
+            ...prev?.user,
+            firstName: editForm.firstName.trim() || prev?.user?.firstName,
+            lastName: editForm.lastName.trim() || prev?.user?.lastName,
+            email: editForm.email.trim() || prev?.user?.email,
+            phone: editForm.phone.trim() || prev?.user?.phone,
+          },
+          accessRole: editForm.accessRole,
+          designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || prev?.designation?.title || 'Unassigned' },
+          department: departments.find((d: any) => d.id === editForm.departmentId) || prev?.department,
+          team: teams.find((t: any) => t.id === editForm.teamId) || prev?.team,
+        }));
       }
 
       setEditingMember(null);
@@ -1461,7 +1119,7 @@ export default function PeoplePage() {
     const matchesDept = filterDept ? (m.departmentId === filterDept || m.department?.name === filterDept) : true;
     const matchesDesignation = filterDesignation ? (m.designationId === filterDesignation || m.designation?.title === filterDesignation) : true;
     const matchesTeam = filterTeam ? (m.teamId === filterTeam || m.team?.name === filterTeam) : true;
-    const matchesRole = filterRole ? (m.accessRole === filterRole || m.roleId === filterRole || m.role?.id === filterRole) : true;
+    const matchesRole = filterRole ? m.accessRole === filterRole : true;
 
     return matchesSearch && matchesDept && matchesDesignation && matchesTeam && matchesRole;
   }).sort((a, b) => {
@@ -1502,7 +1160,6 @@ export default function PeoplePage() {
                           : 'All standard profile fields completed.'}
                       </span>
                     </div>
-                    {canSendReminders && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -1522,7 +1179,6 @@ export default function PeoplePage() {
                     >
                       Send Incomplete Reminder
                     </Button>
-                    )}
                   </div>
                 );
               })()}
@@ -1647,11 +1303,6 @@ export default function PeoplePage() {
                           <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
                           <span>Owner banking and disbursement details are private and encrypted.</span>
                         </div>
-                      ) : bank.redacted ? (
-                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
-                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                          <span>Restricted — requires <code>people:view_sensitive</code> or <code>payroll:view</code> permission to view banking details.</span>
-                        </div>
                       ) : (
                         <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1735,11 +1386,6 @@ export default function PeoplePage() {
                           <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
                           <span>Personal statutory identity documents are restricted to root authority.</span>
                         </div>
-                      ) : idDocs.redacted ? (
-                        <div className="p-3 rounded-md bg-muted/40 border border-border/60 text-xs text-muted-foreground flex items-center gap-2">
-                          <Lock className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                          <span>Restricted — requires <code>people:view_sensitive</code> permission to inspect statutory identity proofs.</span>
-                        </div>
                       ) : (
                         <div className="grid grid-cols-2 gap-3">
                         <div>
@@ -1812,7 +1458,7 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
-                    {canEditOrgDetails && (member.accessRole !== 'OWNER' || isSelfMember(member)) && (
+                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1860,7 +1506,7 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
-                    {canManageRoles && (member.accessRole !== 'OWNER' || isSelfMember(member)) && (
+                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -2156,9 +1802,6 @@ export default function PeoplePage() {
                   <option value="ADMIN">Admin</option>
                   <option value="MANAGER">Manager</option>
                   <option value="MEMBER">Member</option>
-                  {roles.filter((r) => !r.isSystemRole && r.isActive !== false).map((r) => (
-                    <option key={r.id} value={r.id}>{r.name}</option>
-                  ))}
                 </select>
               )}
               <Button
@@ -2174,9 +1817,9 @@ export default function PeoplePage() {
                   Transfer Ownership
                 </Button>
               )}
-              {canInviteMembers && (
+              {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
                 <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
-                  <UserPlus className="h-4 w-4" /> Invite / Bulk Invite
+                  <UserPlus className="h-4 w-4" /> Invite Member
                 </Button>
               )}
             </div>
@@ -2312,19 +1955,9 @@ export default function PeoplePage() {
                               <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Workspace Owner
                             </span>
                           ) : (
-                            <div className="flex flex-col gap-0.5 items-start">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                                  {getDisplayRoleName(m)}
-                                </Badge>
-                                {m.role?.name && !m.role?.isSystemRole && (
-                                  <span className="text-[10px] font-mono text-muted-foreground">({m.accessRole})</span>
-                                )}
-                              </div>
-                              <span className="text-[10px] text-muted-foreground">
-                                Scope: {getEffectiveScope(m)}
-                              </span>
-                            </div>
+                            <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
+                              {m.accessRole}
+                            </Badge>
                           )}
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
@@ -2391,14 +2024,7 @@ export default function PeoplePage() {
                           <div className="text-xs text-muted-foreground">{inv.email}</div>
                         </td>
                         <td className="py-3 px-4">
-                          <div className="flex flex-col items-start gap-0.5">
-                            <Badge variant="secondary" className="text-[10px]">
-                              {roles.find((r) => r.id === inv.roleId)?.name || inv.accessRole}
-                            </Badge>
-                            {inv.dataScope && (
-                              <span className="text-[10px] text-muted-foreground">Scope: {inv.dataScope}</span>
-                            )}
-                          </div>
+                          <Badge variant="secondary" className="text-[10px]">{inv.accessRole}</Badge>
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {inv.invitedBy ? `${inv.invitedBy.firstName} ${inv.invitedBy.lastName}` : '-'}
@@ -2421,7 +2047,7 @@ export default function PeoplePage() {
                           {new Date(inv.expiresAt).toLocaleDateString()}
                         </td>
                         <td className="py-3 px-4 text-right space-x-1">
-                          {canInviteMembers && inv.status === 'PENDING' && (
+                          {inv.status === 'PENDING' && (
                             <>
                               <Button
                                 variant="outline"
@@ -2449,7 +2075,7 @@ export default function PeoplePage() {
                               </Button>
                             </>
                           )}
-                          {canInviteMembers && inv.status === 'EXPIRED' && (
+                          {inv.status === 'EXPIRED' && (
                             <>
                               <Button
                                 variant="outline"
@@ -2469,7 +2095,7 @@ export default function PeoplePage() {
                               </Button>
                             </>
                           )}
-                          {canInviteMembers && inv.status === 'REVOKED' && (
+                          {inv.status === 'REVOKED' && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -2603,165 +2229,54 @@ export default function PeoplePage() {
         </div>
       )}
 
-      {/* MODAL 1: Invite Member Modal (Smart Auto-Recommend + Permissions Checklist + Bulk Invite) */}
+      {/* MODAL 1: Invite Member Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-2xl bg-card border-border shadow-xl max-h-[92vh] flex flex-col overflow-hidden">
-            <CardHeader className="pb-3 border-b border-border shrink-0">
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                <div>
-                  <CardTitle className="text-lg">
-                    {inviteMode === 'bulk' ? 'Bulk Invite Members (Same Role & Permissions)' : 'Invite New Workspace Member'}
-                  </CardTitle>
-                  <CardDescription className="text-xs mt-0.5">
-                    Enter a designation for smart role &amp; permission recommendations, customize checkboxes if needed, or invite multiple members at once.
-                  </CardDescription>
-                </div>
-                <div className="inline-flex rounded-lg border border-border bg-muted/40 p-0.5 shrink-0 self-start">
-                  <button
-                    type="button"
-                    onClick={() => setInviteMode('single')}
-                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${inviteMode === 'single' ? 'bg-background text-primary shadow-2xs' : 'text-muted-foreground hover:text-foreground'}`}
-                  >
-                    Single Invite
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInviteMode('bulk')}
-                    className={`px-3 py-1 rounded-md text-xs font-semibold transition-all ${inviteMode === 'bulk' ? 'bg-background text-primary shadow-2xs' : 'text-muted-foreground hover:text-foreground'}`}
-                  >
-                    Bulk Invite
-                  </button>
-                </div>
-              </div>
+          <Card className="w-full max-w-lg bg-card border-border shadow-xl max-h-[90vh] overflow-y-auto">
+            <CardHeader>
+              <CardTitle className="text-lg">Invite New Workspace Member</CardTitle>
+              <CardDescription>
+                Assign organization role, department, designation, and initial permission scope.
+              </CardDescription>
             </CardHeader>
-            <form onSubmit={handleInvite} className="flex flex-col flex-1 overflow-hidden">
-              <CardContent className="space-y-4 text-xs overflow-y-auto flex-1 pt-4">
-                {inviteMode === 'single' ? (
-                  <>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="font-semibold text-foreground">First Name *</label>
-                        <input
-                          type="text"
-                          required
-                          value={inviteForm.firstName}
-                          onChange={(e) => setInviteForm({ ...inviteForm, firstName: e.target.value })}
-                          placeholder="Alex"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                        />
-                      </div>
-                      <div>
-                        <label className="font-semibold text-foreground">Last Name *</label>
-                        <input
-                          type="text"
-                          required
-                          value={inviteForm.lastName}
-                          onChange={(e) => setInviteForm({ ...inviteForm, lastName: e.target.value })}
-                          placeholder="Morgan"
-                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="font-semibold text-foreground">Work Email *</label>
-                      <input
-                        type="email"
-                        required
-                        value={inviteForm.email}
-                        onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
-                        placeholder="alex@company.com"
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <div className="space-y-2.5 rounded-lg border border-border bg-muted/20 p-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="font-semibold text-foreground block">Recipients List ({bulkRows.filter((r) => r.email.includes('@')).length} valid)</span>
-                        <span className="text-[11px] text-muted-foreground">All listed recipients will receive the same designation, role, data scope, and checked permissions below.</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setShowBulkPaste((v) => !v)}
-                          className="h-7 text-[11px] px-2.5"
-                        >
-                          {showBulkPaste ? 'Hide Paste Box' : 'Paste Emails / CSV'}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setBulkRows((prev) => [...prev, { firstName: '', lastName: '', email: '' }])}
-                          className="h-7 text-[11px] px-2.5"
-                        >
-                          + Add Row
-                        </Button>
-                      </div>
-                    </div>
-
-                    {showBulkPaste && (
-                      <div className="space-y-2 p-2.5 rounded-md border border-border bg-background">
-                        <textarea
-                          rows={3}
-                          value={bulkPasteText}
-                          onChange={(e) => setBulkPasteText(e.target.value)}
-                          placeholder={'Paste one per line:\nriya@company.com\nSam,Lee,sam@company.com\nAlex Morgan <alex@company.com>'}
-                          className="w-full rounded-md border border-input bg-background p-2 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
-                        />
-                        <div className="flex justify-end">
-                          <Button type="button" size="sm" onClick={handleParseBulkPaste} className="h-7 text-[11px]">
-                            Parse &amp; Add Rows
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-
-                    <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                      {bulkRows.map((row, idx) => (
-                        <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                          <input
-                            type="text"
-                            placeholder="First Name"
-                            value={row.firstName}
-                            onChange={(e) => setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, firstName: e.target.value } : r)))}
-                            className="col-span-3 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                          />
-                          <input
-                            type="text"
-                            placeholder="Last Name"
-                            value={row.lastName}
-                            onChange={(e) => setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, lastName: e.target.value } : r)))}
-                            className="col-span-3 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                          />
-                          <input
-                            type="email"
-                            placeholder="work@company.com *"
-                            value={row.email}
-                            onChange={(e) => setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, email: e.target.value } : r)))}
-                            className="col-span-5 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                          />
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            disabled={bulkRows.length <= 1}
-                            onClick={() => setBulkRows((prev) => prev.filter((_, i) => i !== idx))}
-                            className="col-span-1 h-7 px-1 text-muted-foreground hover:text-destructive"
-                            title="Remove row"
-                          >
-                            ✕
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
+            <form onSubmit={handleInvite}>
+              <CardContent className="space-y-4 text-xs">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-semibold text-foreground">First Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={inviteForm.firstName}
+                      onChange={(e) => setInviteForm({ ...inviteForm, firstName: e.target.value })}
+                      placeholder="Alex"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    />
                   </div>
-                )}
+                  <div>
+                    <label className="font-semibold text-foreground">Last Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={inviteForm.lastName}
+                      onChange={(e) => setInviteForm({ ...inviteForm, lastName: e.target.value })}
+                      placeholder="Morgan"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-semibold text-foreground">Work Email *</label>
+                  <input
+                    type="email"
+                    required
+                    value={inviteForm.email}
+                    onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                    placeholder="alex@company.com"
+                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                  />
+                </div>
 
                 {/* 3. Designation with Smart Auto-Mapping */}
                 <div>
@@ -2771,7 +2286,6 @@ export default function PeoplePage() {
                       <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.2 rounded font-medium">
                         Smart Auto-Mapping
                       </span>
-                      {loadingRecommend && <Loader2 className="h-3 w-3 animate-spin text-primary" />}
                     </label>
                   </div>
                   <input
@@ -2779,7 +2293,7 @@ export default function PeoplePage() {
                     list="designations-datalist"
                     value={inviteForm.designationTitle}
                     onChange={(e) => handleDesignationChange(e.target.value)}
-                    placeholder="e.g. Payroll Admin, Recruitment Admin, HR Generalist, Tech Lead, Marketing Lead..."
+                    placeholder="e.g. Software Engineer, QA Auditor, Operations Manager..."
                     className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                   />
                   <datalist id="designations-datalist">
@@ -2814,14 +2328,9 @@ export default function PeoplePage() {
                 {/* Smart Template Matched Summary Banner */}
                 {matchedTemplate && (
                   <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs space-y-1">
-                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center justify-between">
                       <span className="font-semibold text-primary flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5" />
-                        {matchedTemplate.source === 'SAVED_WORKSPACE_MAPPING'
-                          ? 'Auto-Configured from Saved Designation Policy'
-                          : matchedTemplate.source === 'EXISTING_CUSTOM_ROLE'
-                          ? 'Matched Existing Custom Role'
-                          : 'Auto-Configured from Template'}
+                        <Sparkles className="h-3.5 w-3.5" /> Auto-Configured from Template
                       </span>
                       <Badge variant="outline" className="text-[10px] font-medium border-primary/30 text-primary">
                         {matchedTemplate.label}
@@ -2830,12 +2339,10 @@ export default function PeoplePage() {
                     <p className="text-[11px] text-muted-foreground">
                       {matchedTemplate.description}
                     </p>
-                    <div className="flex items-center gap-2 pt-0.5 text-[10px] text-foreground font-medium flex-wrap">
+                    <div className="flex items-center gap-2 pt-0.5 text-[10px] text-foreground font-medium">
                       <span>Preset Role: <strong className="text-primary">{matchedTemplate.role}</strong></span>
                       <span>•</span>
                       <span>Preset Scope: <strong className="text-primary">{matchedTemplate.scope}</strong></span>
-                      <span>•</span>
-                      <span>Recommended Permissions: <strong className="text-primary">{selectedPermCodes.length} selected</strong></span>
                     </div>
                   </div>
                 )}
@@ -2850,9 +2357,9 @@ export default function PeoplePage() {
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     >
                       <option value="MEMBER">Member (Individual contributor)</option>
-                      <option value="MANAGER">Manager (Team / Dept Lead)</option>
-                      <option value="ADMIN">Admin (Specialized Admin Persona)</option>
-                      {isOwner && <option value="OWNER">Owner (Organization ownership)</option>}
+                      <option value="MANAGER">Manager (Team & operations management)</option>
+                      <option value="ADMIN">Admin (Organization administration)</option>
+                      <option value="OWNER">Owner (Organization ownership)</option>
                     </select>
                   </div>
                   <div>
@@ -2899,201 +2406,16 @@ export default function PeoplePage() {
                     <label className="font-semibold text-foreground">Data Access Scope *</label>
                     <select
                       value={inviteForm.dataScope}
-                      onChange={(e) => handleDataScopeChange(e.target.value)}
+                      onChange={(e) => setInviteForm({ ...inviteForm, dataScope: e.target.value })}
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     >
-                      <option value="ASSIGNED">Assigned / Own Records Only</option>
+                      <option value="ASSIGNED">Assigned Records Only</option>
+                      <option value="OWN">Own Records Only</option>
                       <option value="TEAM">Assigned Team Records</option>
                       <option value="DEPARTMENT">Assigned Department Records</option>
                       <option value="WORKSPACE">Entire Workspace Records</option>
                     </select>
                   </div>
-                </div>
-
-                {/* 6. Auto-Recommended Role Policy & Interactive Check/Uncheck Permissions Matrix */}
-                <div className="rounded-lg border border-border bg-surface-secondary/30 p-3 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <div className="flex items-center gap-2">
-                      <Shield className="h-3.5 w-3.5 text-primary" />
-                      <span className="font-semibold text-foreground">Recommended Role Policy &amp; Permissions</span>
-                      <Badge variant="outline" className="text-[10px] font-mono">
-                        {selectedPermCodes.length} checked
-                      </Badge>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {recommendedPermCodes.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedPermCodes(recommendedPermCodes);
-                            const scopeCode = recommendedPermCodes.find((c) => c.startsWith('scope:'));
-                            if (scopeCode) {
-                              setInviteForm((prev) => ({ ...prev, dataScope: scopeValueFromCode(scopeCode) }));
-                            }
-                          }}
-                          className="text-[10px] text-primary hover:underline font-medium"
-                        >
-                          Reset to Recommended
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setShowPermChecklist((v) => !v)}
-                        className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-0.5"
-                      >
-                        {showPermChecklist ? 'Hide Checklist' : 'Check / Uncheck Permissions'}
-                        <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showPermChecklist ? 'rotate-180' : ''}`} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground block">Role Policy Name (Custom Role)</label>
-                      <input
-                        type="text"
-                        value={recommendedPolicyName}
-                        onChange={(e) => setRecommendedPolicyName(e.target.value)}
-                        placeholder="e.g. Payroll Admin, Recruitment Admin, Tech Lead"
-                        className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] font-medium text-muted-foreground block">Or Reuse Existing Role</label>
-                      <select
-                        value={inviteForm.roleId}
-                        onChange={(e) => {
-                          const rId = e.target.value;
-                          const matched = roles.find((r) => r.id === rId);
-                          setInviteForm((prev) => ({ ...prev, roleId: rId }));
-                          if (matched) {
-                            setRecommendedPolicyName(matched.name);
-                            const codes = (matched.permissions || []).map((rp: any) => rp.permission?.code || rp.code).filter(Boolean);
-                            if (codes.length > 0) {
-                              setSelectedPermCodes(codes);
-                              const sc = codes.find((c: string) => c.startsWith('scope:'));
-                              if (sc) setInviteForm((prev) => ({ ...prev, dataScope: scopeValueFromCode(sc) }));
-                            }
-                          }
-                        }}
-                        className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                      >
-                        <option value="">Auto-resolve / Create from Checklist</option>
-                        {roles.filter((r) => r.isActive !== false).map((r) => (
-                          <option key={r.id} value={r.id}>
-                            {r.name} {r.isSystemRole ? '(System)' : '(Custom)'}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  {showPermChecklist && (
-                    <div className="space-y-2 pt-1">
-                      <input
-                        type="text"
-                        value={permSearchQuery}
-                        onChange={(e) => setPermSearchQuery(e.target.value)}
-                        placeholder="Search permissions (e.g. payroll, people:edit, invitations, scope:team, leave:approve)..."
-                        className="w-full rounded-md border border-input bg-background px-2.5 py-1 text-[11px] focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
-                      <div className="max-h-52 overflow-y-auto space-y-2.5 pr-1">
-                        {(() => {
-                          const effectiveCatalog = allPermissions.length > 0
-                            ? allPermissions
-                            : Array.from(new Set([...selectedPermCodes, 'scope:own', 'scope:team', 'scope:department', 'scope:workspace'])).map((c) => ({
-                                code: c,
-                                name: c,
-                                module: (c.split(':')[0] || 'general').toUpperCase(),
-                              }));
-                          const q = permSearchQuery.trim().toLowerCase();
-                          const grouped = effectiveCatalog.reduce((acc: Record<string, any[]>, p: any) => {
-                            if (q && !p.code.toLowerCase().includes(q) && !p.name.toLowerCase().includes(q) && !p.module.toLowerCase().includes(q)) {
-                              return acc;
-                            }
-                            if (!acc[p.module]) acc[p.module] = [];
-                            acc[p.module].push(p);
-                            return acc;
-                          }, {});
-                          const modEntries = Object.entries(grouped);
-                          if (modEntries.length === 0) {
-                            return <div className="text-[11px] text-muted-foreground py-2 text-center">No matching permissions found.</div>;
-                          }
-                          return modEntries.map(([modName, modPerms]) => {
-                            const isScopeMod = modName.toLowerCase() === 'scope';
-                            const allModChecked = !isScopeMod && modPerms.every((p) => selectedPermCodes.includes(p.code));
-                            return (
-                              <div key={modName} className="rounded-md border border-border/70 bg-background p-2 space-y-1.5">
-                                <div className="flex items-center justify-between border-b border-border/50 pb-1">
-                                  <span className="text-[11px] font-bold uppercase tracking-wider text-foreground">
-                                    {modName} {isScopeMod ? '(Data Visibility Tier)' : ''}
-                                  </span>
-                                  {!isScopeMod && (
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleModuleAllPermissions(modPerms)}
-                                      className="text-[10px] font-semibold text-primary hover:underline"
-                                    >
-                                      {allModChecked ? 'Uncheck All' : 'Select All'}
-                                    </button>
-                                  )}
-                                </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                                  {modPerms.map((p: any) => {
-                                    const checked = selectedPermCodes.includes(p.code);
-                                    return (
-                                      <label
-                                        key={p.code}
-                                        className={`flex items-start gap-2 p-1 rounded cursor-pointer text-[11px] transition-colors ${
-                                          checked ? 'bg-primary/5 text-foreground' : 'text-muted-foreground hover:bg-muted/40'
-                                        }`}
-                                      >
-                                        <input
-                                          type="checkbox"
-                                          checked={checked}
-                                          onChange={() => togglePermissionCode(p.code)}
-                                          className="mt-0.5 rounded border-border text-primary focus:ring-primary h-3.5 w-3.5 shrink-0"
-                                        />
-                                        <span className="leading-tight">
-                                          <span className="font-medium block">{p.name}</span>
-                                          <span className="text-[9px] font-mono text-muted-foreground">{p.code}</span>
-                                        </span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            );
-                          });
-                        })()}
-                      </div>
-                    </div>
-                  )}
-
-                  {canManageRoles && (
-                    <div className="flex flex-wrap items-center gap-4 pt-1 border-t border-border/50 text-[11px]">
-                      <label className="flex items-center gap-1.5 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={saveAsReusableRole}
-                          onChange={(e) => setSaveAsReusableRole(e.target.checked)}
-                          className="rounded border-border text-primary h-3.5 w-3.5"
-                        />
-                        <span>Save customized permissions as reusable role</span>
-                      </label>
-                      {inviteForm.designationTitle.trim() && (
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={saveDesignationMapping}
-                            onChange={(e) => setSaveDesignationMapping(e.target.checked)}
-                            className="rounded border-border text-primary h-3.5 w-3.5"
-                          />
-                          <span>Remember mapping for &quot;{inviteForm.designationTitle.trim()}&quot;</span>
-                        </label>
-                      )}
-                    </div>
-                  )}
                 </div>
 
                 {/* Dynamic Data Scope Explainer Card */}
@@ -3102,48 +2424,46 @@ export default function PeoplePage() {
                     <Info className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
                     <div className="space-y-0.5 text-[11px]">
                       <div className="font-semibold text-foreground">
-                        {inviteForm.dataScope === 'ASSIGNED' && 'Assigned / Own Records Scope'}
+                        {inviteForm.dataScope === 'ASSIGNED' && 'Assigned Records Scope'}
                         {inviteForm.dataScope === 'OWN' && 'Own Records Scope'}
                         {inviteForm.dataScope === 'TEAM' && 'Team Records Scope'}
                         {inviteForm.dataScope === 'DEPARTMENT' && 'Department Records Scope'}
                         {inviteForm.dataScope === 'WORKSPACE' && 'Entire Workspace Scope'}
                       </div>
                       <p className="text-muted-foreground leading-relaxed">
-                        {(inviteForm.dataScope === 'ASSIGNED' || inviteForm.dataScope === 'OWN') &&
-                          'Restricted strictly to tasks, attendance, and items assigned to or created by this member.'}
+                        {inviteForm.dataScope === 'ASSIGNED' &&
+                          'Can only view, update, and log work on tasks and items specifically assigned to them. All other workspace and colleague records are hidden.'}
+                        {inviteForm.dataScope === 'OWN' &&
+                          'Can manage records they personally created (e.g. their own shift logs, leave applications, expense claims, and created tasks).'}
                         {inviteForm.dataScope === 'TEAM' &&
-                          'Isolated strictly to their own Team and direct reports. Cannot view other teams or departments.'}
+                          'Full collaboration across their squad. Can see, edit, and track all work items, sprint tickets, and team availability.'}
                         {inviteForm.dataScope === 'DEPARTMENT' &&
-                          'Department-wide oversight across all teams within their assigned Department only.'}
+                          'Departmental leadership oversight. Can view all squads in this department, reassign tasks, approve leaves, and review metrics.'}
                         {inviteForm.dataScope === 'WORKSPACE' &&
-                          'Organization-wide visibility across departments and teams (actions remain governed strictly by checked permissions above).'}
+                          'Global organization-wide visibility across all projects, departments, teams, and member activities.'}
                       </p>
                     </div>
                   </div>
                 </div>
               </CardContent>
-              <div className="flex items-center justify-end gap-2 p-4 border-t border-border shrink-0 bg-card">
+              <div className="flex items-center justify-end gap-2 p-4 border-t border-border mt-4">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={resetInviteModalState}
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setMatchedTemplate(null);
+                  }}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" size="sm" disabled={invitingSubmitting}>
-                  {invitingSubmitting
-                    ? 'Sending...'
-                    : inviteMode === 'bulk'
-                    ? `Send ${bulkRows.filter((r) => r.email.includes('@')).length || 0} Bulk Invites`
-                    : 'Send Invitation'}
-                </Button>
+                <Button type="submit" size="sm">Send Invitation</Button>
               </div>
             </form>
           </Card>
         </div>
       )}
-
 
       {/* MODAL 2: Member Profile (6 Sections) */}
       {/* MODAL 3: Offboarding Workflow Modal */}
@@ -3345,7 +2665,7 @@ export default function PeoplePage() {
                   }`}
                 >
                   <Briefcase className="h-4 w-4" /> Org & Role
-                  {!canEditOrgDetails && (
+                  {!isCurrentUserOwnerOrAdmin && (
                     <Badge variant="outline" className="text-[9px] py-0 px-1 border-muted-foreground/30 text-muted-foreground">View-Only</Badge>
                   )}
                 </button>
@@ -3385,16 +2705,16 @@ export default function PeoplePage() {
                         <input
                           type="email"
                           required
-                          disabled={!canEditOthers}
+                          disabled={!isCurrentUserOwnerOrAdmin}
                           value={editForm.email}
                           onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                           placeholder="email@company.com"
                           className={`w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all ${
-                            !canEditOthers ? 'opacity-70 bg-muted/30 cursor-not-allowed' : ''
+                            !isCurrentUserOwnerOrAdmin ? 'opacity-70 bg-muted/30 cursor-not-allowed' : ''
                           }`}
                         />
-                        {!canEditOthers && (
-                          <span className="text-[11px] text-muted-foreground block">Work email requires people:edit permission.</span>
+                        {!isCurrentUserOwnerOrAdmin && (
+                          <span className="text-[11px] text-muted-foreground block">Work email can only be changed by HR / Admin.</span>
                         )}
                       </div>
                       <div className="space-y-1.5">
@@ -3510,13 +2830,6 @@ export default function PeoplePage() {
                 {/* TAB 2: Bank Account Details */}
                 {editModalTab === 'banking' && (
                   <div className="space-y-4">
-                    {!(isSelfMember(editingMember) || canViewSensitive) ? (
-                      <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 dark:text-amber-400 text-xs sm:text-sm flex items-center gap-2.5">
-                        <Lock className="h-5 w-5 shrink-0" />
-                        <span>Restricted PII: Viewing or editing another employee&apos;s banking details requires <code className="font-mono">people:view_sensitive</code> or <code className="font-mono">payroll:view</code> permission. Existing bank details will be preserved untouched.</span>
-                      </div>
-                    ) : (
-                      <>
                     <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-emerald-700 dark:text-emerald-400 text-xs sm:text-sm flex items-center gap-2.5">
                       <Landmark className="h-5 w-5 shrink-0" />
                       <span>Direct salary disbursement bank account. Information is encrypted and confidential.</span>
@@ -3600,21 +2913,12 @@ export default function PeoplePage() {
                         </div>
                       </div>
                     </div>
-                      </>
-                    )}
                   </div>
                 )}
 
                 {/* TAB 3: Identity Details (Aadhaar & PAN) */}
                 {editModalTab === 'identity' && (
                   <div className="space-y-4">
-                    {!(isSelfMember(editingMember) || canViewSensitive) ? (
-                      <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 dark:text-amber-400 text-xs sm:text-sm flex items-center gap-2.5">
-                        <Lock className="h-5 w-5 shrink-0" />
-                        <span>Restricted PII: Viewing or editing statutory Aadhaar / PAN records requires <code className="font-mono">people:view_sensitive</code> or <code className="font-mono">payroll:view</code> permission. Existing records will be preserved untouched.</span>
-                      </div>
-                    ) : (
-                      <>
                     <div className="p-3.5 bg-primary/10 border border-primary/20 rounded-xl text-primary text-xs sm:text-sm flex items-center gap-2.5">
                       <ShieldCheck className="h-5 w-5 shrink-0" />
                       <span>Statutory compliance identity documents for payroll, tax deduction, and regulatory verification.</span>
@@ -3659,30 +2963,30 @@ export default function PeoplePage() {
                     <div className="p-4 rounded-xl border border-border bg-muted/20 space-y-3">
                       <label className="font-semibold text-foreground text-xs sm:text-sm block">Statutory Document Verification Status</label>
                       <div className="space-y-2.5">
-                        <label className={`flex items-center gap-3 ${!canVerifyDocs ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!canVerifyDocs}
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docApprovedId}
                             onChange={(e) => setEditForm({ ...editForm, docApprovedId: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
                           <span className="text-foreground text-xs sm:text-sm">Government Approved ID Proof (Aadhaar / Passport) Submitted & Verified</span>
                         </label>
-                        <label className={`flex items-center gap-3 ${!canVerifyDocs ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!canVerifyDocs}
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docPanCard}
                             onChange={(e) => setEditForm({ ...editForm, docPanCard: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
                           <span className="text-foreground text-xs sm:text-sm">PAN Card Verified with Income Tax Department</span>
                         </label>
-                        <label className={`flex items-center gap-3 ${!canVerifyDocs ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!canVerifyDocs}
+                            disabled={!isCurrentUserOwnerOrAdmin}
                             checked={editForm.docPassportPhoto}
                             onChange={(e) => setEditForm({ ...editForm, docPassportPhoto: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
@@ -3690,21 +2994,19 @@ export default function PeoplePage() {
                           <span className="text-foreground text-xs sm:text-sm">Official Passport-size Color Photograph Attached</span>
                         </label>
                       </div>
-                      {!canVerifyDocs && (
+                      {!isCurrentUserOwnerOrAdmin && (
                         <span className="text-[11px] text-muted-foreground block pt-1">
-                          Document verification requires onboarding:manage or people:edit permission.
+                          Document verification status is managed and validated by HR (Admin).
                         </span>
                       )}
                     </div>
-                      </>
-                    )}
                   </div>
                 )}
 
                 {/* TAB 4: Organization & Role Placement */}
                 {editModalTab === 'org' && (
                   <div className="space-y-4">
-                    {!canEditOrgDetails ? (
+                    {!isCurrentUserOwnerOrAdmin ? (
                       <div className="space-y-4">
                         <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 dark:text-amber-400 text-xs sm:text-sm flex items-center gap-2.5">
                           <Shield className="h-5 w-5 shrink-0" />
@@ -3749,7 +3051,6 @@ export default function PeoplePage() {
                           </div>
                           <select
                             value={editForm.accessRole}
-                            disabled={!canManageRoles}
                             onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
                             className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           >
@@ -3765,7 +3066,6 @@ export default function PeoplePage() {
                             <label className="font-semibold text-foreground text-xs sm:text-sm">Custom Role Policy</label>
                             <select
                               value={editForm.roleId}
-                              disabled={!canManageRoles}
                               onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
                               className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                             >
@@ -3859,7 +3159,6 @@ export default function PeoplePage() {
                           <label className="font-semibold text-foreground text-xs sm:text-sm">Data Access Scope</label>
                           <select
                             value={editForm.dataScope}
-                            disabled={!canManageRoles}
                             onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
                             className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           >
@@ -3984,64 +3283,6 @@ export default function PeoplePage() {
             </CardContent>
             <div className="flex items-center justify-end p-4 border-t border-border">
               <Button size="sm" onClick={() => setCreatedInviteInfo(null)}>
-                Done
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* MODAL 6: Bulk Invitation Summary Modal */}
-      {bulkInviteResult && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-xl bg-card border-border shadow-2xl max-h-[85vh] flex flex-col">
-            <CardHeader className="pb-3 border-b border-border">
-              <CardTitle className="text-base flex items-center gap-2">
-                <span>📬</span> Bulk Invitation Summary
-              </CardTitle>
-              <CardDescription className="text-xs">
-                {bulkInviteResult.message}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="pt-4 space-y-3 text-xs overflow-y-auto flex-1">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="p-2.5 rounded-lg border border-border bg-muted/30">
-                  <span className="text-muted-foreground block text-[10px]">Requested</span>
-                  <span className="text-base font-bold">{bulkInviteResult.totalRequested}</span>
-                </div>
-                <div className="p-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/10">
-                  <span className="text-emerald-700 dark:text-emerald-400 block text-[10px]">Sent</span>
-                  <span className="text-base font-bold text-emerald-700 dark:text-emerald-400">{bulkInviteResult.sentCount}</span>
-                </div>
-                <div className="p-2.5 rounded-lg border border-destructive/20 bg-destructive/10">
-                  <span className="text-destructive block text-[10px]">Failed</span>
-                  <span className="text-base font-bold text-destructive">{bulkInviteResult.failedCount}</span>
-                </div>
-              </div>
-
-              <div className="divide-y divide-border rounded-lg border border-border">
-                {bulkInviteResult.results.map((r, i) => (
-                  <div key={i} className="p-2.5 flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-foreground truncate">{r.firstName} {r.lastName} ({r.email})</div>
-                      {r.error && <div className="text-[11px] text-destructive">{r.error}</div>}
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Badge variant={r.status === 'SENT' ? 'success' : 'destructive'} className="text-[10px]">
-                        {r.status}
-                      </Badge>
-                      {r.inviteLink && (
-                        <Button size="sm" variant="outline" className="h-7 text-[11px] px-2 gap-1" onClick={() => copyInviteLink(r.inviteLink!)}>
-                          <Copy className="h-3 w-3" /> Copy Link
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </CardContent>
-            <div className="flex items-center justify-end p-4 border-t border-border">
-              <Button size="sm" onClick={() => setBulkInviteResult(null)}>
                 Done
               </Button>
             </div>

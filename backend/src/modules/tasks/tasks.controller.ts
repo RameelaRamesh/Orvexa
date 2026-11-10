@@ -28,7 +28,6 @@ export class TasksController {
   // ---------------------------------------------------------------------------
 
   @Get()
-  @RequirePermissions('tasks:view')
   async list(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -96,13 +95,11 @@ export class TasksController {
   }
 
   @Get(':id')
-  @RequirePermissions('tasks:view')
   async getById(
     @CurrentWorkspace() workspaceId: string,
-    @Request() req: any,
     @Param('id') id: string,
   ) {
-    return this.tasksService.getById(workspaceId, id, req.userContext);
+    return this.tasksService.getById(workspaceId, id);
   }
 
   // ---------------------------------------------------------------------------
@@ -110,7 +107,6 @@ export class TasksController {
   // ---------------------------------------------------------------------------
 
   @Post()
-  @RequirePermissions('tasks:create')
   async create(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -142,7 +138,6 @@ export class TasksController {
   }
 
   @Patch(':id')
-  @RequirePermissions('tasks:edit')
   async update(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -163,7 +158,7 @@ export class TasksController {
       customFields?: Record<string, any>;
     },
   ) {
-    return this.tasksService.update(id, workspaceId, body, req.membershipId, req.userContext);
+    return this.tasksService.update(id, workspaceId, body, req.membershipId);
   }
 
   // ---------------------------------------------------------------------------
@@ -171,7 +166,6 @@ export class TasksController {
   // ---------------------------------------------------------------------------
 
   @Post(':id/reassign')
-  @RequirePermissions('tasks:assign')
   async reassign(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -179,7 +173,7 @@ export class TasksController {
     @Body('assigneeMembershipId') newAssigneeMembershipId: string,
     @Body('reason') reason?: string,
   ) {
-    return this.tasksService.reassign(id, workspaceId, newAssigneeMembershipId, req.membershipId, reason, req.userContext);
+    return this.tasksService.reassign(id, workspaceId, newAssigneeMembershipId, req.membershipId, reason);
   }
 
   @Post(':id/review')
@@ -210,7 +204,7 @@ export class TasksController {
     @Param('id') id: string,
     @Body('actualHours') actualHours?: number,
   ) {
-    return this.tasksService.complete(id, workspaceId, req.membershipId, actualHours, req.userContext);
+    return this.tasksService.complete(id, workspaceId, req.membershipId, actualHours);
   }
 
   @Post(':id/reopen')

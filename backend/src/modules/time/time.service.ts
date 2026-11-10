@@ -6,11 +6,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ApprovalStatus, AttendanceStatus } from '@prisma/client';
-import {
-  isTargetWithinScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
 
 export interface AttendancePolicy {
   allowMultipleSessionsPerDay: boolean;
@@ -589,17 +584,31 @@ export class TimeService {
       where.membershipId = query.membershipId;
     }
 
-    // 2. Strict Permission & Data Scope Enforcement (no hardcoded ADMIN bypass)
-    const effectiveScope = userContext ? resolveEffectiveScope(userContext) : 'GLOBAL';
-    const ledTeamIds = userContext?.membershipId
-      ? await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId)
-      : [];
-
-    if (userContext && effectiveScope === 'ASSIGNED' && userContext.membershipId) {
-      where.membershipId = userContext.membershipId;
-    }
-
-    if (effectiveScope === 'GLOBAL') {
+    // 2. Multi-tier Data Scope Policy Enforcement
+    if (
+      userContext &&
+      userContext.accessRole !== 'OWNER' &&
+      userContext.accessRole !== 'ADMIN'
+    ) {
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if (scope === 'ASSIGNED' || scope === 'OWN') {
+        where.membershipId = userContext.membershipId;
+      } else if (scope === 'DEPARTMENT') {
+        where.membership = {
+          departmentId: userContext.departmentId || 'unassigned',
+        };
+      } else if (scope === 'TEAM') {
+        // Manager / Team Lead Access: self, team members, or direct reports
+        where.membership = {
+          OR: [
+            { id: userContext.membershipId },
+            ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
+            { reportsToId: userContext.membershipId },
+          ],
+        };
+      }
+    } else {
+      // Admin / Owner filters
       if (query?.departmentId) {
         where.membership = { ...where.membership, departmentId: query.departmentId };
       }
@@ -620,7 +629,7 @@ export class TimeService {
       }
     }
 
-    let records = await this.prisma.attendance.findMany({
+    const records = await this.prisma.attendance.findMany({
       where,
       include: {
         membership: {
@@ -635,23 +644,6 @@ export class TimeService {
       },
       orderBy: { clockIn: 'desc' },
     });
-
-    if (userContext && effectiveScope !== 'GLOBAL') {
-      records = records.filter((r: any) => {
-        if (r.membershipId === userContext.membershipId) return true;
-        const targetMem = r.membership || { id: r.membershipId };
-        if (!isTargetWithinScope(userContext, targetMem, ledTeamIds)) return false;
-        if (query?.departmentId && targetMem.departmentId !== query.departmentId) return false;
-        if (query?.teamId && targetMem.teamId !== query.teamId) return false;
-        if (query?.search) {
-          const q = query.search.toLowerCase();
-          const fullName = `${targetMem.user?.firstName || ''} ${targetMem.user?.lastName || ''}`.toLowerCase();
-          const email = (targetMem.user?.email || '').toLowerCase();
-          if (!fullName.includes(q) && !email.includes(q)) return false;
-        }
-        return true;
-      });
-    }
 
     // Asynchronously heal any legacy records where full day (>= 420 mins) was miscategorized as HALF_DAY
     this.prisma.attendance
@@ -843,7 +835,7 @@ export class TimeService {
     return newCorrection;
   }
 
-  async listCorrections(workspaceId: string, query?: { status?: string; membershipId?: string }, userContext?: any) {
+  async listCorrections(workspaceId: string, query?: { status?: string; membershipId?: string }) {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
       select: { settings: true },
@@ -858,19 +850,6 @@ export class TimeService {
       corrections = corrections.filter((c) => c.membershipId === query.membershipId);
     }
 
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const [members, ledTeamIds] = await Promise.all([
-        this.prisma.membership.findMany({ where: { workspaceId }, select: { id: true, departmentId: true, teamId: true, reportsToId: true } }),
-        resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId),
-      ]);
-      const memMap = new Map((members || []).map((m: any) => [m.id, m]));
-      corrections = corrections.filter((c) => {
-        if (c.membershipId === userContext.membershipId) return true;
-        const target = memMap.get(c.membershipId);
-        return target ? isTargetWithinScope(userContext, target, ledTeamIds) : false;
-      });
-    }
-
     return corrections;
   }
 
@@ -879,7 +858,6 @@ export class TimeService {
     correctionId: string,
     approverMembershipId: string,
     reviewNotes?: string,
-    userContext?: any,
   ) {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -894,13 +872,6 @@ export class TimeService {
     }
 
     const correction = corrections[targetIndex];
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const targetMem = await this.prisma.membership.findFirst({ where: { id: correction.membershipId, workspaceId } });
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!targetMem || !isTargetWithinScope(userContext, targetMem, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Cannot approve attendance corrections outside your visibility scope');
-      }
-    }
     if (correction.status !== 'PENDING') {
       throw new BadRequestException(`Correction is already ${correction.status.toLowerCase()}`);
     }
@@ -1002,7 +973,6 @@ export class TimeService {
     correctionId: string,
     approverMembershipId: string,
     rejectionReason: string,
-    userContext?: any,
   ) {
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -1017,13 +987,6 @@ export class TimeService {
     }
 
     const correction = corrections[targetIndex];
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const targetMem = await this.prisma.membership.findFirst({ where: { id: correction.membershipId, workspaceId } });
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!targetMem || !isTargetWithinScope(userContext, targetMem, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Cannot reject attendance corrections outside your visibility scope');
-      }
-    }
     if (correction.status !== 'PENDING') {
       throw new BadRequestException(`Correction is already ${correction.status.toLowerCase()}`);
     }
@@ -1262,11 +1225,11 @@ export class TimeService {
   // TIMESHEETS, OVERTIME & HOLIDAYS (PRESERVED APIS)
   // ---------------------------------------------------------------------------
 
-  async listTimesheets(workspaceId: string, membershipId?: string, userContext?: any) {
+  async listTimesheets(workspaceId: string, membershipId?: string) {
     const where: any = { workspaceId };
     if (membershipId) where.membershipId = membershipId;
 
-    const items = await this.prisma.timesheet.findMany({
+    return this.prisma.timesheet.findMany({
       where,
       include: {
         membership: {
@@ -1277,13 +1240,6 @@ export class TimeService {
         },
       },
       orderBy: { createdAt: 'desc' },
-    });
-
-    if (!userContext || resolveEffectiveScope(userContext) === 'GLOBAL') return items;
-    const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-    return items.filter((ts: any) => {
-      if (ts.membershipId === userContext.membershipId) return true;
-      return ts.membership ? isTargetWithinScope(userContext, ts.membership, ledTeamIds) : false;
     });
   }
 
@@ -1310,21 +1266,12 @@ export class TimeService {
     id: string,
     approverMembershipId: string,
     status: ApprovalStatus,
-    userContext?: any,
   ) {
     const existing = await this.prisma.timesheet.findFirst({
       where: { id, workspaceId },
-      include: { membership: true },
     });
     if (!existing) {
       throw new NotFoundException('Timesheet record not found in this workspace');
-    }
-
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!isTargetWithinScope(userContext, existing.membership || { id: existing.membershipId }, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Cannot approve timesheets outside your visibility scope');
-      }
     }
 
     return this.prisma.timesheet.update({
@@ -1333,11 +1280,11 @@ export class TimeService {
     });
   }
 
-  async listOvertime(workspaceId: string, membershipId?: string, userContext?: any) {
+  async listOvertime(workspaceId: string, membershipId?: string) {
     const where: any = { workspaceId };
     if (membershipId) where.membershipId = membershipId;
 
-    const items = await this.prisma.overtimeRequest.findMany({
+    return this.prisma.overtimeRequest.findMany({
       where,
       include: {
         membership: {
@@ -1347,13 +1294,6 @@ export class TimeService {
         },
       },
       orderBy: { createdAt: 'desc' },
-    });
-
-    if (!userContext || resolveEffectiveScope(userContext) === 'GLOBAL') return items;
-    const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-    return items.filter((ot: any) => {
-      if (ot.membershipId === userContext.membershipId) return true;
-      return ot.membership ? isTargetWithinScope(userContext, ot.membership, ledTeamIds) : false;
     });
   }
 
@@ -1379,21 +1319,12 @@ export class TimeService {
     id: string,
     approverMembershipId: string,
     status: ApprovalStatus,
-    userContext?: any,
   ) {
     const existing = await this.prisma.overtimeRequest.findFirst({
       where: { id, workspaceId },
-      include: { membership: true },
     });
     if (!existing) {
       throw new NotFoundException('Overtime record not found in this workspace');
-    }
-
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!isTargetWithinScope(userContext, existing.membership || { id: existing.membershipId }, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Cannot review overtime requests outside your visibility scope');
-      }
     }
 
     return this.prisma.overtimeRequest.update({

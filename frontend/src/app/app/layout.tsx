@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
-import { checkPermission, getDisplayRoleName } from '@/lib/permissions';
+import { checkPermission } from '@/lib/permissions';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -554,19 +554,19 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Analytics & Reports',
       href: '/app/analytics',
       icon: BarChart3,
-      visible: isPlatformAdmin || hasPerm('reports:view'),
+      visible: true,
     },
     {
       name: 'Projects & Tasks',
       href: '/app/projects',
       icon: CheckSquare,
-      visible: isPlatformAdmin || hasPerm('projects:view') || hasPerm('tasks:view'),
+      visible: true,
     },
     {
       name: 'People Directory',
       href: '/app/people',
       icon: Users,
-      visible: (hasPerm('people:view') || hasPerm('invitations:manage') || hasPerm('onboarding:manage')) && enabledModules.includes('people'),
+      visible: hasPerm('people:view') && enabledModules.includes('people'),
     },
     {
       name: 'Time & Attendance',
@@ -606,7 +606,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Workspace Settings',
       href: '/app/settings',
       icon: Settings,
-      visible: isPlatformAdmin || hasPerm('settings:manage') || hasPerm('roles:manage') || hasPerm('org:manage') || hasPerm('departments:manage') || hasPerm('billing:manage'),
+      visible: isPlatformAdmin || hasPerm('settings:manage') || hasPerm('roles:manage') || hasPerm('org:manage'),
     },
   ];
 
@@ -649,8 +649,8 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <span className="truncate text-sm font-semibold text-foreground">
                 {activeWorkspace?.workspace?.name || 'Workspace'}
               </span>
-              <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider truncate">
-                {getDisplayRoleName(activeWorkspace)} • {activeWorkspace?.designation?.title || getPortalRoleLabel(accessRole)}
+              <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
+                {getPortalRoleLabel(accessRole)} • {activeWorkspace?.designation?.title || 'Member'}
               </span>
             </div>
           </div>

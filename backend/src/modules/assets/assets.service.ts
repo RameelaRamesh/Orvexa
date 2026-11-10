@@ -6,12 +6,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { AssetStatus } from '@prisma/client';
-import {
-  hasPermission,
-  isTargetWithinScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
 
 export interface AssetCategory {
   id: string;
@@ -158,16 +152,20 @@ export class AssetsService {
       ];
     }
 
-    const effectiveScope = userContext ? resolveEffectiveScope(userContext) : 'GLOBAL';
-    let ledTeamIds: string[] = [];
-    if (userContext && effectiveScope !== 'GLOBAL') {
-      ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (effectiveScope === 'ASSIGNED' && userContext.membershipId) {
+    // Role-based data scoping
+    if (
+      userContext &&
+      userContext.accessRole !== 'OWNER' &&
+      userContext.accessRole !== 'ADMIN' &&
+      userContext.accessRole !== 'MANAGER'
+    ) {
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if (scope === 'ASSIGNED' || scope === 'OWN') {
         where.assignedToMembershipId = userContext.membershipId;
       }
     }
 
-    let assets = await this.prisma.asset.findMany({
+    const assets = await this.prisma.asset.findMany({
       where,
       include: {
         assignedTo: {
@@ -178,17 +176,6 @@ export class AssetsService {
       },
       orderBy: { createdAt: 'desc' },
     });
-
-    if (userContext && effectiveScope !== 'GLOBAL') {
-      const canSeePool = hasPermission(userContext, ['assets:assign', 'assets:edit', 'assets:create', 'assets:manage']);
-      assets = assets.filter((a: any) => {
-        if (!a.assignedToMembershipId) {
-          return effectiveScope !== 'ASSIGNED' && canSeePool;
-        }
-        if (a.assignedToMembershipId === userContext.membershipId) return true;
-        return a.assignedTo ? isTargetWithinScope(userContext, a.assignedTo, ledTeamIds) : false;
-      });
-    }
 
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -209,7 +196,7 @@ export class AssetsService {
     });
   }
 
-  async getAssetById(workspaceId: string, assetId: string, userContext?: any) {
+  async getAssetById(workspaceId: string, assetId: string) {
     const asset = await this.prisma.asset.findFirst({
       where: { id: assetId, workspaceId },
       include: {
@@ -224,18 +211,6 @@ export class AssetsService {
     });
 
     if (!asset) throw new NotFoundException('Asset not found');
-
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      const effectiveScope = resolveEffectiveScope(userContext);
-      const allowed = asset.assignedToMembershipId
-        ? asset.assignedToMembershipId === userContext.membershipId ||
-          (asset.assignedTo ? isTargetWithinScope(userContext, asset.assignedTo, ledTeamIds) : false)
-        : effectiveScope !== 'ASSIGNED' && hasPermission(userContext, ['assets:assign', 'assets:edit', 'assets:create', 'assets:manage']);
-      if (!allowed) {
-        throw new ForbiddenException('Access denied: This asset is outside your visibility scope');
-      }
-    }
 
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },

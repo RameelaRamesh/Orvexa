@@ -17,7 +17,7 @@ export class TeamsController {
   }
 
   @Post()
-  @RequirePermissions('departments:manage')
+  @RequirePermissions('people:manage')
   async create(
     @CurrentWorkspace() workspaceId: string,
     @Body() body: { name: string; departmentId?: string; description?: string; leadMembershipId?: string },
@@ -26,7 +26,7 @@ export class TeamsController {
   }
 
   @Patch(':id')
-  @RequirePermissions('departments:manage')
+  @RequirePermissions('people:manage')
   async update(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') id: string,
@@ -36,7 +36,7 @@ export class TeamsController {
   }
 
   @Delete(':id')
-  @RequirePermissions('departments:manage')
+  @RequirePermissions('people:manage')
   async delete(@CurrentWorkspace() workspaceId: string, @Param('id') id: string) {
     return this.teamsService.delete(id, workspaceId);
   }

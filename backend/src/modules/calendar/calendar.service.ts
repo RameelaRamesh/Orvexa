@@ -6,13 +6,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import {
-  buildUserContextFromMembership,
-  hasPermission,
-  isTargetWithinScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
-import {
   CreateCalendarEventDto,
   UpdateCalendarEventDto,
   RsvpDto,
@@ -118,7 +111,7 @@ export class CalendarService {
   // ---------------------------------------------------------------------------
   // 2. HELPER: RESOLVE USER MEMBERSHIP & PERMISSIONS
   // ---------------------------------------------------------------------------
-  private async resolveUserContext(workspaceId: string, membershipId: string, userRole: string, injectedUserContext?: any) {
+  private async resolveUserContext(workspaceId: string, membershipId: string, userRole: string) {
     const membership: any = await this.prisma.membership.findFirst({
       where: { id: membershipId, workspaceId },
       include: {
@@ -135,48 +128,40 @@ export class CalendarService {
       },
     });
 
-    const baseCtx = injectedUserContext?.permissionCodes
-      ? injectedUserContext
-      : membership
-      ? buildUserContextFromMembership(membership)
-      : {
-          membershipId,
-          accessRole: (userRole || 'MEMBER').toUpperCase(),
-          dataScope: (userRole || '').toUpperCase() === 'OWNER' ? 'GLOBAL' : 'ASSIGNED',
-          permissionCodes: undefined,
-        };
+    const accessRole = (
+      membership?.accessRole ||
+      (membership?.role as any)?.name ||
+      userRole ||
+      'MEMBER'
+    ).toUpperCase();
+    const isOwnerOrAdmin = accessRole === 'OWNER' || accessRole === 'ADMIN' || accessRole.includes('OWNER') || accessRole.includes('ADMIN');
+    const isManager = accessRole === 'MANAGER' || accessRole.includes('MANAGER');
+    const isLead = accessRole.includes('LEAD');
 
-    const accessRole = (baseCtx.accessRole || userRole || 'MEMBER').toUpperCase();
-    const isOwner = accessRole === 'OWNER';
-    const effectiveScope = isOwner ? 'GLOBAL' : resolveEffectiveScope(baseCtx);
-    const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, membershipId);
+    // Extract permission codes
+    const permCodes: string[] = [];
+    if (membership?.role?.permissions) {
+      for (const rp of membership.role.permissions) {
+        if (rp.permission?.code) permCodes.push(rp.permission.code);
+      }
+    }
 
-    const canViewAll = isOwner || effectiveScope === 'GLOBAL' || hasPermission(baseCtx, ['calendar:view:all', 'scope:workspace']);
-    const canViewDept = canViewAll || effectiveScope === 'DEPARTMENT' || hasPermission(baseCtx, ['calendar:view:department', 'scope:department']);
-    const canViewTeam = canViewDept || effectiveScope === 'TEAM' || hasPermission(baseCtx, ['calendar:view:team', 'scope:team']);
-    const canViewSchedules = canViewAll || hasPermission(baseCtx, 'calendar:view:schedules');
-    const canManageEvents = isOwner || hasPermission(baseCtx, 'calendar:manage');
-    const canManageHolidays = isOwner || hasPermission(baseCtx, ['calendar:holidays:manage', 'settings:manage']);
-    const canViewLeaveDetails = isOwner || hasPermission(baseCtx, ['leave:approve', 'leave:manage', 'people:view_sensitive']);
+    const hasPerm = (code: string) => isOwnerOrAdmin || permCodes.includes(code);
 
     return {
       membership,
-      baseCtx,
       accessRole,
-      isOwner,
-      isOwnerOrAdmin: isOwner,
-      effectiveScope,
-      ledTeamIds,
-      canViewAll,
-      canViewDept,
-      canViewTeam,
-      canViewSchedules,
-      canManageEvents,
-      canViewLeaveDetails,
-      canCreate: isOwner || !Array.isArray(baseCtx.permissionCodes) || hasPermission(baseCtx, ['calendar:create', 'calendar:manage']),
-      canManageHolidays,
-      departmentId: baseCtx.departmentId || membership?.departmentId || null,
-      teamId: baseCtx.teamId || membership?.teamId || null,
+      isOwnerOrAdmin,
+      isManager,
+      isLead,
+      canViewAll: isOwnerOrAdmin || hasPerm('calendar:view:all'),
+      canViewDept: isOwnerOrAdmin || isManager || hasPerm('calendar:view:department'),
+      canViewTeam: isOwnerOrAdmin || isManager || isLead || hasPerm('calendar:view:team'),
+      canViewSchedules: isOwnerOrAdmin || hasPerm('calendar:view:schedules'),
+      canCreate: true, // all authenticated members can schedule meetings
+      canManageHolidays: isOwnerOrAdmin || hasPerm('calendar:holidays:manage'),
+      departmentId: membership?.departmentId,
+      teamId: membership?.teamId,
       userName: membership?.user ? `${membership.user.firstName} ${membership.user.lastName}`.trim() : 'User',
       userEmail: membership?.user?.email || '',
     };
@@ -201,9 +186,8 @@ export class CalendarService {
       scope?: string;
       memberIds?: string[];
     } = {},
-    injectedUserContext?: any,
   ): Promise<{ workspaceId: string; events: CalendarEventItem[]; metadata: Record<string, any> }> {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
 
     const now = new Date();
     const start = filters.startDate ? new Date(filters.startDate) : new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -211,34 +195,7 @@ export class CalendarService {
     const end = filters.endDate ? new Date(filters.endDate) : new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59);
     end.setHours(23, 59, 59, 999);
 
-    // Clamp requested calendar scope to actor permissions so no user can bypass scope via query param
-    const rawScope = (filters.scope || 'MY_SCHEDULE').toUpperCase();
-    let scope = rawScope;
-    if (rawScope === 'ENTIRE_WORKSPACE' && !userCtx.canViewAll) {
-      scope = userCtx.canViewDept ? 'MY_DEPARTMENT' : userCtx.canViewTeam ? 'MY_TEAM' : 'MY_SCHEDULE';
-    } else if (rawScope === 'MY_DEPARTMENT' && !userCtx.canViewDept) {
-      scope = userCtx.canViewTeam ? 'MY_TEAM' : 'MY_SCHEDULE';
-    } else if (rawScope === 'MY_TEAM' && !userCtx.canViewTeam) {
-      scope = 'MY_SCHEDULE';
-    }
-
-    let allowedSelectMemberIds: string[] = [];
-    if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
-      if (userCtx.canViewAll) {
-        allowedSelectMemberIds = filters.memberIds;
-      } else if (userCtx.canViewTeam || userCtx.canViewDept || userCtx.canViewSchedules) {
-        const candMems = await this.prisma.membership.findMany({
-          where: { workspaceId, id: { in: filters.memberIds } },
-          select: { id: true, departmentId: true, teamId: true, reportsToId: true },
-        });
-        allowedSelectMemberIds = (candMems || [])
-          .filter((m: any) => isTargetWithinScope(userCtx.baseCtx, m, userCtx.ledTeamIds))
-          .map((m: any) => m.id);
-        if (allowedSelectMemberIds.length === 0) allowedSelectMemberIds = [membershipId];
-      } else {
-        allowedSelectMemberIds = [membershipId];
-      }
-    }
+    const scope = (filters.scope || 'MY_SCHEDULE').toUpperCase();
 
     const events: CalendarEventItem[] = [];
 
@@ -313,28 +270,24 @@ export class CalendarService {
       const isCompanyWide = evt.audience === 'ALL' || evt.type === 'COMPANY_EVENT' || evt.type === 'HOLIDAY';
 
       if (isCompanyWide) {
-        isVisible = true;
+        isVisible = true; // Company wide events always visible in all scopes
       } else if (scope === 'MY_SCHEDULE') {
         isVisible = evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
       } else if (scope === 'MY_TEAM') {
-        const permittedTeamIds = userCtx.canViewAll
-          ? (filters.teamId ? [filters.teamId] : [userCtx.teamId, ...userCtx.ledTeamIds].filter(Boolean))
-          : Array.from(new Set([userCtx.teamId, ...userCtx.ledTeamIds].filter(Boolean)));
-        isVisible = (evt.teamId && permittedTeamIds.includes(evt.teamId)) ||
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        isVisible = (teamId && evt.teamId === teamId) ||
           evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
       } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = userCtx.canViewAll
-          ? (filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId)
-          : (userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId);
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
         isVisible = (deptId && evt.departmentId === deptId) ||
           evt.organizerMembershipId === membershipId ||
           (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
-      } else if (scope === 'SELECT_PEOPLE' && allowedSelectMemberIds.length > 0) {
-        isVisible = allowedSelectMemberIds.includes(evt.organizerMembershipId) ||
-          (evt.participants && evt.participants.some((p: any) => allowedSelectMemberIds.includes(p.membershipId)));
-      } else if (scope === 'ENTIRE_WORKSPACE' && userCtx.canViewAll) {
+      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||
+          (evt.participants && evt.participants.some((p: any) => filters.memberIds!.includes(p.membershipId)));
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
         isVisible = true;
       } else {
         isVisible = evt.organizerMembershipId === membershipId ||
@@ -345,7 +298,7 @@ export class CalendarService {
 
       const isMeeting = evt.type === 'MEETING' || evt.type === CalendarEventType.MEETING;
       const isOrganizer = evt.organizerMembershipId === membershipId;
-      const canEdit = isOrganizer || userCtx.isOwner || (userCtx.canManageEvents && userCtx.canViewAll);
+      const canEdit = isOrganizer || userCtx.isOwnerOrAdmin;
 
       let safeEndDate = evt.endDate;
       if (isMeeting && evt.startDate && evt.endDate) {
@@ -404,20 +357,27 @@ export class CalendarService {
           { assignee: { userId: userCtx.membership?.userId } },
         ];
       } else if (scope === 'MY_TEAM') {
-        const permittedTeamIds = userCtx.canViewAll && filters.teamId
-          ? [filters.teamId]
-          : Array.from(new Set([userCtx.teamId, ...userCtx.ledTeamIds].filter(Boolean)));
-        taskWhere.assignee = {
-          OR: [
-            { id: membershipId },
-            ...(permittedTeamIds.length > 0 ? [{ teamId: { in: permittedTeamIds } }] : []),
-            { reportsToId: membershipId },
-          ],
-        };
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        if (teamId) {
+          taskWhere.assignee = {
+            OR: [
+              { id: membershipId },
+              { teamId: teamId },
+              { reportsToId: membershipId },
+            ],
+          };
+        } else if (userCtx.isManager || userCtx.isLead) {
+          taskWhere.assignee = {
+            OR: [
+              { id: membershipId },
+              { reportsToId: membershipId },
+            ],
+          };
+        } else {
+          taskWhere.assigneeMembershipId = membershipId;
+        }
       } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = userCtx.canViewAll
-          ? (filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId)
-          : (userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId);
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
         if (deptId) {
           taskWhere.assignee = {
             OR: [
@@ -429,10 +389,10 @@ export class CalendarService {
         } else {
           taskWhere.assigneeMembershipId = membershipId;
         }
-      } else if (scope === 'SELECT_PEOPLE' && allowedSelectMemberIds.length > 0) {
-        taskWhere.assigneeMembershipId = { in: allowedSelectMemberIds };
-      } else if (scope === 'ENTIRE_WORKSPACE' && userCtx.canViewAll) {
-        // permitted entire workspace tasks
+      } else if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        taskWhere.assigneeMembershipId = { in: filters.memberIds };
+      } else if (scope === 'ENTIRE_WORKSPACE' && (userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead)) {
+        // all workspace tasks
       } else {
         taskWhere.assigneeMembershipId = membershipId;
       }
@@ -649,23 +609,26 @@ export class CalendarService {
         status: { notIn: ['CANCELLED', 'REJECTED'] },
       };
 
-      if (scope === 'SELECT_PEOPLE' && allowedSelectMemberIds.length > 0) {
-        leaveWhere.membershipId = { in: allowedSelectMemberIds };
+      if (scope === 'SELECT_PEOPLE' && filters.memberIds && filters.memberIds.length > 0) {
+        leaveWhere.membershipId = { in: filters.memberIds };
       } else if (scope === 'MY_SCHEDULE') {
         leaveWhere.membershipId = membershipId;
       } else if (scope === 'MY_TEAM') {
-        const permittedTeamIds = userCtx.canViewAll && filters.teamId
-          ? [filters.teamId]
-          : Array.from(new Set([userCtx.teamId, ...userCtx.ledTeamIds].filter(Boolean)));
-        leaveWhere.OR = [
-          { membershipId },
-          ...(permittedTeamIds.length > 0 ? [{ membership: { teamId: { in: permittedTeamIds } } }] : []),
-          { membership: { reportsToId: membershipId } },
-        ];
+        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+        if (teamId) {
+          leaveWhere.OR = [
+            { membershipId },
+            { membership: { teamId } },
+            { membership: { reportsToId: membershipId } },
+          ];
+        } else {
+          leaveWhere.OR = [
+            { membershipId },
+            { membership: { reportsToId: membershipId } },
+          ];
+        }
       } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = userCtx.canViewAll
-          ? (filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId)
-          : (userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId);
+        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
         if (deptId) {
           leaveWhere.OR = [
             { membershipId },
@@ -681,12 +644,10 @@ export class CalendarService {
             { membershipId },
             { membership: { departmentId: userCtx.departmentId } },
           ];
-        } else if (userCtx.canViewTeam) {
-          const permittedTeamIds = Array.from(new Set([userCtx.teamId, ...userCtx.ledTeamIds].filter(Boolean)));
+        } else if (userCtx.canViewTeam && userCtx.teamId) {
           leaveWhere.OR = [
             { membershipId },
-            ...(permittedTeamIds.length > 0 ? [{ membership: { teamId: { in: permittedTeamIds } } }] : []),
-            { membership: { reportsToId: membershipId } },
+            { membership: { teamId: userCtx.teamId } },
           ];
         } else {
           leaveWhere.membershipId = membershipId;
@@ -709,8 +670,8 @@ export class CalendarService {
           : 'Team Member';
 
         const isOwn = l.membershipId === membershipId;
-        // Do not expose private medical reason unless self, Owner, or permitted leave/sensitive PII reviewer
-        const displayReason = isOwn || userCtx.canViewLeaveDetails ? l.reason : 'Out of Office';
+        // Do not expose private medical reason to others
+        const displayReason = isOwn || userCtx.isOwnerOrAdmin ? l.reason : 'Out of Office';
 
         events.push({
           id: `leave-${l.id}`,
@@ -807,18 +768,11 @@ export class CalendarService {
     membershipId: string,
     userRole: string,
     dto: CreateCalendarEventDto,
-    injectedUserContext?: any,
   ): Promise<CalendarEventItem> {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
 
-    if (!userCtx.canCreate) {
-      throw new ForbiddenException('Your role does not include permission to create calendar events');
-    }
-    if (dto.audience === 'ALL' && !userCtx.canViewAll) {
-      throw new ForbiddenException('Workspace calendar permission (`calendar:view:all` or `scope:workspace`) is required to schedule company-wide events');
-    }
-    if (dto.audience === 'DEPARTMENT' && !userCtx.canViewDept) {
-      throw new ForbiddenException('Department visibility permission (`calendar:view:department` or `scope:department`) is required for department-wide events');
+    if (dto.audience === 'ALL' && !userCtx.canViewAll && !userCtx.isManager) {
+      throw new ForbiddenException('Only managers and administrators can schedule company-wide events');
     }
 
     // Resolve participants
@@ -1014,9 +968,8 @@ export class CalendarService {
     userRole: string,
     eventId: string,
     dto: UpdateCalendarEventDto,
-    injectedUserContext?: any,
   ): Promise<CalendarEventItem> {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
 
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
     const settings = (ws?.settings as Record<string, any>) || {};
@@ -1028,8 +981,8 @@ export class CalendarService {
     }
 
     const existing = events[idx];
-    if (existing.organizerMembershipId !== membershipId && !userCtx.isOwner && !(userCtx.canManageEvents && userCtx.canViewAll)) {
-      throw new ForbiddenException('Only the organizer or an administrator with calendar management permission can modify this event');
+    if (existing.organizerMembershipId !== membershipId && !userCtx.isOwnerOrAdmin) {
+      throw new ForbiddenException('Only the organizer or an administrator can modify this event');
     }
 
     const updated = {
@@ -1092,8 +1045,8 @@ export class CalendarService {
   // ---------------------------------------------------------------------------
   // 6. DELETE / CANCEL EVENT
   // ---------------------------------------------------------------------------
-  async deleteEvent(workspaceId: string, membershipId: string, userRole: string, eventId: string, injectedUserContext?: any) {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+  async deleteEvent(workspaceId: string, membershipId: string, userRole: string, eventId: string) {
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
 
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
     const settings = (ws?.settings as Record<string, any>) || {};
@@ -1111,8 +1064,8 @@ export class CalendarService {
       throw new NotFoundException(`Calendar event with id ${eventId} not found`);
     }
 
-    if (existing.organizerMembershipId && existing.organizerMembershipId !== membershipId && !userCtx.isOwner && !(userCtx.canManageEvents && userCtx.canViewAll)) {
-      throw new ForbiddenException('Only the organizer or an administrator with calendar management permission can delete this event');
+    if (existing.organizerMembershipId && existing.organizerMembershipId !== membershipId && !userCtx.isOwnerOrAdmin) {
+      throw new ForbiddenException('Only the organizer or an administrator can delete this event');
     }
 
     const remaining = events.filter((e) => e.id !== eventId);
@@ -1159,9 +1112,8 @@ export class CalendarService {
     userRole: string,
     eventId: string,
     dto: RsvpDto,
-    injectedUserContext?: any,
   ) {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
 
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
     const settings = (ws?.settings as Record<string, any>) || {};
@@ -1254,9 +1206,8 @@ export class CalendarService {
     membershipId: string,
     userRole: string,
     dto: CreateCompanyHolidayDto,
-    injectedUserContext?: any,
   ) {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
     if (!userCtx.canManageHolidays) {
       throw new ForbiddenException('Only Workspace Administrators and Owners can configure company holidays & festivals');
     }
@@ -1303,8 +1254,8 @@ export class CalendarService {
     return newHoliday;
   }
 
-  async deleteCompanyHoliday(workspaceId: string, membershipId: string, userRole: string, id: string, injectedUserContext?: any) {
-    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole, injectedUserContext);
+  async deleteCompanyHoliday(workspaceId: string, membershipId: string, userRole: string, id: string) {
+    const userCtx = await this.resolveUserContext(workspaceId, membershipId, userRole);
     if (!userCtx.canManageHolidays) {
       throw new ForbiddenException('Only Workspace Administrators and Owners can delete company holidays & festivals');
     }

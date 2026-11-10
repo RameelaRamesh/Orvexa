@@ -7,13 +7,6 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { TaskStatus, PriorityLevel, ApprovalStatus } from '@prisma/client';
-import {
-  buildUserContextFromMembership,
-  hasPermission,
-  isTargetWithinScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
 
 export interface WorkflowRule {
   id: string;
@@ -109,25 +102,53 @@ export class TasksService implements OnModuleInit {
       ];
     }
 
-    // Strict permission & scope resolution: Tech TL (scope:team) only sees Tech team tasks;
-    // Marketing TL (scope:team) only sees Marketing team tasks; Dept Lead (scope:department) sees their dept.
-    const effectiveScope = userContext ? resolveEffectiveScope(userContext) : 'GLOBAL';
-    const ledTeamIds = userContext?.membershipId
-      ? await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId)
-      : [];
+    const roleUpper = (userContext?.accessRole || '').toUpperCase();
+    const roleNameUpper = (userContext?.roleName || '').toUpperCase();
+    const isManagerOrAdmin =
+      roleUpper === 'OWNER' ||
+      roleUpper === 'ADMIN' ||
+      roleUpper === 'MANAGER' ||
+      roleUpper.includes('MANAGER') ||
+      roleUpper.includes('LEAD') ||
+      roleNameUpper.includes('MANAGER') ||
+      roleNameUpper.includes('LEAD') ||
+      roleNameUpper.includes('DIRECTOR') ||
+      roleNameUpper.includes('HEAD');
 
-    // Explicit filter.scope can ONLY narrow visibility, never widen beyond effectiveScope
-    let appliedScope = effectiveScope;
+    // Explicit filter.scope handling
     if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
-      appliedScope = 'ASSIGNED';
-    } else if (filter?.scope === 'TEAM_WORK' && (effectiveScope === 'GLOBAL' || effectiveScope === 'DEPARTMENT')) {
-      if (userContext?.teamId || ledTeamIds.length > 0) {
-        appliedScope = 'TEAM';
-      }
-    }
-
-    if (userContext && appliedScope === 'ASSIGNED' && userContext.membershipId) {
       where.assigneeMembershipId = userContext.membershipId;
+    } else if (filter?.scope === 'TEAM_WORK') {
+      if (isManagerOrAdmin) {
+        if (userContext?.teamId && userContext.accessRole === 'MANAGER') {
+          where.assignee = {
+            OR: [
+              { id: userContext.membershipId },
+              { teamId: userContext.teamId },
+              { reportsToId: userContext.membershipId },
+            ],
+          };
+        }
+      }
+    } else if (userContext && !isManagerOrAdmin) {
+      // Non-manager members only see their assigned work or permitted dataScope
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if (scope === 'ASSIGNED' || scope === 'OWN') {
+        where.assigneeMembershipId = userContext.membershipId;
+      } else if (scope === 'TEAM') {
+        // Team scope: tasks assigned to self, team members, or direct reports
+        where.assignee = {
+          OR: [
+            { id: userContext.membershipId },
+            ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
+            { reportsToId: userContext.membershipId },
+          ],
+        };
+      } else if (scope === 'DEPARTMENT') {
+        where.assignee = {
+          departmentId: userContext.departmentId || 'unassigned',
+        };
+      }
     }
 
     let tasks = await this.prisma.task.findMany({
@@ -139,31 +160,13 @@ export class TasksService implements OnModuleInit {
         assignee: {
           include: {
             user: { select: { firstName: true, lastName: true, avatarUrl: true, email: true } },
-            department: { select: { id: true, name: true } },
-            team: { select: { id: true, name: true } },
+            department: { select: { name: true } },
+            team: { select: { name: true } },
           },
         },
       },
       orderBy: { updatedAt: 'desc' },
     });
-
-    if (userContext && appliedScope !== 'GLOBAL') {
-      tasks = tasks.filter((t: any) => {
-        const meta = (t.sla as any) || {};
-        if (userContext.membershipId && t.assigneeMembershipId === userContext.membershipId) return true;
-        if (appliedScope === 'ASSIGNED') {
-          return Array.isArray(meta.collaboratorIds) && meta.collaboratorIds.includes(userContext.membershipId);
-        }
-        if (t.assignee) {
-          return isTargetWithinScope(userContext, t.assignee, ledTeamIds);
-        }
-        // Unassigned task visibility within scoped team/department
-        if (appliedScope === 'DEPARTMENT' && userContext.departmentId && meta.departmentId === userContext.departmentId) {
-          return true;
-        }
-        return Boolean(userContext.membershipId && meta.creatorMembershipId === userContext.membershipId);
-      });
-    }
 
     if (filterOverdue) {
       tasks = tasks.filter((t: any) => t.status !== TaskStatus.COMPLETED && t.dueDate && new Date(t.dueDate).getTime() < Date.now());
@@ -174,7 +177,7 @@ export class TasksService implements OnModuleInit {
     return tasks.map((t) => this.enrichTaskPayload(t));
   }
 
-  async getById(workspaceId: string, id: string, userContext?: any) {
+  async getById(workspaceId: string, id: string) {
     const task = await this.prisma.task.findFirst({
       where: { id, workspaceId },
       include: {
@@ -194,21 +197,6 @@ export class TasksService implements OnModuleInit {
 
     if (!task) {
       throw new NotFoundException('Work item not found in workspace');
-    }
-
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      const meta = (task.sla as any) || {};
-      const effectiveScope = resolveEffectiveScope(userContext);
-      const isSelfOrCollaborator =
-        (userContext.membershipId && task.assigneeMembershipId === userContext.membershipId) ||
-        (userContext.membershipId && meta.creatorMembershipId === userContext.membershipId) ||
-        (Array.isArray(meta.collaboratorIds) && meta.collaboratorIds.includes(userContext.membershipId));
-      const isWithinAssigneeScope = task.assignee ? isTargetWithinScope(userContext, task.assignee, ledTeamIds) : false;
-      const isSameDeptUnassigned = !task.assignee && effectiveScope === 'DEPARTMENT' && userContext.departmentId && meta.departmentId === userContext.departmentId;
-      if (!isSelfOrCollaborator && !isWithinAssigneeScope && !isSameDeptUnassigned) {
-        throw new ForbiddenException('Access denied: This work item is outside your team or department visibility scope');
-      }
     }
 
     // Resolve dependencies details
@@ -384,11 +372,9 @@ export class TasksService implements OnModuleInit {
       customFields?: Record<string, any>;
     },
     actorMembershipId?: string,
-    userContext?: any,
   ) {
     const existing = await this.prisma.task.findFirst({
       where: { id, workspaceId },
-      include: { assignee: true },
     });
 
     if (!existing) {
@@ -412,44 +398,16 @@ export class TasksService implements OnModuleInit {
     const isAssigneeChanging = primaryAssigneeId !== undefined && primaryAssigneeId !== existing.assigneeMembershipId;
     const isDueDateChanging = data.dueDate && new Date(data.dueDate).getTime() !== (existing.dueDate ? new Date(existing.dueDate).getTime() : 0);
 
-    // Scope check if updating a task under restricted visibility
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      const isAllowed =
-        existing.assigneeMembershipId === userContext.membershipId ||
-        currentMetadata.creatorMembershipId === userContext.membershipId ||
-        (existing.assignee ? isTargetWithinScope(userContext, existing.assignee, ledTeamIds) : false);
-      if (!isAllowed) {
-        throw new ForbiddenException('Access denied: Cannot modify a work item outside your visibility scope');
-      }
-    }
-
-    // If status moving to COMPLETED, verify approval/manage permission & blocking dependencies
+    // If status moving to COMPLETED, check dependencies
     if (data.status === TaskStatus.COMPLETED) {
-      if (userContext && Array.isArray(userContext.permissionCodes)) {
-        if (userContext.accessRole !== 'OWNER' && !hasPermission(userContext, ['approvals:approve', 'tasks:manage'])) {
-          throw new ForbiddenException(
-            'Access restricted: Your role does not have task completion/approval permission (`approvals:approve` or `tasks:manage`). Please submit for review.',
-          );
-        }
-      } else if (actorMembershipId) {
+      if (actorMembershipId) {
         const actor = await this.prisma.membership.findFirst({
           where: { id: actorMembershipId, workspaceId },
-          include: { role: { include: { permissions: { include: { permission: true } } } } },
         });
-        if (actor) {
-          if (actor.role?.permissions) {
-            const actorCtx = buildUserContextFromMembership(actor);
-            if (actorCtx.accessRole !== 'OWNER' && !hasPermission(actorCtx, ['approvals:approve', 'tasks:manage'])) {
-              throw new ForbiddenException(
-                'Access restricted: Your role does not have task completion/approval permission. Please submit for review.',
-              );
-            }
-          } else if (actor.accessRole === 'MEMBER') {
-            throw new ForbiddenException(
-              'Access restricted: Only authorized reviewers and managers can complete work items. Please submit for review.',
-            );
-          }
+        if (actor && actor.accessRole === 'MEMBER') {
+          throw new ForbiddenException(
+            'Access restricted: Only managers and workspace administrators are authorized to complete work items. Please submit the item for review.',
+          );
         }
       }
       await this.verifyDependenciesCompleted(workspaceId, id, currentMetadata);
@@ -539,7 +497,7 @@ export class TasksService implements OnModuleInit {
   // LIFECYCLE ACTIONS: REASSIGN, REVIEW, REWORK, COMPLETE, REOPEN, ESCALATE
   // ---------------------------------------------------------------------------
 
-  async reassign(id: string, workspaceId: string, newAssigneeMembershipId: string, actorMembershipId?: string, reason?: string, userContext?: any) {
+  async reassign(id: string, workspaceId: string, newAssigneeMembershipId: string, actorMembershipId?: string, reason?: string) {
     const assignee = await this.prisma.membership.findFirst({
       where: { id: newAssigneeMembershipId, workspaceId },
       include: { user: true },
@@ -548,19 +506,11 @@ export class TasksService implements OnModuleInit {
       throw new NotFoundException('Assignee not found in this workspace');
     }
 
-    if (userContext && resolveEffectiveScope(userContext) !== 'GLOBAL') {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!isTargetWithinScope(userContext, assignee, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Cannot reassign work items to members outside your team or department scope');
-      }
-    }
-
     return this.update(
       id,
       workspaceId,
       { assigneeMembershipId: newAssigneeMembershipId },
       actorMembershipId,
-      userContext,
     );
   }
 
@@ -600,16 +550,9 @@ export class TasksService implements OnModuleInit {
           ...(updated.assignee?.reportsToId ? [{ id: updated.assignee.reportsToId }] : []),
         ],
       },
-      include: { role: { include: { permissions: { include: { permission: true } } } } },
     });
     for (const m of (managersToAlert || [])) {
       if (m.id === actorMembershipId) continue;
-      const mCtx = m.role?.permissions ? buildUserContextFromMembership(m) : { membershipId: m.id, accessRole: m.accessRole, dataScope: m.dataScope, departmentId: m.departmentId, teamId: m.teamId };
-      if (updated.assignee && mCtx.accessRole !== 'OWNER') {
-        if (!hasPermission(mCtx as any, ['approvals:approve', 'tasks:manage'])) continue;
-        const mLedTeams = await resolveLedTeamIds(this.prisma, workspaceId, m.id);
-        if (!isTargetWithinScope(mCtx as any, updated.assignee, mLedTeams)) continue;
-      }
       await this.sendNotification(
         workspaceId,
         m.id,
@@ -682,31 +625,15 @@ export class TasksService implements OnModuleInit {
     return this.enrichTaskPayload(updated);
   }
 
-  async complete(id: string, workspaceId: string, actorMembershipId?: string, actualHours?: number, userContext?: any) {
-    if (userContext && Array.isArray(userContext.permissionCodes)) {
-      if (userContext.accessRole !== 'OWNER' && !hasPermission(userContext, ['approvals:approve', 'tasks:manage'])) {
-        throw new ForbiddenException(
-          'Access restricted: Your role does not have task completion/approval permission (`approvals:approve` or `tasks:manage`). Please submit for review.',
-        );
-      }
-    } else if (actorMembershipId) {
+  async complete(id: string, workspaceId: string, actorMembershipId?: string, actualHours?: number) {
+    if (actorMembershipId) {
       const actor = await this.prisma.membership.findFirst({
         where: { id: actorMembershipId, workspaceId },
-        include: { role: { include: { permissions: { include: { permission: true } } } } },
       });
-      if (actor) {
-        if (actor.role?.permissions) {
-          const actorCtx = buildUserContextFromMembership(actor);
-          if (actorCtx.accessRole !== 'OWNER' && !hasPermission(actorCtx, ['approvals:approve', 'tasks:manage'])) {
-            throw new ForbiddenException(
-              'Access restricted: Your role does not have task completion/approval permission. Please submit for review.',
-            );
-          }
-        } else if (actor.accessRole === 'MEMBER') {
-          throw new ForbiddenException(
-            'Access restricted: Only authorized reviewers and managers can complete work items. Please submit for review.',
-          );
-        }
+      if (actor && actor.accessRole === 'MEMBER') {
+        throw new ForbiddenException(
+          'Access restricted: Only managers and workspace administrators can complete work items. Please submit the item for review.',
+        );
       }
     }
     const task = await this.prisma.task.findFirst({ where: { id, workspaceId } });
@@ -1113,25 +1040,15 @@ export class TasksService implements OnModuleInit {
       },
     });
 
-    const taskAssignee = task.assigneeMembershipId
-      ? await this.prisma.membership.findFirst({ where: { id: task.assigneeMembershipId, workspaceId } })
-      : null;
     const managers = await this.prisma.membership.findMany({
       where: {
         workspaceId,
         status: 'ACTIVE',
         accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] },
       },
-      include: { role: { include: { permissions: { include: { permission: true } } } } },
     });
-    for (const m of (managers || [])) {
+    for (const m of managers) {
       if (m.id === actorMembershipId) continue;
-      const mCtx = m.role?.permissions ? buildUserContextFromMembership(m) : { membershipId: m.id, accessRole: m.accessRole, dataScope: m.dataScope, departmentId: m.departmentId, teamId: m.teamId };
-      if (taskAssignee && mCtx.accessRole !== 'OWNER') {
-        if (!hasPermission(mCtx as any, ['approvals:approve', 'tasks:manage'])) continue;
-        const mLedTeams = await resolveLedTeamIds(this.prisma, workspaceId, m.id);
-        if (!isTargetWithinScope(mCtx as any, taskAssignee, mLedTeams)) continue;
-      }
       await this.sendNotification(
         workspaceId,
         m.id,
@@ -1584,7 +1501,6 @@ export class TasksService implements OnModuleInit {
               ...(task.assignee?.reportsToId ? [{ id: task.assignee.reportsToId }] : []),
             ],
           },
-          include: { role: { include: { permissions: { include: { permission: true } } } } },
         });
 
         const assigneeName = task.assignee?.user
@@ -1601,13 +1517,8 @@ export class TasksService implements OnModuleInit {
           details: `Task missed deadline of ${dueDateFormatted}. Higher officials notified.`,
         });
 
-        for (const official of (higherOfficials || [])) {
+        for (const official of higherOfficials) {
           if (official.id === task.assigneeMembershipId) continue;
-          if (task.assignee && official.accessRole !== 'OWNER') {
-            const oCtx = official.role?.permissions ? buildUserContextFromMembership(official) : { membershipId: official.id, accessRole: official.accessRole, dataScope: official.dataScope, departmentId: official.departmentId, teamId: official.teamId };
-            const oLed = await resolveLedTeamIds(this.prisma, task.workspaceId, official.id);
-            if (!isTargetWithinScope(oCtx as any, task.assignee, oLed)) continue;
-          }
 
           await this.sendNotification(
             task.workspaceId,

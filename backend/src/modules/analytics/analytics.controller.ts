@@ -11,11 +11,9 @@ import {
 import { AnalyticsService } from './analytics.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
-import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
-import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 
-@UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, TenantGuard)
 @Controller('analytics')
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
@@ -36,22 +34,16 @@ export class AnalyticsController {
     const membershipId = req.membership?.id || req.membershipId;
     const userRole = req.membership?.accessRole || 'MEMBER';
 
-    return this.analyticsService.getOverview(
-      workspaceId,
-      membershipId,
-      userRole,
-      {
-        startDate,
-        endDate,
-        departmentId,
-        teamId,
-        memberId,
-        status,
-        priority,
-        scope,
-      },
-      req.userContext,
-    );
+    return this.analyticsService.getOverview(workspaceId, membershipId, userRole, {
+      startDate,
+      endDate,
+      departmentId,
+      teamId,
+      memberId,
+      status,
+      priority,
+      scope,
+    });
   }
 
   @Get('calendar')
@@ -74,18 +66,12 @@ export class AnalyticsController {
     ).toString();
     const parsedLayers = layers ? layers.split(',') : undefined;
 
-    return this.analyticsService.getCalendarEvents(
-      workspaceId,
-      membershipId,
-      userRole,
-      {
-        startDate,
-        endDate,
-        layers: parsedLayers,
-        memberId,
-      },
-      req.userContext,
-    );
+    return this.analyticsService.getCalendarEvents(workspaceId, membershipId, userRole, {
+      startDate,
+      endDate,
+      layers: parsedLayers,
+      memberId,
+    });
   }
 
   @Get('drilldown/:category')
@@ -106,28 +92,20 @@ export class AnalyticsController {
     const membershipId = req.membership?.id || req.membershipId;
     const userRole = req.membership?.accessRole || 'MEMBER';
 
-    return this.analyticsService.getDrilldown(
-      workspaceId,
-      membershipId,
-      userRole,
-      category,
-      {
-        startDate,
-        endDate,
-        status,
-        priority,
-        memberId,
-        search,
-        scope,
-        limit: limit ? parseInt(limit, 10) : undefined,
-        offset: offset ? parseInt(offset, 10) : undefined,
-      },
-      req.userContext,
-    );
+    return this.analyticsService.getDrilldown(workspaceId, membershipId, userRole, category, {
+      startDate,
+      endDate,
+      status,
+      priority,
+      memberId,
+      search,
+      scope,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
   }
 
   @Get('export/:category')
-  @RequirePermissions('reports:export')
   async exportData(
     @CurrentWorkspace() workspaceId: string,
     @Param('category') category: string,
@@ -151,7 +129,6 @@ export class AnalyticsController {
       category,
       format,
       { startDate, endDate, status, priority, memberId, scope },
-      req.userContext,
     );
 
     if (format === 'csv') {

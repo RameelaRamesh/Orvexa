@@ -53,24 +53,18 @@ export class CalendarController {
     const parsedLayers = layers ? layers.split(',') : undefined;
     const parsedMemberIds = memberIds ? memberIds.split(',').filter(Boolean) : undefined;
 
-    return this.calendarService.getEvents(
-      workspaceId,
-      membershipId,
-      userRole,
-      {
-        startDate,
-        endDate,
-        search,
-        type,
-        departmentId,
-        teamId,
-        status,
-        layers: parsedLayers,
-        scope,
-        memberIds: parsedMemberIds,
-      },
-      req.userContext,
-    );
+    return this.calendarService.getEvents(workspaceId, membershipId, userRole, {
+      startDate,
+      endDate,
+      search,
+      type,
+      departmentId,
+      teamId,
+      status,
+      layers: parsedLayers,
+      scope,
+      memberIds: parsedMemberIds,
+    });
   }
 
   @Post('events')
@@ -86,7 +80,7 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.createEvent(workspaceId, membershipId, userRole, dto, req.userContext);
+    return this.calendarService.createEvent(workspaceId, membershipId, userRole, dto);
   }
 
   @Put('events/:id')
@@ -103,7 +97,7 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.updateEvent(workspaceId, membershipId, userRole, id, dto, req.userContext);
+    return this.calendarService.updateEvent(workspaceId, membershipId, userRole, id, dto);
   }
 
   @Delete('events/:id')
@@ -119,7 +113,7 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.deleteEvent(workspaceId, membershipId, userRole, id, req.userContext);
+    return this.calendarService.deleteEvent(workspaceId, membershipId, userRole, id);
   }
 
   @Post('events/:id/rsvp')
@@ -136,7 +130,7 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.respondRsvp(workspaceId, membershipId, userRole, id, dto, req.userContext);
+    return this.calendarService.respondRsvp(workspaceId, membershipId, userRole, id, dto);
   }
 
   @Get('holidays')
@@ -165,7 +159,7 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.createCompanyHoliday(workspaceId, membershipId, userRole, dto, req.userContext);
+    return this.calendarService.createCompanyHoliday(workspaceId, membershipId, userRole, dto);
   }
 
   @Delete('holidays/:id')
@@ -183,6 +177,6 @@ export class CalendarController {
       'MEMBER'
     ).toString();
 
-    return this.calendarService.deleteCompanyHoliday(workspaceId, membershipId, userRole, id, req.userContext);
+    return this.calendarService.deleteCompanyHoliday(workspaceId, membershipId, userRole, id);
   }
 }

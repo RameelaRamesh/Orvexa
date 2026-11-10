@@ -11,14 +11,6 @@ import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../../infrastructure/mail/mail.service';
-import {
-  hasPermission,
-  inferScopeFromPermissions,
-  isTargetWithinScope,
-  normalizeDataScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class PeopleService {
@@ -61,10 +53,14 @@ export class PeopleService {
       };
     }
 
-    // Permission & Data scope enforcement (only OWNER has automatic global bypass)
-    if (userContext && userContext.accessRole !== 'OWNER') {
-      const scope = resolveEffectiveScope(userContext);
-      if (scope === 'ASSIGNED') {
+    // Data scope enforcement for non-Admins/Owners
+    if (
+      userContext &&
+      userContext.accessRole !== 'OWNER' &&
+      userContext.accessRole !== 'ADMIN'
+    ) {
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if (scope === 'ASSIGNED' || scope === 'OWN') {
         where.id = userContext.membershipId;
       } else if (scope === 'DEPARTMENT') {
         if (userContext.departmentId) {
@@ -73,21 +69,17 @@ export class PeopleService {
           where.id = userContext.membershipId;
         }
       } else if (scope === 'TEAM') {
-        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-        const teamIds = Array.from(new Set([...(userContext.teamId ? [userContext.teamId] : []), ...ledTeamIds]));
+        // Manager / Team Lead access: can view own record, assigned team members, and direct reports
         where.OR = [
           { id: userContext.membershipId },
-          ...(teamIds.length === 1
-            ? [{ teamId: teamIds[0] }]
-            : teamIds.length > 1
-            ? [{ teamId: { in: teamIds } }]
-            : []),
+          ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
           { reportsToId: userContext.membershipId },
         ];
       }
+      // If scope === 'GLOBAL' or 'ALL', global access across all departments is preserved
     }
 
-    const members = await this.prisma.membership.findMany({
+    return this.prisma.membership.findMany({
       where,
       include: {
         user: {
@@ -117,25 +109,9 @@ export class PeopleService {
       },
       orderBy: { createdAt: 'desc' },
     });
-    if (!userContext) return members;
-    return (members || []).map((m: any) => this.redactSensitiveFields(m, userContext));
   }
 
-  private redactSensitiveFields(member: any, userContext?: any) {
-    if (!member || !userContext) return member;
-    const isSelf = userContext.membershipId && member.id === userContext.membershipId;
-    const canViewSensitive =
-      isSelf ||
-      userContext.accessRole === 'OWNER' ||
-      hasPermission(userContext, ['people:view_sensitive', 'payroll:view']);
-    if (canViewSensitive || !member.emergencyContact) return member;
-    const ec = { ...(member.emergencyContact || {}) };
-    if (ec.bankDetails) ec.bankDetails = { redacted: true };
-    if (ec.identityDocs) ec.identityDocs = { redacted: true };
-    return { ...member, emergencyContact: ec };
-  }
-
-  async getMemberById(workspaceId: string, membershipId: string, userContext?: any) {
+  async getMemberById(workspaceId: string, membershipId: string) {
     const membership = await this.prisma.membership.findFirst({
       where: { id: membershipId, workspaceId },
       include: {
@@ -175,14 +151,6 @@ export class PeopleService {
       throw new NotFoundException('Member not found in workspace');
     }
 
-    if (userContext) {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!isTargetWithinScope(userContext, membership, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Member is outside your permitted team/department scope.');
-      }
-      return this.redactSensitiveFields(membership, userContext);
-    }
-
     return membership;
   }
 
@@ -203,7 +171,6 @@ export class PeopleService {
       emergencyContact?: any;
       dataScope?: string;
     },
-    userContext?: any,
   ) {
     const membership = await this.prisma.membership.findFirst({
       where: { id: membershipId, workspaceId },
@@ -211,20 +178,6 @@ export class PeopleService {
 
     if (!membership) {
       throw new NotFoundException('Member not found');
-    }
-
-    const canEditOthers = !userContext || hasPermission(userContext, ['people:edit', 'people:manage']);
-    if (userContext) {
-      const isSelf = userContext.membershipId === membershipId;
-      if (!isSelf && !canEditOthers) {
-        throw new ForbiddenException('Insufficient permissions: people:edit is required to edit other employee profiles.');
-      }
-      if (!isSelf) {
-        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-        if (!isTargetWithinScope(userContext, membership, ledTeamIds)) {
-          throw new ForbiddenException('Access denied: Employee is outside your department or team scope.');
-        }
-      }
     }
 
     // Update user info
@@ -262,45 +215,17 @@ export class PeopleService {
       });
     }
 
-    const isSelfUpdate = userContext?.membershipId === membershipId;
-    const canEditSensitive =
-      !userContext ||
-      isSelfUpdate ||
-      userContext.accessRole === 'OWNER' ||
-      hasPermission(userContext, ['people:view_sensitive', 'payroll:view']);
-
-    let nextEmergencyContact = data.emergencyContact;
-    if (nextEmergencyContact !== undefined && typeof nextEmergencyContact === 'object' && nextEmergencyContact !== null) {
-      const existingEc = (membership.emergencyContact as any) || {};
-      const mergedEc = { ...nextEmergencyContact };
-      if (!canEditSensitive || nextEmergencyContact?.bankDetails?.redacted) {
-        if (existingEc.bankDetails !== undefined) {
-          mergedEc.bankDetails = existingEc.bankDetails;
-        } else {
-          delete mergedEc.bankDetails;
-        }
-      }
-      if (!canEditSensitive || nextEmergencyContact?.identityDocs?.redacted) {
-        if (existingEc.identityDocs !== undefined) {
-          mergedEc.identityDocs = existingEc.identityDocs;
-        } else {
-          delete mergedEc.identityDocs;
-        }
-      }
-      nextEmergencyContact = mergedEc;
-    }
-
-    // Update membership employee info (non-editors updating self cannot alter org/scope metadata)
-    const updated = await this.prisma.membership.update({
+    // Update membership employee info
+    return this.prisma.membership.update({
       where: { id: membershipId },
       data: {
-        ...(canEditOthers && data.employeeId !== undefined ? { employeeId: data.employeeId } : {}),
-        ...(canEditOthers && data.employmentType !== undefined ? { employmentType: data.employmentType } : {}),
-        ...(canEditOthers && data.joiningDate ? { joiningDate: new Date(data.joiningDate) } : {}),
+        ...(data.employeeId !== undefined ? { employeeId: data.employeeId } : {}),
+        ...(data.employmentType !== undefined ? { employmentType: data.employmentType } : {}),
+        ...(data.joiningDate ? { joiningDate: new Date(data.joiningDate) } : {}),
         ...(data.workLocation !== undefined ? { workLocation: data.workLocation } : {}),
-        ...(canEditOthers && data.probationEndDate ? { probationEndDate: new Date(data.probationEndDate) } : {}),
-        ...(nextEmergencyContact !== undefined ? { emergencyContact: nextEmergencyContact } : {}),
-        ...(canEditOthers && data.dataScope ? { dataScope: data.dataScope } : {}),
+        ...(data.probationEndDate ? { probationEndDate: new Date(data.probationEndDate) } : {}),
+        ...(data.emergencyContact !== undefined ? { emergencyContact: data.emergencyContact } : {}),
+        ...(data.dataScope ? { dataScope: data.dataScope } : {}),
       },
       include: {
         user: true,
@@ -310,7 +235,6 @@ export class PeopleService {
         designation: true,
       },
     });
-    return userContext ? this.redactSensitiveFields(updated, userContext) : updated;
   }
 
   async updateMemberOrgDetails(
@@ -329,7 +253,6 @@ export class PeopleService {
       reportsToId?: string;
       dataScope?: string;
     },
-    userContext?: any,
   ) {
     const cleanId = (id?: string) => (id && id.trim().length > 0 ? id.trim() : null);
 
@@ -339,20 +262,6 @@ export class PeopleService {
 
     if (!membership) {
       throw new NotFoundException('Member not found');
-    }
-
-    if (userContext) {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!isTargetWithinScope(userContext, membership, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: Employee is outside your department or team scope.');
-      }
-      const isRoleChanging =
-        (data.roleId !== undefined && data.roleId !== membership.roleId) ||
-        (data.accessRole !== undefined && data.accessRole !== membership.accessRole) ||
-        (data.dataScope !== undefined && normalizeDataScope(data.dataScope) !== normalizeDataScope(membership.dataScope));
-      if (isRoleChanging && !hasPermission(userContext, 'roles:manage')) {
-        throw new ForbiddenException('Insufficient permissions: roles:manage is required to reassign member roles or visibility scope.');
-      }
     }
 
     // Protect sole Owner demotion
@@ -414,20 +323,6 @@ export class PeopleService {
       }
     }
 
-    let syncedDataScope = data.dataScope ? normalizeDataScope(data.dataScope) : undefined;
-    if (!syncedDataScope && data.roleId && this.prisma.role?.findUnique) {
-      try {
-        const assignedRole = await this.prisma.role.findUnique({
-          where: { id: data.roleId },
-          include: { permissions: { include: { permission: true } } },
-        });
-        const roleCodes = (assignedRole?.permissions || []).map((rp: any) => rp.permission?.code).filter(Boolean);
-        if (roleCodes.some((c: string) => c.startsWith('scope:'))) {
-          syncedDataScope = inferScopeFromPermissions(roleCodes, membership.dataScope);
-        }
-      } catch {}
-    }
-
     return this.prisma.membership.update({
       where: { id: membershipId },
       data: {
@@ -437,7 +332,7 @@ export class PeopleService {
         ...(data.teamId !== undefined ? { teamId: cleanId(data.teamId) } : {}),
         ...(finalDesignationId !== undefined ? { designationId: finalDesignationId } : {}),
         ...(data.reportsToId !== undefined ? { reportsToId: cleanId(data.reportsToId) } : {}),
-        ...(syncedDataScope ? { dataScope: syncedDataScope } : {}),
+        ...(data.dataScope ? { dataScope: data.dataScope } : {}),
       },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true } },
@@ -466,7 +361,6 @@ export class PeopleService {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
-      saveDesignationMapping?: boolean;
     },
   ) {
     const emailLower = data.email.toLowerCase().trim();
@@ -551,36 +445,6 @@ export class PeopleService {
       data: { status: 'REVOKED' },
     });
 
-    let resolvedScope = data.dataScope ? normalizeDataScope(data.dataScope) : undefined;
-    if (!resolvedScope && roleId && this.prisma.role?.findUnique) {
-      try {
-        const assignedRole = await this.prisma.role.findUnique({
-          where: { id: roleId },
-          include: { permissions: { include: { permission: true } } },
-        });
-        const roleCodes = (assignedRole?.permissions || []).map((rp: any) => rp.permission?.code).filter(Boolean);
-        if (roleCodes.some((c: string) => c.startsWith('scope:'))) {
-          resolvedScope = inferScopeFromPermissions(roleCodes);
-        }
-      } catch {}
-    }
-    if (!resolvedScope) {
-      const ar = data.accessRole || 'MEMBER';
-      resolvedScope = ar === 'OWNER' || ar === 'ADMIN' ? 'GLOBAL' : ar === 'MANAGER' ? 'TEAM' : 'ASSIGNED';
-    }
-
-    if (data.saveDesignationMapping && data.designationTitle?.trim() && roleId && this.prisma.workspace?.findUnique && this.prisma.workspace?.update) {
-      try {
-        const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
-        const settings = (ws?.settings as any) || {};
-        const designationRoleMap = { ...(settings.designationRoleMap || {}), [data.designationTitle.trim().toLowerCase()]: roleId };
-        await this.prisma.workspace.update({
-          where: { id: workspaceId },
-          data: { settings: { ...settings, designationRoleMap } },
-        });
-      } catch {}
-    }
-
     const invitation = await this.prisma.invitation.create({
       data: {
         workspaceId,
@@ -593,7 +457,6 @@ export class PeopleService {
         teamId: cleanId(data.teamId),
         designationId,
         reportsToId: cleanId(data.reportsToId),
-        dataScope: resolvedScope,
         token,
         status: 'PENDING',
         invitedByUserId,
@@ -633,64 +496,6 @@ export class PeopleService {
       senderEmail: inviterEmail,
       emailDelivered: mailResult.delivered,
       hasSmtp: this.mailService.hasSmtp,
-    };
-  }
-
-  async bulkInviteMembers(
-    workspaceId: string,
-    invitedByUserId: string,
-    dto: { members: Array<any>; shared?: any },
-  ) {
-    const rows = Array.isArray(dto?.members) ? dto.members.filter((m) => m?.email?.trim()) : [];
-    if (rows.length === 0) {
-      throw new BadRequestException('At least one member with a valid email address is required for bulk invitation.');
-    }
-
-    const activeSub = await this.prisma.subscription.findFirst({
-      where: { workspaceId, status: { in: ['ACTIVE', 'TRIALING', 'PAST_DUE'] } },
-    });
-    const activeMembersCount = await this.prisma.membership.count({ where: { workspaceId, status: 'ACTIVE' } });
-    const pendingInvitationsCount = await this.prisma.invitation.count({ where: { workspaceId, status: 'PENDING' } });
-    const maxSeats = activeSub?.seatCount || 5;
-
-    if (activeMembersCount + pendingInvitationsCount + rows.length > maxSeats) {
-      const remaining = Math.max(0, maxSeats - (activeMembersCount + pendingInvitationsCount));
-      throw new BadRequestException(
-        `Seat limit exceeded: trying to invite ${rows.length} members, but only ${remaining} seat(s) remaining out of ${maxSeats}.`,
-      );
-    }
-
-    const shared = dto.shared || {};
-    const results: Array<{ email: string; firstName: string; lastName: string; status: 'SENT' | 'FAILED'; error?: string; inviteLink?: string }> = [];
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const email = (row.email || '').trim().toLowerCase();
-      const firstName = (row.firstName || '').trim() || email.split('@')[0];
-      const lastName = (row.lastName || '').trim() || 'Member';
-      try {
-        const res = await this.inviteMember(workspaceId, invitedByUserId, {
-          ...shared,
-          ...row,
-          email,
-          firstName,
-          lastName,
-          saveDesignationMapping: i === 0 ? Boolean(shared.saveDesignationMapping) : false,
-        });
-        results.push({ email, firstName, lastName, status: 'SENT', inviteLink: res.inviteLink });
-      } catch (err: any) {
-        results.push({ email, firstName, lastName, status: 'FAILED', error: err?.message || 'Failed to invite' });
-      }
-    }
-
-    const sentCount = results.filter((r) => r.status === 'SENT').length;
-    const failedCount = results.length - sentCount;
-    return {
-      message: `Bulk invite processed: ${sentCount} sent, ${failedCount} failed.`,
-      totalRequested: results.length,
-      sentCount,
-      failedCount,
-      results,
     };
   }
 
@@ -788,14 +593,6 @@ export class PeopleService {
       ).id;
     }
 
-    const resolvedScope = (invitation as any).dataScope
-      ? normalizeDataScope((invitation as any).dataScope)
-      : invitation.accessRole === 'OWNER' || invitation.accessRole === 'ADMIN'
-      ? 'GLOBAL'
-      : invitation.accessRole === 'MANAGER'
-      ? 'TEAM'
-      : 'ASSIGNED';
-
     // Upsert membership
     const membership = await this.prisma.membership.upsert({
       where: { userId_workspaceId: { userId: user.id, workspaceId: invitation.workspaceId } },
@@ -806,7 +603,6 @@ export class PeopleService {
         teamId: invitation.teamId,
         designationId: invitation.designationId,
         reportsToId: invitation.reportsToId,
-        dataScope: resolvedScope,
         status: 'ACTIVE',
       },
       create: {
@@ -818,7 +614,6 @@ export class PeopleService {
         teamId: invitation.teamId,
         designationId: invitation.designationId,
         reportsToId: invitation.reportsToId,
-        dataScope: resolvedScope,
         invitedByUserId: invitation.invitedByUserId,
         status: 'ACTIVE',
       },
@@ -1165,24 +960,12 @@ export class PeopleService {
   // PROFILE COMPLETENESS & ONBOARDING TASKS (PHASE 10 REQUIREMENT 2)
   // ---------------------------------------------------------------------------
 
-  async getProfileCompleteness(workspaceId: string, membershipId: string, userContext?: any) {
+  async getProfileCompleteness(workspaceId: string, membershipId: string) {
     const membership = await this.prisma.membership.findFirst({
       where: { id: membershipId, workspaceId },
       include: { user: true, designation: true, department: true, team: true },
     });
     if (!membership) throw new NotFoundException('Member not found');
-    if (userContext) {
-      const isSelf = userContext.membershipId === membershipId;
-      if (!isSelf && !hasPermission(userContext, ['onboarding:manage', 'people:manage', 'people:view'])) {
-        throw new ForbiddenException('Insufficient permissions to view onboarding completeness.');
-      }
-      if (!isSelf && !hasPermission(userContext, 'onboarding:manage')) {
-        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-        if (!isTargetWithinScope(userContext, membership, ledTeamIds)) {
-          throw new ForbiddenException('Access denied: Member is outside your permitted scope.');
-        }
-      }
-    }
 
     const fieldsToCheck: Array<{ field: string; label: string; value: any }> = [
       { field: 'firstName', label: 'First Name', value: membership.user?.firstName },
@@ -1221,10 +1004,7 @@ export class PeopleService {
     };
   }
 
-  async sendIncompleteProfileReminder(workspaceId: string, membershipId: string, actorMembershipId: string, userContext?: any) {
-    if (userContext && !hasPermission(userContext, ['onboarding:manage', 'people:manage'])) {
-      throw new ForbiddenException('Insufficient permissions: onboarding:manage or people:manage required.');
-    }
+  async sendIncompleteProfileReminder(workspaceId: string, membershipId: string, actorMembershipId: string) {
     const completeness = await this.getProfileCompleteness(workspaceId, membershipId);
     const member = await this.prisma.membership.findFirst({
       where: { id: membershipId, workspaceId },
@@ -1261,10 +1041,7 @@ export class PeopleService {
     };
   }
 
-  async updateOnboardingTasks(workspaceId: string, membershipId: string, tasks: any[], userContext?: any) {
-    if (userContext && userContext.membershipId !== membershipId && !hasPermission(userContext, ['onboarding:manage', 'people:manage'])) {
-      throw new ForbiddenException('Insufficient permissions: onboarding:manage or people:manage required.');
-    }
+  async updateOnboardingTasks(workspaceId: string, membershipId: string, tasks: any[]) {
     const ws = await this.prisma.workspace.findUnique({ where: { id: workspaceId }, select: { settings: true } });
     const settings: any = (ws?.settings as object) || {};
     const onboardingTasksMap = settings.employeeOnboardingTasks || {};
@@ -1311,20 +1088,14 @@ export class PeopleService {
       throw new NotFoundException('Member not found in workspace');
     }
 
-    // Permission check when called through HTTP guard context (no ADMIN auto-bypass)
-    if (userContext && Array.isArray(userContext.permissionCodes) && userContext.accessRole !== 'OWNER') {
-      const isSelf = userContext.membershipId === membershipId;
-      if (!isSelf && !hasPermission(userContext, 'payroll:view')) {
-        throw new ForbiddenException(
-          'Insufficient permissions: payroll:view required to access another employee payroll record.',
-        );
-      }
-    }
-
     // Strict record-level data scope enforcement on sensitive payroll data
-    if (userContext && userContext.accessRole !== 'OWNER') {
-      const scope = resolveEffectiveScope(userContext);
-      if (scope === 'ASSIGNED' && userContext.membershipId !== membershipId) {
+    if (
+      userContext &&
+      userContext.accessRole !== 'OWNER' &&
+      userContext.accessRole !== 'ADMIN'
+    ) {
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if ((scope === 'ASSIGNED' || scope === 'OWN') && userContext.membershipId !== membershipId) {
         throw new ForbiddenException(
           'Restricted payroll data: Your data scope is restricted to your own record.',
         );
@@ -1334,18 +1105,15 @@ export class PeopleService {
           'Restricted payroll data: Member is outside your department boundary.',
         );
       }
-      if (scope === 'TEAM') {
-        const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-        const inTeam =
-          userContext.membershipId === membershipId ||
-          membership.reportsToId === userContext.membershipId ||
-          (userContext.teamId && userContext.teamId === membership.teamId) ||
-          (membership.teamId && ledTeamIds.includes(membership.teamId));
-        if (!inTeam) {
-          throw new ForbiddenException(
-            'Restricted payroll data: Member is outside your assigned team or direct reports.',
-          );
-        }
+      if (
+        scope === 'TEAM' &&
+        userContext.membershipId !== membershipId &&
+        membership.reportsToId !== userContext.membershipId &&
+        userContext.teamId !== membership.teamId
+      ) {
+        throw new ForbiddenException(
+          'Restricted payroll data: Member is outside your assigned team or direct reports.',
+        );
       }
     }
 

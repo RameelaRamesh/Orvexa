@@ -13,7 +13,6 @@ export class InMemoryDatabase {
   teams: any[] = [];
   departments: any[] = [];
   designations: any[] = [];
-  invitations: any[] = [];
   notifications: any[] = [];
   tickets: any[] = [];
   tasks: any[] = [];
@@ -23,7 +22,6 @@ export class InMemoryDatabase {
   holidays: any[] = [];
   attendances: any[] = [];
   qualityReviews: any[] = [];
-  workItems: any[] = [];
   calendarEvents: any[] = [];
 
   constructor() {
@@ -177,14 +175,6 @@ export class InMemoryDatabase {
       { code: 'people:delete', name: 'Deactivate & Offboard Employees', module: 'People' },
       { code: 'people:export', name: 'Export Employee Records', module: 'People' },
       { code: 'people:manage', name: 'Full People Administration', module: 'People' },
-      { code: 'onboarding:manage', name: 'Manage Employee Onboarding & Checklists', module: 'People' },
-      { code: 'people:view_sensitive', name: 'View Bank Account, PAN, Aadhaar & Compensation PII', module: 'People' },
-
-      // Scope
-      { code: 'scope:own', name: 'View Own Records Only', module: 'Scope' },
-      { code: 'scope:team', name: 'View Assigned Team & Direct Reports Records', module: 'Scope' },
-      { code: 'scope:department', name: 'View Assigned Department Records', module: 'Scope' },
-      { code: 'scope:workspace', name: 'View Entire Workspace Records', module: 'Scope' },
 
       // Projects
       { code: 'projects:view', name: 'View Work Projects', module: 'Projects' },
@@ -310,8 +300,7 @@ export class InMemoryDatabase {
       'inventory:view', 'inventory:move',
       'ledger:view', 'ledger:export',
       'documents:view', 'documents:upload', 'documents:download',
-      'scope:team',
-      'calendar:view:team', 'calendar:view:schedules', 'calendar:create', 'calendar:invite', 'calendar:manage',
+      'calendar:view:department', 'calendar:view:team', 'calendar:create', 'calendar:invite', 'calendar:manage',
     ];
     const memberPermCodes = [
       'tasks:view', 'tasks:create', 'tasks:edit',
@@ -322,7 +311,6 @@ export class InMemoryDatabase {
       'leave:view', 'leave:apply',
       'approvals:view',
       'people:view',
-      'scope:own',
       'calendar:create', 'calendar:invite',
     ];
 
@@ -450,8 +438,6 @@ export class InMemoryDatabase {
           if (where.id && item.id !== where.id) return false;
           if (where.email && item.email?.toLowerCase() !== where.email.toLowerCase()) return false;
           if (where.slug && item.slug !== where.slug) return false;
-          if (where.token && item.token !== where.token) return false;
-          if (where.code && item.code !== where.code) return false;
           if (where.userId_workspaceId) {
             if (item.userId !== where.userId_workspaceId.userId || item.workspaceId !== where.userId_workspaceId.workspaceId) return false;
           }
@@ -612,22 +598,6 @@ export class InMemoryDatabase {
         const assignee = this.memberships.find((m) => m.id === item.assigneeMembershipId);
         if (!assignee) return false;
         if (!this.matchWhere(assignee, val)) return false;
-      } else if (key === 'membership' && typeof val === 'object') {
-        const membership = this.memberships.find((m) => m.id === item.membershipId);
-        if (!membership) return false;
-        if (!this.matchWhere(membership, val)) return false;
-      } else if (key === 'assignedTo' && typeof val === 'object') {
-        const assignedTo = this.memberships.find((m) => m.id === item.assignedToMembershipId);
-        if (!assignedTo) return false;
-        if (!this.matchWhere(assignedTo, val)) return false;
-      } else if (key === 'team' && typeof val === 'object') {
-        const team = this.teams.find((t) => t.id === item.teamId);
-        if (!team) return false;
-        if (!this.matchWhere(team, val)) return false;
-      } else if (key === 'user' && typeof val === 'object') {
-        const user = this.users.find((u) => u.id === item.userId);
-        if (!user) return false;
-        if (!this.matchWhere(user, val)) return false;
       } else if (key === 'project' && typeof val === 'object') {
         const project = this.projects.find((p) => p.id === item.projectId);
         if (!project) return false;
@@ -799,41 +769,6 @@ export class InMemoryDatabase {
       if (include?.recipient) {
         const mem = this.memberships.find((m) => m.id === item.recipientMembershipId);
         cloned.recipient = mem ? this.hydrate(mem, 'memberships', include.recipient.include) : null;
-      }
-    } else if (collection === 'invitations') {
-      if (include?.workspace) {
-        cloned.workspace = this.workspaces.find((w) => w.id === item.workspaceId) || null;
-      }
-      if (include?.invitedBy) {
-        cloned.invitedBy = this.users.find((u) => u.id === item.invitedByUserId) || null;
-      }
-    } else if (collection === 'leaveRequests' || collection === 'attendances') {
-      if (include?.membership) {
-        const mem = this.memberships.find((m) => m.id === item.membershipId);
-        cloned.membership = mem ? this.hydrate(mem, 'memberships', include.membership.include || { user: true, department: true, team: true }) : null;
-      }
-      if (include?.approvedBy && item.approvedByMembershipId) {
-        const mem = this.memberships.find((m) => m.id === item.approvedByMembershipId);
-        cloned.approvedBy = mem ? this.hydrate(mem, 'memberships', include.approvedBy.include || { user: true }) : null;
-      }
-    } else if (collection === 'assets') {
-      if (include?.assignedTo && item.assignedToMembershipId) {
-        const mem = this.memberships.find((m) => m.id === item.assignedToMembershipId);
-        cloned.assignedTo = mem ? this.hydrate(mem, 'memberships', include.assignedTo.include || { user: true, department: true, team: true }) : null;
-      }
-    } else if (collection === 'workItems') {
-      if (include?.assignedMembership && item.assignedMembershipId) {
-        const mem = this.memberships.find((m) => m.id === item.assignedMembershipId);
-        cloned.assignedMembership = mem ? this.hydrate(mem, 'memberships', include.assignedMembership.include || { user: true, department: true, team: true }) : null;
-      }
-    } else if (collection === 'qualityReviews') {
-      if (include?.workItem && item.workItemId) {
-        const wi = this.workItems.find((w) => w.id === item.workItemId);
-        cloned.workItem = wi ? this.hydrate(wi, 'workItems', include.workItem.include || {}) : null;
-      }
-      if (include?.reviewer && item.reviewerMembershipId) {
-        const mem = this.memberships.find((m) => m.id === item.reviewerMembershipId);
-        cloned.reviewer = mem ? this.hydrate(mem, 'memberships', include.reviewer.include || { user: true, department: true, team: true }) : null;
       }
     }
 

@@ -1,11 +1,6 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ProjectStatus, PriorityLevel } from '@prisma/client';
-import {
-  isTargetWithinScope,
-  resolveEffectiveScope,
-  resolveLedTeamIds,
-} from '../../common/utils/access-scope.util';
 
 @Injectable()
 export class ProjectsService {
@@ -45,53 +40,11 @@ export class ProjectsService {
     return allMeta[projectId];
   }
 
-  private isProjectVisibleToActor(
-    projectId: string,
-    meta: any,
-    memberships: any[],
-    projTasks: any[],
-    userContext: any,
-    ledTeamIds: string[],
-  ): boolean {
-    if (!userContext) return true;
-    const effectiveScope = resolveEffectiveScope(userContext);
-    if (effectiveScope === 'GLOBAL') return true;
-
-    const memId = userContext.membershipId;
-    const memberIds: string[] = meta.memberMembershipIds || [];
-    const isDirect =
-      (memId && meta.managerMembershipId === memId) ||
-      (memId && memberIds.includes(memId)) ||
-      (memId && projTasks.some((t: any) => t.assigneeMembershipId === memId));
-    if (isDirect) return true;
-    if (effectiveScope === 'ASSIGNED') return false;
-
-    if (effectiveScope === 'DEPARTMENT') {
-      if (!userContext.departmentId) return false;
-      if (meta.departmentId) return meta.departmentId === userContext.departmentId;
-      const involvedMems = memberships.filter(
-        (m) => m.id === meta.managerMembershipId || memberIds.includes(m.id) || projTasks.some((t: any) => t.assigneeMembershipId === m.id),
-      );
-      return involvedMems.some((m) => m.departmentId === userContext.departmentId);
-    }
-
-    // TEAM scope
-    if (meta.departmentId && userContext.departmentId && meta.departmentId !== userContext.departmentId) {
-      return false;
-    }
-    const managerMem = meta.managerMembershipId ? memberships.find((m) => m.id === meta.managerMembershipId) : null;
-    if (managerMem && isTargetWithinScope(userContext, managerMem, ledTeamIds)) return true;
-    const teamMembersInProj = memberships.filter((m) => memberIds.includes(m.id));
-    if (teamMembersInProj.some((m) => isTargetWithinScope(userContext, m, ledTeamIds))) return true;
-    const taskAssignees = memberships.filter((m) => projTasks.some((t: any) => t.assigneeMembershipId === m.id));
-    return taskAssignees.some((m) => isTargetWithinScope(userContext, m, ledTeamIds));
-  }
-
-  async list(workspaceId: string, status?: ProjectStatus, userContext?: any) {
+  async list(workspaceId: string, status?: ProjectStatus) {
     const where: any = { workspaceId };
     if (status) where.status = status;
 
-    const [projects, tasks, memberships, departments, allMeta, ledTeamIds] = await Promise.all([
+    const [projects, tasks, memberships, departments, allMeta] = await Promise.all([
       this.prisma.project.findMany({
         where,
         include: {
@@ -102,7 +55,7 @@ export class ProjectsService {
       }),
       this.prisma.task.findMany({
         where: { workspaceId, projectId: { not: null } },
-        select: { id: true, projectId: true, status: true, assigneeMembershipId: true },
+        select: { id: true, projectId: true, status: true },
       }),
       this.prisma.membership.findMany({
         where: { workspaceId },
@@ -116,18 +69,9 @@ export class ProjectsService {
         where: { workspaceId },
       }),
       this.getWorkspaceProjectMetadata(workspaceId),
-      userContext?.membershipId ? resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId) : Promise.resolve([]),
     ]);
 
-    const visibleProjects = userContext
-      ? projects.filter((proj) => {
-          const meta = allMeta[proj.id] || {};
-          const projTasks = tasks.filter((t) => t.projectId === proj.id);
-          return this.isProjectVisibleToActor(proj.id, meta, memberships, projTasks, userContext, ledTeamIds);
-        })
-      : projects;
-
-    return visibleProjects.map((proj) => {
+    return projects.map((proj) => {
       const meta = allMeta[proj.id] || {};
       const projTasks = tasks.filter((t) => t.projectId === proj.id);
       const totalTasks = projTasks.length;
@@ -162,7 +106,7 @@ export class ProjectsService {
     });
   }
 
-  async getById(id: string, workspaceId: string, userContext?: any) {
+  async getById(id: string, workspaceId: string) {
     const project = await this.prisma.project.findFirst({
       where: { id, workspaceId },
       include: { client: true },
@@ -197,12 +141,6 @@ export class ProjectsService {
     ]);
 
     const meta = allMeta[id] || {};
-    if (userContext) {
-      const ledTeamIds = await resolveLedTeamIds(this.prisma, workspaceId, userContext.membershipId);
-      if (!this.isProjectVisibleToActor(id, meta, memberships, tasks, userContext, ledTeamIds)) {
-        throw new ForbiddenException('Access denied: This project is outside your team or department visibility scope');
-      }
-    }
     const totalTasks = tasks.length;
     const completedTasks = tasks.filter((t) => t.status === 'COMPLETED').length;
     const inProgressTasks = tasks.filter((t) => t.status === 'IN_PROGRESS').length;

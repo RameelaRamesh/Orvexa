@@ -29,7 +29,6 @@ import {
   Eye,
   AlertTriangle,
 } from 'lucide-react';
-import { checkPermission } from '@/lib/permissions';
 import { toast } from 'sonner';
 
 export default function PayrollPage() {
@@ -41,18 +40,6 @@ export default function PayrollPage() {
   const [reports, setReports] = useState<any>(null);
   const [people, setPeople] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentMembership, setCurrentMembership] = useState<any>(() => {
-    if (typeof window === 'undefined') return null;
-    try {
-      const raw = localStorage.getItem('orvexa_cached_workspace');
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  });
-
-  const canViewPayroll = checkPermission(currentMembership, 'payroll:view');
-  const canEditPayroll = checkPermission(currentMembership, 'payroll:edit') || checkPermission(currentMembership, 'payroll:manage');
-  const canApprovePayroll = checkPermission(currentMembership, 'payroll:approve') || checkPermission(currentMembership, 'payroll:manage');
-  const canManagePayrollConfig = checkPermission(currentMembership, 'payroll:manage');
 
   // Modals
   const [showCreatePeriodModal, setShowCreatePeriodModal] = useState(false);
@@ -92,20 +79,12 @@ export default function PayrollPage() {
     setLoading(true);
     try {
       const headers = getHeaders();
-      const [meRes, periodsRes, configRes, reportsRes, peopleRes] = await Promise.all([
-        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }).catch(() => null),
+      const [periodsRes, configRes, reportsRes, peopleRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/payroll/periods`, { headers }),
         fetch(`${BRANDING.apiUrl}/payroll/config`, { headers }),
         fetch(`${BRANDING.apiUrl}/payroll/reports`, { headers }),
         fetch(`${BRANDING.apiUrl}/people`, { headers }),
       ]);
-      if (meRes && meRes.ok) {
-        const meJson = await meRes.json();
-        const meData = meJson?.data !== undefined ? meJson.data : meJson;
-        const mems = meData?.memberships || meData?.user?.memberships || [];
-        const matched = mems.find((m: any) => m.workspaceId === wsId || m.workspace?.id === wsId) || mems[0];
-        if (matched) setCurrentMembership(matched);
-      }
 
       const rawPeriods = await periodsRes.json();
       const rawConfig = await configRes.json();
@@ -291,23 +270,14 @@ export default function PayrollPage() {
         </button>
       </div>
         <div className="flex items-center gap-2 justify-end">
-          {!canEditPayroll && !canApprovePayroll && !canManagePayrollConfig && (
-            <Badge variant="outline" className="text-[11px] font-medium text-muted-foreground">
-              View Only ({currentMembership?.role?.name || 'Custom Role'})
-            </Badge>
-          )}
-          {canManagePayrollConfig && (
-            <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
-              <Settings className="mr-1.5 h-4 w-4" />
-              Payroll Rules
-            </Button>
-          )}
-          {canEditPayroll && (
-            <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
-              <Plus className="mr-1.5 h-4 w-4" />
-              New Payroll Period
-            </Button>
-          )}
+          <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
+            <Settings className="mr-1.5 h-4 w-4" />
+            Payroll Rules
+          </Button>
+          <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
+            <Plus className="mr-1.5 h-4 w-4" />
+            New Payroll Period
+          </Button>
         </div>
       </div>
 
@@ -386,18 +356,16 @@ export default function PayrollPage() {
                   <div className="flex items-center gap-2">
                     {selectedPeriod.status !== 'APPROVED' && selectedPeriod.status !== 'PAID' && (
                       <>
-                        {canEditPayroll && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleCalculatePeriod(selectedPeriod.id)}
-                            className="text-xs"
-                          >
-                            <Play className="mr-1 h-3.5 w-3.5 text-primary" />
-                            {selectedPeriod.status === 'CALCULATED' ? 'Recalculate' : 'Run Calculation'}
-                          </Button>
-                        )}
-                        {selectedPeriod.status === 'CALCULATED' && canApprovePayroll && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleCalculatePeriod(selectedPeriod.id)}
+                          className="text-xs"
+                        >
+                          <Play className="mr-1 h-3.5 w-3.5 text-primary" />
+                          {selectedPeriod.status === 'CALCULATED' ? 'Recalculate' : 'Run Calculation'}
+                        </Button>
+                        {selectedPeriod.status === 'CALCULATED' && (
                           <Button
                             size="sm"
                             onClick={() => handleApprovePeriod(selectedPeriod.id)}

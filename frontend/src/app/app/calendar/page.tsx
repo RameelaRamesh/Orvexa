@@ -40,7 +40,6 @@ import {
   CalendarOff,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { checkPermission, getEffectiveScope } from '@/lib/permissions';
 
 interface CalendarEvent {
   id: string;
@@ -175,7 +174,6 @@ export default function UnifiedCalendarPage() {
   const [token, setToken] = useState<string | null>(null);
   const [wsId, setWsId] = useState<string | null>(null);
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
-  const [currentMembership, setCurrentMembership] = useState<any>(null);
   const [currentUserRole, setCurrentUserRole] = useState<string>('MEMBER');
   const [departments, setDepartments] = useState<any[]>([]);
   const [teams, setTeams] = useState<any[]>([]);
@@ -187,39 +185,13 @@ export default function UnifiedCalendarPage() {
   const [userDepartmentId, setUserDepartmentId] = useState<string>('');
   const [userTeamId, setUserTeamId] = useState<string>('');
 
-  const effectiveScope = getEffectiveScope(currentMembership);
-  const canViewWorkspace =
-    effectiveScope === 'GLOBAL' ||
-    checkPermission(currentMembership, 'calendar:view:all') ||
-    checkPermission(currentMembership, 'scope:workspace');
-  const canViewDept =
-    canViewWorkspace ||
-    effectiveScope === 'DEPARTMENT' ||
-    checkPermission(currentMembership, 'calendar:view:department') ||
-    checkPermission(currentMembership, 'scope:department');
-  const canViewTeam =
-    canViewDept ||
-    effectiveScope === 'TEAM' ||
-    checkPermission(currentMembership, 'calendar:view:team') ||
-    checkPermission(currentMembership, 'scope:team');
-  const canSelectPeople =
-    canViewTeam ||
-    checkPermission(currentMembership, 'calendar:view:schedules');
-  const [canCreateServer, setCanCreateServer] = useState<boolean | null>(null);
-  const canCreateEvents =
-    canCreateServer ??
-    (currentMembership
-      ? checkPermission(currentMembership, 'calendar:create') || checkPermission(currentMembership, 'calendar:manage')
-      : true);
-  const canManageEvents = checkPermission(currentMembership, 'calendar:manage');
-  const canApproveLeave =
-    checkPermission(currentMembership, 'leave:approve') ||
-    checkPermission(currentMembership, 'leave:manage');
+  const roleUpper = (currentUserRole || 'MEMBER').toUpperCase();
+  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
+  const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
+  const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
+  const canSelectPeople = canViewWorkspace || roleUpper.includes('LEAD');
   const [canManageHolidaysServer, setCanManageHolidaysServer] = useState<boolean | null>(null);
-  const canManageHolidays =
-    canManageHolidaysServer ??
-    (checkPermission(currentMembership, 'calendar:holidays:manage') ||
-      checkPermission(currentMembership, 'settings:manage'));
+  const canManageHolidays = canManageHolidaysServer ?? (['OWNER', 'ADMIN'].includes(roleUpper) || roleUpper.includes('OWNER') || roleUpper.includes('ADMIN'));
 
   // Common Holidays & Festivals State
   const [holidayList, setHolidayList] = useState<any[]>([]);
@@ -323,20 +295,14 @@ export default function UnifiedCalendarPage() {
         if (wsObj?.id) setCurrentMembershipId(wsObj.id);
         if (wsObj?.membershipId) setCurrentMembershipId(wsObj.membershipId);
         if (wsObj?.accessRole || wsObj?.role) setCurrentUserRole(wsObj.accessRole || wsObj.role);
-        if (wsObj) setCurrentMembership(wsObj);
       } catch {}
     }
     if (p) {
       try {
         const prof = JSON.parse(p);
-        const list = prof?.memberships || [];
-        const matched = (activeWs ? list.find((m: any) => m.workspaceId === activeWs) : null) || list[0];
-        if (matched?.id) {
-          setCurrentMembership((prev: any) => prev || matched);
-          setCurrentMembershipId((prev) => prev || matched.id);
-          if (matched.accessRole) setCurrentUserRole(matched.accessRole);
-          if (matched.departmentId) setUserDepartmentId(matched.departmentId);
-          if (matched.teamId) setUserTeamId(matched.teamId);
+        if (prof?.memberships && prof.memberships[0]?.id) {
+          if (!currentMembershipId) setCurrentMembershipId(prof.memberships[0].id);
+          if (prof.memberships[0].accessRole) setCurrentUserRole(prof.memberships[0].accessRole);
         }
       } catch {}
     }
@@ -456,9 +422,6 @@ export default function UnifiedCalendarPage() {
         );
         if (data.metadata?.canManageHolidays !== undefined) {
           setCanManageHolidaysServer(Boolean(data.metadata.canManageHolidays));
-        }
-        if (data.metadata?.canCreate !== undefined) {
-          setCanCreateServer(Boolean(data.metadata.canCreate));
         }
         if (data.metadata?.userRole) {
           setCurrentUserRole(data.metadata.userRole);
@@ -672,31 +635,11 @@ export default function UnifiedCalendarPage() {
     };
 
     try {
-      const [deptRes, teamRes, peopleRes, meRes] = await Promise.all([
+      const [deptRes, teamRes, peopleRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/departments`, { headers }).catch(() => null),
         fetch(`${BRANDING.apiUrl}/teams`, { headers }).catch(() => null),
         fetch(`${BRANDING.apiUrl}/people`, { headers }).catch(() => null),
-        fetch(`${BRANDING.apiUrl}/auth/me`, { headers }).catch(() => null),
       ]);
-
-      if (meRes && meRes.ok) {
-        const meJson = await meRes.json().catch(() => null);
-        const me = meJson?.data !== undefined ? meJson.data : meJson;
-        if (me?.memberships) {
-          const liveMem = me.memberships.find((m: any) => m.workspaceId === activeWs) || me.memberships[0];
-          if (liveMem) {
-            setCurrentMembership(liveMem);
-            if (liveMem.id) setCurrentMembershipId(liveMem.id);
-            if (liveMem.accessRole) setCurrentUserRole(liveMem.accessRole);
-            if (liveMem.departmentId || liveMem.department?.id) {
-              setUserDepartmentId(liveMem.departmentId || liveMem.department?.id);
-            }
-            if (liveMem.teamId || liveMem.team?.id) {
-              setUserTeamId(liveMem.teamId || liveMem.team?.id);
-            }
-          }
-        }
-      }
 
       if (deptRes && deptRes.ok) {
         const dJson = await deptRes.json();
@@ -949,9 +892,6 @@ export default function UnifiedCalendarPage() {
     setFormDescription('');
     setFormSelectedMembers([]);
     setMemberSearchTerm('');
-    if (!canViewWorkspace) {
-      setFormAudience(canViewDept ? 'DEPARTMENT' : canViewTeam ? 'TEAM' : 'INDIVIDUALS');
-    }
     fetchWorkspaceMeta();
     setIsCreateModalOpen(true);
   };
@@ -969,7 +909,7 @@ export default function UnifiedCalendarPage() {
     } else if (availableMembers.length > 0) {
       setLeaveMemberId(availableMembers[0].id);
     }
-    setLeaveStatus(canApproveLeave ? 'APPROVED' : 'PENDING');
+    setLeaveStatus(canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER') ? 'APPROVED' : 'PENDING');
     fetchWorkspaceMeta();
     setIsLeaveModalOpen(true);
   };
@@ -1073,7 +1013,7 @@ export default function UnifiedCalendarPage() {
             endDate: formEndDate || formStartDate,
             totalDays,
             reason: formTitle.trim() || formDescription.trim() || 'Manual Leave',
-            status: canApproveLeave ? 'APPROVED' : 'PENDING',
+            status: canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER') ? 'APPROVED' : 'PENDING',
           }),
         });
 
@@ -1683,27 +1623,24 @@ export default function UnifiedCalendarPage() {
               </Button>
 
 
-              {canCreateEvents && (
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    setFormType('MEETING');
-                    setFormAudience(canViewWorkspace ? 'ALL' : canViewDept ? 'DEPARTMENT' : canViewTeam ? 'TEAM' : 'INDIVIDUALS');
-                    handleOpenCreateModal();
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 gap-1.5 shadow-xs"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  New Meeting
-                </Button>
-              )}
-              {(canCreateEvents && (canViewWorkspace || canManageHolidays)) && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setFormType('MEETING');
+                  handleOpenCreateModal();
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 gap-1.5 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                New Meeting
+              </Button>
+              {canViewWorkspace && (
                 <Button
                   size="sm"
                   variant="outline"
                   onClick={() => {
                     setFormType('COMPANY_EVENT');
-                    setFormAudience(canViewWorkspace ? 'ALL' : canViewDept ? 'DEPARTMENT' : canViewTeam ? 'TEAM' : 'INDIVIDUALS');
+                    setFormAudience('ALL');
                     handleOpenCreateModal();
                   }}
                   className="text-xs h-8 gap-1.5 border-slate-300 hover:bg-slate-50 text-slate-700"
@@ -2433,7 +2370,7 @@ export default function UnifiedCalendarPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {(m.canEdit || m.organizer?.id === currentMembershipId || canManageEvents) && (
+                          {(m.canEdit || m.organizer?.id === currentMembershipId || canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')) && (
                             <button
                               type="button"
                               onClick={(e) => {
@@ -2710,9 +2647,9 @@ export default function UnifiedCalendarPage() {
                     onChange={(e: any) => setFormAudience(e.target.value)}
                     className="w-full px-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-blue-500 bg-white font-medium"
                   >
-                    {canViewWorkspace && <option value="ALL">Open to All (Entire Organization)</option>}
-                    {canViewTeam && <option value="TEAM">Team Members</option>}
-                    {canViewDept && <option value="DEPARTMENT">Departmental</option>}
+                    <option value="ALL">Open to All (Entire Organization)</option>
+                    <option value="TEAM">Team Members</option>
+                    <option value="DEPARTMENT">Departmental</option>
                     <option value="INDIVIDUALS">Specific Members</option>
                   </select>
                 </div>
@@ -3010,7 +2947,7 @@ export default function UnifiedCalendarPage() {
                 <div>
                   <h3 className="text-base font-bold text-slate-900">Apply / Manual Leave</h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    {canApproveLeave
+                    {canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')
                       ? 'Record manual leave for yourself or team members'
                       : 'Submit a leave request for schedule approval'}
                   </p>
@@ -3026,8 +2963,8 @@ export default function UnifiedCalendarPage() {
 
             {/* Modal Body Form */}
             <form onSubmit={handleSubmitLeave} className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
-              {/* Member Selection (If permitted leave approver with scoped members: select employee; else show self) */}
-              {(canApproveLeave && availableMembers.length > 1) ? (
+              {/* Member Selection (If Admin/Owner: select employee; else show self) */}
+              {(canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER') || availableMembers.length > 1) ? (
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Employee / Team Member <span className="text-rose-500">*</span>
@@ -3077,7 +3014,7 @@ export default function UnifiedCalendarPage() {
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Approval Status
                   </label>
-                  {canApproveLeave ? (
+                  {(canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')) ? (
                     <select
                       value={leaveStatus}
                       onChange={(e: any) => setLeaveStatus(e.target.value)}
@@ -3430,7 +3367,7 @@ export default function UnifiedCalendarPage() {
 
             {/* Modal Footer */}
             <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-              {(selectedEvent.canEdit || selectedEvent.organizer?.id === currentMembershipId || canManageEvents) &&
+              {(selectedEvent.canEdit || selectedEvent.organizer?.id === currentMembershipId || canManageHolidays || roleUpper.includes('ADMIN') || roleUpper.includes('OWNER')) &&
                !selectedEvent.id.startsWith('task-') && !selectedEvent.id.startsWith('pub_') && !selectedEvent.id.startsWith('leave-') ? (
                 <button
                   type="button"

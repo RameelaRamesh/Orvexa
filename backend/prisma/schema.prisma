@@ -151,7 +151,6 @@ model Invitation {
   teamId          String?
   designationId   String?
   reportsToId     String?
-  dataScope       String?          @default("ASSIGNED")
   token           String           @unique
   status          InvitationStatus @default(PENDING)
   invitedByUserId String
