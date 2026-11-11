@@ -13,6 +13,8 @@ interface ConversationMeta {
   lastMessageSnippet?: string;
   lastMessage?: string;
   lastMessageAt?: string;
+  lastMessageSenderMembershipId?: string;
+  unreadCount?: number;
   participantMembershipIds: string[];
 }
 
@@ -22,6 +24,8 @@ export function TeamNotificationListener() {
   const lastKnownMessageAtRef = useRef<Record<string, string>>({});
   const isInitializedRef = useRef<boolean>(false);
   const currentMembershipIdRef = useRef<string>('');
+  const currentUserIdRef = useRef<string>('');
+  const contextKeyRef = useRef<string>('');
 
   const getHeaders = () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -38,42 +42,56 @@ export function TeamNotificationListener() {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
     if (!token || !wsId) return;
 
-    // Fetch current membership id once
     const fetchMembership = async () => {
       try {
         const res = await fetch(`${BRANDING.apiUrl}/auth/me`, { headers: getHeaders() });
-        const data = await res.json();
-        if (data.success && data.data) {
-          const currentMem = data.data.memberships?.find((m: any) => m.workspaceId === wsId);
-          if (currentMem) {
-            currentMembershipIdRef.current = currentMem.id;
+        const raw = await res.json();
+        const profile = raw?.data !== undefined ? raw.data : raw;
+        if (profile) {
+          const nextUserId = profile.id || '';
+          const currentMem = profile.memberships?.find((m: any) => m.workspaceId === wsId);
+          const nextMemId = currentMem?.id || '';
+          const nextKey = `${nextUserId}:${wsId}:${nextMemId}`;
+          if (contextKeyRef.current !== nextKey) {
+            contextKeyRef.current = nextKey;
+            lastKnownMessageAtRef.current = {};
+            isInitializedRef.current = false;
           }
+          currentUserIdRef.current = nextUserId;
+          currentMembershipIdRef.current = nextMemId;
         }
-      } catch (e) {
-        // ignore
-      }
+      } catch {}
     };
     fetchMembership();
-  }, []);
+  }, [pathname]);
 
   useEffect(() => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
     if (!token || !wsId) return;
 
-    const pollInterval = setInterval(async () => {
-      // If user is currently on the communication page, that page handles its own live notifications
-      if (pathname === '/app/communication') return;
-
+    const pollConversations = async () => {
       try {
         const res = await fetch(`${BRANDING.apiUrl}/communication/conversations`, {
           headers: getHeaders(),
         });
         if (!res.ok) return;
         const json = await res.json();
-        if (!json.success || !Array.isArray(json.data)) return;
+        const convs: ConversationMeta[] = Array.isArray(json)
+          ? json
+          : Array.isArray(json?.data)
+            ? json.data
+            : [];
 
-        const convs: ConversationMeta[] = json.data;
+        const totalUnread = convs.reduce(
+          (sum, c) => sum + (typeof c.unreadCount === 'number' ? c.unreadCount : 0),
+          0,
+        );
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('chat-unread-updated', { detail: { totalUnread } }),
+          );
+        }
 
         // First run initializes baseline without alerting old history
         if (!isInitializedRef.current) {
@@ -86,11 +104,34 @@ export function TeamNotificationListener() {
           return;
         }
 
-        // Subsequent runs detect new messages across all conversations
+        // Communication page manages active chat view notifications itself
+        if (pathname === '/app/communication') {
+          convs.forEach((c) => {
+            if (c.lastMessageAt) {
+              lastKnownMessageAtRef.current[c.id] = c.lastMessageAt;
+            }
+          });
+          return;
+        }
+
+        // Detect new incoming messages sent by OTHER participants (never self)
         for (const c of convs) {
           const prevLastAt = lastKnownMessageAtRef.current[c.id];
-          if (c.lastMessageAt && prevLastAt && c.lastMessageAt !== prevLastAt) {
-            const title = c.displayName || c.name || (c.type === 'DIRECT' ? 'Direct Message' : 'Group Message');
+          const isFromOtherUser =
+            !c.lastMessageSenderMembershipId ||
+            !currentMembershipIdRef.current ||
+            c.lastMessageSenderMembershipId !== currentMembershipIdRef.current;
+          const hasUnread = c.unreadCount === undefined || c.unreadCount > 0;
+
+          if (
+            c.lastMessageAt &&
+            prevLastAt &&
+            c.lastMessageAt !== prevLastAt &&
+            isFromOtherUser &&
+            hasUnread
+          ) {
+            const title =
+              c.displayName || c.name || (c.type === 'DIRECT' ? 'Direct Message' : 'Group Message');
             const messageText = c.lastMessageSnippet || c.lastMessage || 'New message received';
 
             showMessageNotification({
@@ -98,8 +139,9 @@ export function TeamNotificationListener() {
               senderName: title,
               message: messageText,
               conversationId: c.id,
+              userId: currentUserIdRef.current || undefined,
               onOpen: () => {
-                router.push('/app/communication');
+                router.push(`/app/communication?conversationId=${c.id}`);
               },
             });
           }
@@ -107,12 +149,18 @@ export function TeamNotificationListener() {
             lastKnownMessageAtRef.current[c.id] = c.lastMessageAt;
           }
         }
-      } catch (err) {
-        // silent polling catch
-      }
-    }, 6000);
+      } catch {}
+    };
 
-    return () => clearInterval(pollInterval);
+    pollConversations();
+    const pollInterval = setInterval(pollConversations, 6000);
+    const onFocus = () => pollConversations();
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [pathname, router]);
 
   return null;

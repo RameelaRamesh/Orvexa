@@ -15,6 +15,7 @@ export interface Conversation {
   createdByMembershipId: string;
   lastMessage?: string;
   lastMessageAt?: Date;
+  lastMessageSenderMembershipId?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -47,6 +48,7 @@ export class CommunicationService {
     });
     const settings = (ws?.settings as any) || {};
     const conversations: Conversation[] = settings.conversations || [];
+    const messages: Message[] = settings.messages || [];
 
     // Privacy Guard: Return only conversations where the requesting user is a member
     const userConvs = conversations.filter((c) =>
@@ -80,11 +82,21 @@ export class CommunicationService {
           : 'Direct Message';
       }
 
+      const convMsgs = messages.filter((m) => m.conversationId === conv.id);
+      const latestMsg = convMsgs[convMsgs.length - 1];
+      const unreadCount = convMsgs.filter(
+        (m) =>
+          m.senderMembershipId !== membershipId &&
+          !(Array.isArray(m.readByMembershipIds) && m.readByMembershipIds.includes(membershipId)),
+      ).length;
+
       return {
         ...conv,
         displayName,
         participants: participantDetails,
         lastMessageSnippet: conv.lastMessage,
+        lastMessageSenderMembershipId: conv.lastMessageSenderMembershipId || latestMsg?.senderMembershipId,
+        unreadCount,
       };
     });
   }
@@ -393,6 +405,7 @@ export class CommunicationService {
       ...conv,
       lastMessage: content.trim().slice(0, 80) || '[Attachment]',
       lastMessageAt: new Date(),
+      lastMessageSenderMembershipId: senderMembershipId,
       updatedAt: new Date(),
     };
 
@@ -407,21 +420,85 @@ export class CommunicationService {
       },
     });
 
-    // Notify other participants
+    // Notify ONLY other conversation participants (never sender, never whole workspace)
     const otherParticipants = conv.participantMembershipIds.filter((id) => id !== senderMembershipId);
     for (const recipientId of otherParticipants) {
-      await this.prisma.notification.create({
+      await (this.prisma as any).notification?.create?.({
         data: {
           workspaceId,
           recipientMembershipId: recipientId,
           title: conv.type === 'DIRECT' ? `Message from ${senderName}` : `${conv.name || 'Group'}: ${senderName}`,
           message: content.trim().slice(0, 100),
-          link: '/app/communication',
+          type: 'CHAT_MESSAGE',
+          link: `/app/communication?conversationId=${conversationId}`,
+          isRead: false,
         },
-      }).catch(() => null);
+      })?.catch(() => null);
     }
 
     return newMessage;
+  }
+
+  async markConversationAsRead(
+    workspaceId: string,
+    conversationId: string,
+    membershipId: string,
+  ) {
+    const ws = await this.prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { settings: true },
+    });
+    const settings = (ws?.settings as any) || {};
+    const messages: Message[] = settings.messages || [];
+
+    let updatedCount = 0;
+    const nextMessages = messages.map((m) => {
+      if (
+        m.conversationId === conversationId &&
+        !(Array.isArray(m.readByMembershipIds) && m.readByMembershipIds.includes(membershipId))
+      ) {
+        updatedCount += 1;
+        return {
+          ...m,
+          readByMembershipIds: [...(m.readByMembershipIds || []), membershipId],
+        };
+      }
+      return m;
+    });
+
+    if (updatedCount > 0) {
+      await this.prisma.workspace.update({
+        where: { id: workspaceId },
+        data: { settings: { ...settings, messages: nextMessages } },
+      });
+    }
+
+    // Clear matching chat notifications for this user
+    try {
+      const notifModel = (this.prisma as any).notification;
+      if (notifModel?.findMany && notifModel?.updateMany) {
+        const unreadNotifs = await notifModel.findMany({
+          where: { workspaceId, recipientMembershipId: membershipId, isRead: false },
+        }).catch(() => []);
+        const idsToClear = (unreadNotifs || [])
+          .filter(
+            (n: any) =>
+              n.link === `/app/communication?conversationId=${conversationId}` ||
+              n.link === '/app/communication',
+          )
+          .map((n: any) => n.id);
+        if (idsToClear.length > 0) {
+          await notifModel.updateMany({
+            where: { id: { in: idsToClear }, workspaceId, recipientMembershipId: membershipId },
+            data: { isRead: true },
+          }).catch(() => null);
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return { success: true, markedCount: updatedCount };
   }
 
   async markAsRead(

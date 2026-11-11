@@ -322,7 +322,7 @@ export default function UnifiedCalendarPage() {
       },
       accessRole: m.accessRole || (typeof m.role === 'string' ? m.role : m.role?.name) || 'MEMBER',
       role: m.role,
-      departmentId: m.departmentId || m.department?.id || null,
+      departmentId: m.departmentId || m.department?.id || m.team?.departmentId || null,
       teamId: m.teamId || m.team?.id || null,
       reportsToId: m.reportsToId || m.reportsTo?.id || null,
       designation: m.designation,
@@ -390,6 +390,27 @@ export default function UnifiedCalendarPage() {
     if (resolvedRole) setCurrentUserRole(resolvedRole);
     if (resolvedDeptId) setUserDepartmentId(resolvedDeptId);
     if (resolvedTeamId) setUserTeamId(resolvedTeamId);
+
+    // Clear any unread calendar notifications when opening Operations Calendar
+    try {
+      localStorage.removeItem('orvexa_calendar_badge_count');
+    } catch {}
+    if (t && resolvedWs) {
+      fetch(`${BRANDING.apiUrl}/notifications/mark-read-by-context`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${t}`,
+          'x-workspace-id': resolvedWs,
+        },
+        body: JSON.stringify({ prefix: '/app/calendar' }),
+      })
+        .then(() => {
+          window.dispatchEvent(new CustomEvent('notifications-updated', { detail: { calendarUnreadCount: 0 } }));
+          window.dispatchEvent(new CustomEvent('notifications-refresh'));
+        })
+        .catch(() => null);
+    }
 
     const q = new URLSearchParams(window.location.search);
     if (q.get('openHolidays') === 'true') {
@@ -567,6 +588,35 @@ export default function UnifiedCalendarPage() {
             .map((id) => liveMembers.find((m: any) => m.id === id || m.user?.id === id))
             .filter(Boolean);
 
+          const taskCreatorId = t.creatorMembershipId || sla.creatorMembershipId || (t as any).createdByMembershipId;
+          const isCreatedByMe = Boolean(
+            currentMembershipId &&
+              (taskCreatorId === currentMembershipId ||
+                (Array.isArray(sla.activityLog) &&
+                  sla.activityLog.some(
+                    (a: any) =>
+                      (a?.action === 'CREATED' || a?.action === 'REASSIGNED') &&
+                      a?.actorId === currentMembershipId,
+                  ))),
+          );
+          const hasConfiguredTeamMembers = liveMembers.some(
+            (m: any) =>
+              m.id !== currentMembershipId &&
+              (m.reportsToId === currentMembershipId ||
+                Boolean(userTeamId && (m.team?.id === userTeamId || m.teamId === userTeamId))),
+          );
+          const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
+          const hasConfiguredDeptMembers = Boolean(
+            targetDept &&
+              liveMembers.some(
+                (m: any) =>
+                  m.id !== currentMembershipId &&
+                  (m.department?.id === targetDept ||
+                    m.departmentId === targetDept ||
+                    m.team?.departmentId === targetDept),
+              ),
+          );
+
           // Scope-based filtering aligned with calendar view scope & hierarchy
           if (selectedScope === 'SELECT_PEOPLE') {
             if (selectedMemberIds.length > 0 && !taskAssigneeIds.some((id) => selectedMemberIds.includes(id))) {
@@ -585,18 +635,30 @@ export default function UnifiedCalendarPage() {
             const reportsToMe = Boolean(
               currentMembershipId && matchingMembers.some((m: any) => m?.reportsToId === currentMembershipId),
             );
-            if (!isMine && !isInMyTeam && !reportsToMe) {
+            const isInMyDept = Boolean(
+              targetDept &&
+                (sla.departmentId === targetDept ||
+                  matchingMembers.some((m: any) => m?.department?.id === targetDept || m?.departmentId === targetDept)),
+            );
+            const allowedFallback =
+              (canViewWorkspace || canSelectPeople) &&
+              !hasConfiguredTeamMembers &&
+              (hasConfiguredDeptMembers ? isInMyDept : true);
+            if (!isMine && !isCreatedByMe && !isInMyTeam && !reportsToMe && !allowedFallback) {
               continue;
             }
           } else if (selectedScope === 'MY_DEPARTMENT') {
-            const targetDept = selectedDeptFilter !== 'ALL' ? selectedDeptFilter : userDepartmentId;
             const isMine = Boolean(currentMembershipId && taskAssigneeIds.includes(currentMembershipId));
             const isInMyDept = Boolean(
               targetDept &&
                 (sla.departmentId === targetDept ||
                   matchingMembers.some((m: any) => m?.department?.id === targetDept || m?.departmentId === targetDept)),
             );
-            if (!isMine && !isInMyDept) {
+            const allowedFallback =
+              selectedDeptFilter === 'ALL' &&
+              (canViewWorkspace || canSelectPeople) &&
+              !hasConfiguredDeptMembers;
+            if (!isMine && !isCreatedByMe && !isInMyDept && !allowedFallback) {
               continue;
             }
           }
@@ -669,6 +731,16 @@ export default function UnifiedCalendarPage() {
             progress,
             isOverdue,
             isMyTask: Boolean(currentMembershipId && taskAssigneeIds.includes(currentMembershipId)),
+            isCreatedByMe: Boolean(
+              currentMembershipId &&
+                (creatorId === currentMembershipId ||
+                  (Array.isArray(sla.activityLog) &&
+                    sla.activityLog.some(
+                      (a: any) =>
+                        (a?.action === 'CREATED' || a?.action === 'REASSIGNED') &&
+                        a?.actorId === currentMembershipId,
+                    ))),
+            ),
             hasDueDate: Boolean(t.dueDate),
           };
 
@@ -1274,28 +1346,7 @@ export default function UnifiedCalendarPage() {
             : 'Event scheduled successfully',
         );
 
-        // Trigger Chrome / Browser desktop notification
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          new Notification(
-            formAudience === 'ALL'
-              ? `Company-Wide Announcement: ${formTitle}`
-              : `Calendar Event: ${formTitle}`,
-            {
-              body:
-                formAudience === 'ALL'
-                  ? `Open to All: Organization event scheduled for ${formStartDate}`
-                  : `Scheduled for ${formStartDate} (${formStartTime})`,
-              icon: '/favicon.ico',
-            },
-          );
-        }
-
-        // Update side tab indicator badge count
-        try {
-          const currentBadge = parseInt(localStorage.getItem('orvexa_calendar_badge_count') || '3', 10);
-          localStorage.setItem('orvexa_calendar_badge_count', String(currentBadge + 1));
-          window.dispatchEvent(new Event('calendar_badge_updated'));
-        } catch {}
+        // Notifications are dispatched by the server exclusively to targeted invitees
 
         setIsCreateModalOpen(false);
         fetchEvents();

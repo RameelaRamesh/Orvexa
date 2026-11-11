@@ -15,7 +15,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { RequirePermissions, RequireAnyPermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { Public } from '../../common/decorators/public.decorator';
 import { SystemAccessRole } from '@prisma/client';
@@ -84,14 +84,14 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Get('invitations')
-  @RequirePermissions('people:manage')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
   async listInvitations(@CurrentWorkspace() workspaceId: string) {
     return this.peopleService.listInvitations(workspaceId);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Post('invite')
-  @RequirePermissions('invitations:manage')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
   async inviteMember(
     @CurrentWorkspace() workspaceId: string,
     @CurrentUser('id') invitedByUserId: string,
@@ -108,9 +108,37 @@ export class PeopleController {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      permissionCodes?: string[];
     },
   ) {
     return this.peopleService.inviteMember(workspaceId, invitedByUserId, body);
+  }
+
+  @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
+  @Post('invite/bulk')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
+  async inviteMembersBulk(
+    @CurrentWorkspace() workspaceId: string,
+    @CurrentUser('id') invitedByUserId: string,
+    @Body()
+    body: {
+      invitations: Array<{
+        email: string;
+        firstName: string;
+        lastName?: string;
+        accessRole?: SystemAccessRole;
+        roleId?: string;
+        departmentId?: string;
+        teamId?: string;
+        designationId?: string;
+        designationTitle?: string;
+        reportsToId?: string;
+        dataScope?: string;
+        permissionCodes?: string[];
+      }>;
+    },
+  ) {
+    return this.peopleService.inviteMembersBulk(workspaceId, invitedByUserId, body);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -216,7 +244,7 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Patch(':id/org-details')
-  @RequirePermissions('people:manage')
+  @RequireAnyPermissions('people:edit', 'people:manage')
   async updateMemberOrgDetails(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,

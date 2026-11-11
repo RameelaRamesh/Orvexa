@@ -121,6 +121,15 @@ export class CommunicationController {
     return this.communicationService.markAsRead(workspaceId, conversationId, messageId, req.membershipId);
   }
 
+  @Post('conversations/:id/read')
+  async markConversationAsRead(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Param('id') conversationId: string,
+  ) {
+    return this.communicationService.markConversationAsRead(workspaceId, conversationId, req.membershipId);
+  }
+
   @Delete('conversations/:id/messages')
   async clearMessages(
     @CurrentWorkspace() workspaceId: string,

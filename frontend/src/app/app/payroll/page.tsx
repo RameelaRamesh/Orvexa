@@ -1,7 +1,9 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
+import { checkPermission, hasAnyPermission, isModuleEnabled } from '@/lib/permissions';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -23,6 +25,7 @@ import {
   AlertCircle,
   HelpCircle,
   ShieldCheck,
+  ShieldAlert,
   RefreshCw,
   Search,
   ChevronRight,
@@ -32,6 +35,28 @@ import {
 import { toast } from 'sonner';
 
 export default function PayrollPage() {
+  const router = useRouter();
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const payrollModuleEnabled = isModuleEnabled(activeWorkspace, 'payroll');
+  const canViewPayroll = hasAnyPermission(activeWorkspace, [
+    'payroll:view',
+    'payroll:edit',
+    'payroll:approve',
+    'payroll:export',
+    'payroll:manage',
+  ]);
+  const canEditPayroll = checkPermission(activeWorkspace, 'payroll:edit');
+  const canApprovePayroll = checkPermission(activeWorkspace, 'payroll:approve');
+
   const [activeTab, setActiveTab] = useState<'periods' | 'reports' | 'config'>('periods');
   const [periods, setPeriods] = useState<any[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<any>(null);
@@ -72,9 +97,42 @@ export default function PayrollPage() {
     };
   };
 
+  useEffect(() => {
+    const syncWorkspace = () => {
+      try {
+        const cached = localStorage.getItem('orvexa_cached_workspace');
+        if (cached) setActiveWorkspace(JSON.parse(cached));
+      } catch {}
+      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+      if (!token) return;
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((res) => {
+          if (!res) return;
+          const profile = res.data || res;
+          const savedWsId = localStorage.getItem('activeWorkspaceId');
+          const mem =
+            (profile.memberships || []).find((m: any) => m.workspaceId === savedWsId) ||
+            profile.memberships?.[0];
+          if (mem) {
+            setActiveWorkspace(mem);
+          }
+        })
+        .catch(() => {});
+    };
+    syncWorkspace();
+    window.addEventListener('workspace-updated', syncWorkspace);
+    return () => window.removeEventListener('workspace-updated', syncWorkspace);
+  }, []);
+
   const loadData = async (targetPeriodId?: string) => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
-    if (!wsId) return;
+    if (!wsId || !payrollModuleEnabled || !canViewPayroll) {
+      setLoading(false);
+      return;
+    }
 
     setLoading(true);
     try {
@@ -86,10 +144,10 @@ export default function PayrollPage() {
         fetch(`${BRANDING.apiUrl}/people`, { headers }),
       ]);
 
-      const rawPeriods = await periodsRes.json();
-      const rawConfig = await configRes.json();
-      const rawReports = await reportsRes.json();
-      const rawPeople = await peopleRes.json();
+      const rawPeriods = periodsRes.ok ? await periodsRes.json() : null;
+      const rawConfig = configRes.ok ? await configRes.json() : null;
+      const rawReports = reportsRes.ok ? await reportsRes.json() : null;
+      const rawPeople = peopleRes.ok ? await peopleRes.json() : null;
 
       const periodsData = rawPeriods?.data !== undefined ? rawPeriods.data : rawPeriods;
       const configData = rawConfig?.data !== undefined ? rawConfig.data : rawConfig;
@@ -134,7 +192,7 @@ export default function PayrollPage() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [payrollModuleEnabled, canViewPayroll]);
 
   const handleCreatePeriod = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -241,6 +299,57 @@ export default function PayrollPage() {
     }
   };
 
+  if (!loading && !payrollModuleEnabled) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <Card className="max-w-md w-full text-center p-8 border-border shadow-md">
+          <div className="mx-auto w-12 h-12 rounded-full bg-slate-500/10 flex items-center justify-center text-muted-foreground mb-4">
+            <CreditCard className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-lg font-bold text-foreground">
+            Payroll &amp; Compensation Disabled
+          </CardTitle>
+          <CardDescription className="text-sm text-muted-foreground mt-2">
+            This module is currently turned off in Workspace Settings &rarr; Modules &amp; Features.
+          </CardDescription>
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <Button variant="outline" onClick={() => router.push('/app/home')}>
+              Return to Home
+            </Button>
+            {checkPermission(activeWorkspace, 'settings:manage') && (
+              <Button onClick={() => router.push('/app/settings?tab=modules')}>
+                Manage Modules
+              </Button>
+            )}
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!loading && !canViewPayroll) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <Card className="max-w-md w-full text-center p-8 border-border shadow-md">
+          <div className="mx-auto w-12 h-12 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-600 mb-4">
+            <ShieldAlert className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-lg font-bold text-foreground">
+            Access Restricted
+          </CardTitle>
+          <CardDescription className="text-sm text-muted-foreground mt-2">
+            You do not have permission to view Payroll &amp; Compensation records. Ask your workspace owner to grant payroll permissions to your role or designation.
+          </CardDescription>
+          <div className="mt-6">
+            <Button variant="outline" onClick={() => router.push('/app/home')}>
+              Return to Home
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-[calc(100vh-5rem)] flex-col space-y-4">
       {/* Topics (Tabs) & Controls - Single Unified Row */}
@@ -269,16 +378,18 @@ export default function PayrollPage() {
           Historical Reports ({reports?.totalRecords || 0})
         </button>
       </div>
-        <div className="flex items-center gap-2 justify-end">
-          <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
-            <Settings className="mr-1.5 h-4 w-4" />
-            Payroll Rules
-          </Button>
-          <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            New Payroll Period
-          </Button>
-        </div>
+        {canEditPayroll && (
+          <div className="flex items-center gap-2 justify-end">
+            <Button variant="outline" size="sm" onClick={() => setShowConfigModal(true)}>
+              <Settings className="mr-1.5 h-4 w-4" />
+              Payroll Rules
+            </Button>
+            <Button size="sm" onClick={() => setShowCreatePeriodModal(true)}>
+              <Plus className="mr-1.5 h-4 w-4" />
+              New Payroll Period
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* TAB 1: PERIODS & PROCESSING */}
@@ -356,16 +467,18 @@ export default function PayrollPage() {
                   <div className="flex items-center gap-2">
                     {selectedPeriod.status !== 'APPROVED' && selectedPeriod.status !== 'PAID' && (
                       <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleCalculatePeriod(selectedPeriod.id)}
-                          className="text-xs"
-                        >
-                          <Play className="mr-1 h-3.5 w-3.5 text-primary" />
-                          {selectedPeriod.status === 'CALCULATED' ? 'Recalculate' : 'Run Calculation'}
-                        </Button>
-                        {selectedPeriod.status === 'CALCULATED' && (
+                        {canEditPayroll && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleCalculatePeriod(selectedPeriod.id)}
+                            className="text-xs"
+                          >
+                            <Play className="mr-1 h-3.5 w-3.5 text-primary" />
+                            {selectedPeriod.status === 'CALCULATED' ? 'Recalculate' : 'Run Calculation'}
+                          </Button>
+                        )}
+                        {selectedPeriod.status === 'CALCULATED' && canApprovePayroll && (
                           <Button
                             size="sm"
                             onClick={() => handleApprovePeriod(selectedPeriod.id)}

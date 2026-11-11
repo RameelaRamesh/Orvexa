@@ -21,18 +21,19 @@ export class NotificationsService {
       where.isRead = false;
     }
 
-    const [items, unreadCount, totalCount] = await Promise.all([
+    const [items, unreadItems, totalCount] = await Promise.all([
       this.prisma.notification.findMany({
         where,
         orderBy: { createdAt: 'desc' },
         take: options?.limit || 50,
       }),
-      this.prisma.notification.count({
+      this.prisma.notification.findMany({
         where: {
           workspaceId,
           recipientMembershipId: membershipId,
           isRead: false,
         },
+        select: { id: true, type: true, link: true, title: true },
       }),
       this.prisma.notification.count({
         where: {
@@ -42,11 +43,62 @@ export class NotificationsService {
       }),
     ]);
 
+    const unreadCount = unreadItems.length;
+    const calendarUnreadCount = unreadItems.filter(
+      (n: any) =>
+        (typeof n.link === 'string' && n.link.startsWith('/app/calendar')) ||
+        (typeof n.type === 'string' && (n.type.includes('CALENDAR') || n.type.includes('MEETING'))),
+    ).length;
+    const chatUnreadCount = unreadItems.filter(
+      (n: any) =>
+        (typeof n.link === 'string' && n.link.startsWith('/app/communication')) ||
+        (typeof n.type === 'string' && (n.type.includes('CHAT') || n.type.includes('MESSAGE'))),
+    ).length;
+
     return {
       notifications: items,
       unreadCount,
+      calendarUnreadCount,
+      chatUnreadCount,
       totalCount,
     };
+  }
+
+  async markReadByContext(
+    workspaceId: string,
+    membershipId: string,
+    filter: { prefix?: string; link?: string; type?: string },
+  ) {
+    const unread = await this.prisma.notification.findMany({
+      where: {
+        workspaceId,
+        recipientMembershipId: membershipId,
+        isRead: false,
+      },
+      select: { id: true, link: true, type: true },
+    });
+
+    const idsToMark = unread
+      .filter((n: any) => {
+        if (filter.prefix && typeof n.link === 'string' && n.link.startsWith(filter.prefix)) return true;
+        if (filter.link && n.link === filter.link) return true;
+        if (filter.type && typeof n.type === 'string' && n.type.includes(filter.type)) return true;
+        return false;
+      })
+      .map((n: any) => n.id);
+
+    if (idsToMark.length > 0) {
+      await this.prisma.notification.updateMany({
+        where: {
+          id: { in: idsToMark },
+          workspaceId,
+          recipientMembershipId: membershipId,
+        },
+        data: { isRead: true },
+      });
+    }
+
+    return { success: true, clearedCount: idsToMark.length };
   }
 
   async markAsRead(
@@ -185,16 +237,25 @@ export class NotificationsService {
 
     const settings = (ws?.settings as Record<string, any>) || {};
     const notifPrefs = settings.notificationPreferences || {};
-    const userPrefs = notifPrefs[membershipId] || {
+    const defaults = {
       emailNotifications: true,
       inAppNotifications: true,
       browserPushNotifications: true,
       deadlineReminders: true,
       taskAssignmentAlerts: true,
       reviewAlerts: true,
+      chatAlerts: true,
+      soundEnabled: true,
+      soundType: 'chime',
+      soundVolume: 0.7,
+      taskSoundEnabled: true,
+      chatSoundEnabled: true,
     };
 
-    return userPrefs;
+    return {
+      ...defaults,
+      ...(notifPrefs[membershipId] || {}),
+    };
   }
 
   async updatePreferences(

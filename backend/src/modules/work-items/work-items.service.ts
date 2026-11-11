@@ -43,7 +43,7 @@ export class WorkItemsService {
       metadata?: any;
     },
   ) {
-    return this.prisma.workItem.create({
+    const created = await this.prisma.workItem.create({
       data: {
         workspaceId,
         title: data.title,
@@ -60,6 +60,24 @@ export class WorkItemsService {
       },
       include: { client: true },
     });
+
+    if (data.assignedMembershipId) {
+      await (this.prisma as any).notification
+        ?.create?.({
+          data: {
+            workspaceId,
+            recipientMembershipId: data.assignedMembershipId,
+            title: 'Work Item Assigned to You',
+            message: `You have been assigned work item: "${created.title}"`,
+            type: 'WORK_ITEM_ASSIGNED',
+            link: '/app/queue',
+            isRead: false,
+          },
+        })
+        ?.catch(() => null);
+    }
+
+    return created;
   }
 
   async updateStage(
@@ -73,9 +91,37 @@ export class WorkItemsService {
       qaScore?: number;
     },
   ) {
-    return this.prisma.workItem.updateMany({
+    const existing = data.assignedMembershipId
+      ? await (this.prisma as any).workItem
+          ?.findFirst?.({ where: { id, workspaceId }, select: { title: true, assignedMembershipId: true } })
+          ?.catch(() => null)
+      : null;
+
+    const result = await this.prisma.workItem.updateMany({
       where: { id, workspaceId },
       data,
     });
+
+    if (
+      data.assignedMembershipId &&
+      existing &&
+      existing.assignedMembershipId !== data.assignedMembershipId
+    ) {
+      await (this.prisma as any).notification
+        ?.create?.({
+          data: {
+            workspaceId,
+            recipientMembershipId: data.assignedMembershipId,
+            title: 'Work Item Assigned to You',
+            message: `You have been assigned work item: "${existing.title || 'Operations Item'}"`,
+            type: 'WORK_ITEM_ASSIGNED',
+            link: '/app/queue',
+            isRead: false,
+          },
+        })
+        ?.catch(() => null);
+    }
+
+    return result;
   }
 }

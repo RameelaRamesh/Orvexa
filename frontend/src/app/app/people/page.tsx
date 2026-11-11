@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
@@ -54,11 +54,15 @@ import {
   Filter,
   ListFilter,
   Loader2,
+  Plus,
+  Sliders,
+  Layers,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
+import { hasAnyPermission } from '@/lib/permissions';
 
-export default function PeoplePage() {
+function PeoplePageContent() {
   const searchParams = useSearchParams();
   const [activeTab, setActiveTab] = useState<'members' | 'invitations'>('members');
   const [members, setMembers] = useState<any[]>([]);
@@ -101,10 +105,25 @@ export default function PeoplePage() {
     return '';
   });
   const [currentMemberId, setCurrentMemberId] = useState<string>('');
+  const [activeWorkspace, setActiveWorkspace] = useState<any>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const [loading, setLoading] = useState(true);
 
-  // Permission helpers: Owner & HR (Admin) can edit any member; others can only edit their own profile
+  // Permission helpers: Owner, Admin, and explicitly permitted custom roles (e.g. HR Recruitment / HR Generalist)
   const isCurrentUserOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  const canInvite =
+    isCurrentUserOwnerOrAdmin ||
+    hasAnyPermission(activeWorkspace, ['invitations:manage', 'people:manage']);
+  const canManagePeople =
+    isCurrentUserOwnerOrAdmin ||
+    hasAnyPermission(activeWorkspace, ['people:manage', 'people:create', 'people:edit']);
 
   const isSelfMember = (m: any): boolean => {
     if (!m) return false;
@@ -129,8 +148,8 @@ export default function PeoplePage() {
     if (m.accessRole === 'OWNER') {
       return isSelfMember(m);
     }
-    // For other members, either the member themselves or an Admin/Owner can edit
-    return isCurrentUserOwnerOrAdmin || isSelfMember(m);
+    // For other members, either the member themselves, Owner/Admin, or authorized HR can edit
+    return isCurrentUserOwnerOrAdmin || canManagePeople || isSelfMember(m);
   };
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -212,6 +231,7 @@ export default function PeoplePage() {
 
   // Modals
   const [showInviteModal, setShowInviteModal] = useState(false);
+  const [showBulkInviteModal, setShowBulkInviteModal] = useState(false);
   const [selectedMember, setSelectedMember] = useState<any>(null);
   const [activeProfileTab, setActiveProfileTab] = useState<'personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding'>('personal');
   const [createdInviteInfo, setCreatedInviteInfo] = useState<{
@@ -279,6 +299,7 @@ export default function PeoplePage() {
     teamId: '',
     designationId: '',
     designationTitle: '',
+    reportsToId: '',
     dataScope: 'ASSIGNED',
     // Personal Details
     dateOfBirth: '',
@@ -317,6 +338,166 @@ export default function PeoplePage() {
     reportsToId: '',
     dataScope: 'ASSIGNED',
   });
+  const [invitePermCodes, setInvitePermCodes] = useState<string[]>([]);
+  const [showInvitePermEditor, setShowInvitePermEditor] = useState(false);
+
+  // Bulk Invitations State
+  const [bulkDefaults, setBulkDefaults] = useState({
+    accessRole: 'MEMBER',
+    roleId: '',
+    departmentId: '',
+    teamId: '',
+    designationId: '',
+    designationTitle: '',
+    reportsToId: '',
+    dataScope: 'ASSIGNED',
+  });
+  const [bulkPermCodes, setBulkPermCodes] = useState<string[]>([]);
+  const [showBulkPermEditor, setShowBulkPermEditor] = useState(false);
+  const [bulkRows, setBulkRows] = useState<
+    Array<{
+      email: string;
+      firstName: string;
+      lastName: string;
+      departmentId?: string;
+      teamId?: string;
+      designationId?: string;
+      designationTitle?: string;
+      accessRole?: string;
+      dataScope?: string;
+    }>
+  >([{ email: '', firstName: '', lastName: '' }]);
+  const [bulkPasteText, setBulkPasteText] = useState('');
+  const [sendingBulk, setSendingBulk] = useState(false);
+  const [bulkResults, setBulkResults] = useState<
+    Array<{ email: string; status: 'SENT' | 'FAILED'; error?: string; inviteLink?: string; invitation?: any }> | null
+  >(null);
+
+  const normalizeDataScopeValue = (scope?: string): string => {
+    if (!scope) return 'ASSIGNED';
+    const upper = scope.toUpperCase();
+    return upper === 'WORKSPACE' ? 'GLOBAL' : upper;
+  };
+
+  const INVITE_PERMISSION_GROUPS = [
+    {
+      module: 'People & HR Invites',
+      perms: [
+        { code: 'people:view', label: 'View People' },
+        { code: 'people:create', label: 'Add Employees' },
+        { code: 'people:edit', label: 'Edit Records' },
+        { code: 'people:manage', label: 'Full People Admin' },
+        { code: 'invitations:manage', label: 'Send Invites' },
+        { code: 'departments:manage', label: 'Depts & Teams' },
+      ],
+    },
+    {
+      module: 'Payroll & Compensation',
+      perms: [
+        { code: 'payroll:view', label: 'View Payroll' },
+        { code: 'payroll:edit', label: 'Edit Payroll' },
+        { code: 'payroll:approve', label: 'Approve Payroll' },
+        { code: 'payroll:export', label: 'Export Payroll' },
+      ],
+    },
+    {
+      module: 'Projects, Tasks & Work',
+      perms: [
+        { code: 'projects:view', label: 'View Projects' },
+        { code: 'projects:create', label: 'Create Projects' },
+        { code: 'projects:edit', label: 'Edit Projects' },
+        { code: 'tasks:view', label: 'View Tasks' },
+        { code: 'tasks:create', label: 'Create Tasks' },
+        { code: 'tasks:edit', label: 'Edit Tasks' },
+        { code: 'tasks:assign', label: 'Assign Tasks' },
+        { code: 'work_items:view', label: 'View Queue' },
+        { code: 'work_items:process', label: 'Process Queue' },
+      ],
+    },
+    {
+      module: 'Attendance, Leave & Approvals',
+      perms: [
+        { code: 'attendance:view', label: 'View Attendance' },
+        { code: 'attendance:clock', label: 'Clock In/Out' },
+        { code: 'attendance:edit', label: 'Edit Attendance' },
+        { code: 'leave:view', label: 'View Leave' },
+        { code: 'leave:apply', label: 'Apply Leave' },
+        { code: 'leave:approve', label: 'Approve Leave' },
+        { code: 'leave:manage', label: 'Manage Leave Policies' },
+        { code: 'approvals:view', label: 'View Approvals' },
+        { code: 'approvals:approve', label: 'Approve Items' },
+      ],
+    },
+    {
+      module: 'Assets, Calendar & Reports',
+      perms: [
+        { code: 'assets:view', label: 'View Assets' },
+        { code: 'assets:create', label: 'Register Assets' },
+        { code: 'assets:assign', label: 'Assign Assets' },
+        { code: 'calendar:view:all', label: 'All Calendar' },
+        { code: 'calendar:view:team', label: 'Team Calendar' },
+        { code: 'calendar:create', label: 'Create Events' },
+        { code: 'reports:view', label: 'View Reports' },
+      ],
+    },
+  ];
+
+  const INVITE_ROLE_PRESETS: Array<{
+    label: string;
+    accessRole: string;
+    dataScope: string;
+    perms: string[];
+  }> = [
+    {
+      label: 'HR - Recruitment',
+      accessRole: 'MANAGER',
+      dataScope: 'DEPARTMENT',
+      perms: ['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:create', 'calendar:view:team'],
+    },
+    {
+      label: 'HR Generalist',
+      accessRole: 'MANAGER',
+      dataScope: 'GLOBAL',
+      perms: [
+        'people:view',
+        'people:edit',
+        'people:manage',
+        'attendance:view',
+        'attendance:edit',
+        'leave:view',
+        'leave:approve',
+        'leave:manage',
+        'approvals:view',
+        'approvals:approve',
+      ],
+    },
+    {
+      label: 'Payroll Specialist',
+      accessRole: 'MANAGER',
+      dataScope: 'GLOBAL',
+      perms: ['people:view', 'payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'reports:view'],
+    },
+    {
+      label: 'Team Lead / Manager',
+      accessRole: 'MANAGER',
+      dataScope: 'TEAM',
+      perms: [
+        'people:view',
+        'projects:view',
+        'projects:create',
+        'projects:edit',
+        'tasks:view',
+        'tasks:create',
+        'tasks:edit',
+        'tasks:assign',
+        'leave:approve',
+        'approvals:view',
+        'approvals:approve',
+        'calendar:view:team',
+        'calendar:create',
+      ],
+    },
+  ];
 
   // =========================================================================
   // SMART ROLE & SCOPE TEMPLATES BY DESIGNATION (AUTO-MAPPING)
@@ -452,13 +633,51 @@ export default function PeoplePage() {
   const handleDesignationChange = (title: string) => {
     const cleanTitle = title.trim().toLowerCase();
 
-    // Find matching template
+    // 1. Prioritize saved workspace Designations configured with permissions & hierarchy defaults
+    const savedDesigRaw = designations.find((rawD) => {
+      const d = rawD.data !== undefined ? rawD.data : rawD;
+      return (d.title || '').trim().toLowerCase() === cleanTitle;
+    });
+    const savedDesig = savedDesigRaw
+      ? savedDesigRaw.data !== undefined
+        ? savedDesigRaw.data
+        : savedDesigRaw
+      : null;
+
+    if (savedDesig) {
+      const perms = Array.isArray(savedDesig.permissionCodes) ? savedDesig.permissionCodes : [];
+      const resolvedRole = savedDesig.defaultAccessRole || 'MEMBER';
+      const resolvedScope = normalizeDataScopeValue(savedDesig.defaultDataScope || 'ASSIGNED');
+      setInviteForm((prev) => ({
+        ...prev,
+        designationId: savedDesig.id || '',
+        designationTitle: savedDesig.title || title,
+        accessRole: resolvedRole,
+        roleId: savedDesig.defaultRoleId || prev.roleId || '',
+        dataScope: resolvedScope,
+        departmentId: savedDesig.departmentId || prev.departmentId || '',
+      }));
+      if (perms.length > 0) {
+        setInvitePermCodes(perms);
+      }
+      setMatchedTemplate({
+        label: `Workspace Designation: ${savedDesig.title}`,
+        description:
+          perms.length > 0
+            ? `Loaded ${perms.length} configured permission(s) and hierarchy defaults for ${savedDesig.title}.`
+            : `Loaded saved designation defaults for ${savedDesig.title}.`,
+        role: resolvedRole,
+        scope: resolvedScope,
+      });
+      return;
+    }
+
+    // 2. Fall back to Smart Keyword Templates for custom titles
     const template = SMART_DESIGNATION_TEMPLATES.find((tpl) =>
       tpl.keywords.some((kw) => cleanTitle.includes(kw))
     );
 
     if (template) {
-      // Find matching department if possible
       let matchedDeptId = inviteForm.departmentId;
       if (template.deptKeywords && template.deptKeywords.length > 0) {
         const foundDept = departments.find((rawD) => {
@@ -472,7 +691,6 @@ export default function PeoplePage() {
         }
       }
 
-      // Find matching team if possible
       let matchedTeamId = inviteForm.teamId;
       if (template.teamKeywords && template.teamKeywords.length > 0) {
         const foundTeam = teams.find((rawT) => {
@@ -486,18 +704,20 @@ export default function PeoplePage() {
         }
       }
 
+      const normScope = normalizeDataScopeValue(template.scope);
       setMatchedTemplate({
         label: template.label,
         description: template.description,
         role: template.role,
-        scope: template.scope,
+        scope: normScope,
       });
 
       setInviteForm((prev) => ({
         ...prev,
+        designationId: '',
         designationTitle: title,
         accessRole: template.role,
-        dataScope: template.scope,
+        dataScope: normScope,
         departmentId: matchedDeptId,
         teamId: matchedTeamId,
       }));
@@ -505,8 +725,51 @@ export default function PeoplePage() {
       setMatchedTemplate(null);
       setInviteForm((prev) => ({
         ...prev,
+        designationId: '',
         designationTitle: title,
       }));
+    }
+  };
+
+  const handleSelectSavedDesignation = (desigId: string) => {
+    if (!desigId) {
+      setInviteForm((prev) => ({ ...prev, designationId: '', designationTitle: '' }));
+      setMatchedTemplate(null);
+      return;
+    }
+    const foundRaw = designations.find((rawD) => {
+      const d = rawD.data !== undefined ? rawD.data : rawD;
+      return d.id === desigId;
+    });
+    const d = foundRaw ? (foundRaw.data !== undefined ? foundRaw.data : foundRaw) : null;
+    if (d) {
+      handleDesignationChange(d.title);
+    }
+  };
+
+  const handleBulkSelectSavedDesignation = (desigId: string) => {
+    if (!desigId) {
+      setBulkDefaults((prev) => ({ ...prev, designationId: '', designationTitle: '' }));
+      return;
+    }
+    const foundRaw = designations.find((rawD) => {
+      const d = rawD.data !== undefined ? rawD.data : rawD;
+      return d.id === desigId;
+    });
+    const d = foundRaw ? (foundRaw.data !== undefined ? foundRaw.data : foundRaw) : null;
+    if (!d) return;
+    const perms = Array.isArray(d.permissionCodes) ? d.permissionCodes : [];
+    setBulkDefaults((prev) => ({
+      ...prev,
+      designationId: d.id,
+      designationTitle: d.title,
+      accessRole: d.defaultAccessRole || prev.accessRole,
+      roleId: d.defaultRoleId || prev.roleId,
+      departmentId: d.departmentId || prev.departmentId,
+      dataScope: normalizeDataScopeValue(d.defaultDataScope || prev.dataScope),
+    }));
+    if (perms.length > 0) {
+      setBulkPermCodes(perms);
     }
   };
 
@@ -544,6 +807,35 @@ export default function PeoplePage() {
       () => toast.success('Invitation link copied to clipboard!'),
       () => toast.info('Link: ' + fullUrl),
     );
+  };
+
+  const refreshOrgOptions = async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+    if (!token || !wsId) return;
+    try {
+      const activeHeaders = getHeaders();
+      const [deptRes, desigRes, teamRes, roleRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/designations`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
+      ]);
+      const [rawDept, rawDesig, rawTeam, rawRole] = await Promise.all([
+        deptRes.json().catch(() => []),
+        desigRes.json().catch(() => []),
+        teamRes.json().catch(() => []),
+        roleRes.json().catch(() => []),
+      ]);
+      const deptData = rawDept?.data !== undefined ? rawDept.data : rawDept;
+      const desigData = rawDesig?.data !== undefined ? rawDesig.data : rawDesig;
+      const teamData = rawTeam?.data !== undefined ? rawTeam.data : rawTeam;
+      const roleData = rawRole?.data !== undefined ? rawRole.data : rawRole;
+      if (Array.isArray(deptData)) setDepartments(deptData);
+      if (Array.isArray(desigData)) setDesignations(desigData);
+      if (Array.isArray(teamData)) setTeams(teamData);
+      if (Array.isArray(roleData)) setRoles(roleData);
+    } catch {}
   };
 
   const loadData = async () => {
@@ -600,6 +892,11 @@ export default function PeoplePage() {
             setCurrentUserRole(currentMem.accessRole);
             if (currentMem.id) setCurrentMemberId(currentMem.id);
             if (currentMem.userId) setCurrentUserId(currentMem.userId);
+            setActiveWorkspace((prev: any) => ({
+              ...prev,
+              ...currentMem,
+              workspace: currentMem.workspace || prev?.workspace,
+            }));
           }
         }
       }
@@ -628,7 +925,38 @@ export default function PeoplePage() {
 
   useEffect(() => {
     loadData();
+    const handleWsUpdated = () => {
+      try {
+        const cached = localStorage.getItem('orvexa_cached_workspace');
+        if (cached) setActiveWorkspace(JSON.parse(cached));
+      } catch {}
+      refreshOrgOptions();
+    };
+    window.addEventListener('workspace-updated', handleWsUpdated);
+    return () => window.removeEventListener('workspace-updated', handleWsUpdated);
   }, []);
+
+  const handledInviteUrlRef = React.useRef(false);
+  useEffect(() => {
+    if (loading || handledInviteUrlRef.current || !canInvite) return;
+    let inviteParam = searchParams?.get('invite');
+    let bulkParam = searchParams?.get('bulkInvite');
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (!inviteParam) inviteParam = urlParams.get('invite');
+      if (!bulkParam) bulkParam = urlParams.get('bulkInvite');
+    }
+    if (bulkParam === '1' || bulkParam === 'true') {
+      handledInviteUrlRef.current = true;
+      refreshOrgOptions();
+      setBulkResults(null);
+      setShowBulkInviteModal(true);
+    } else if (inviteParam === '1' || inviteParam === 'true') {
+      handledInviteUrlRef.current = true;
+      refreshOrgOptions();
+      setShowInviteModal(true);
+    }
+  }, [loading, canInvite, searchParams]);
 
   // Helper to open a specific member profile by ID or email
   const openMemberById = (idOrEmail: string, memberList = members) => {
@@ -692,10 +1020,14 @@ export default function PeoplePage() {
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const payloadBody: any = {
+        ...inviteForm,
+        ...(invitePermCodes.length > 0 ? { permissionCodes: invitePermCodes } : {}),
+      };
       const res = await fetch(`${BRANDING.apiUrl}/people/invite`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify(inviteForm),
+        body: JSON.stringify(payloadBody),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Invitation failed');
@@ -728,6 +1060,8 @@ export default function PeoplePage() {
 
       setShowInviteModal(false);
       setMatchedTemplate(null);
+      setInvitePermCodes([]);
+      setShowInvitePermEditor(false);
       setInviteForm({
         email: '',
         firstName: '',
@@ -744,6 +1078,94 @@ export default function PeoplePage() {
       loadData();
     } catch (err: any) {
       toast.error(err.message || 'Invitation failed');
+    }
+  };
+
+  const handleParseBulkPaste = () => {
+    if (!bulkPasteText.trim()) return;
+    const lines = bulkPasteText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const parsed = lines
+      .map((line) => {
+        const parts = line.split(/[,\t;]+/).map((p) => p.trim());
+        const email = parts[0] || '';
+        const firstName = parts[1] || email.split('@')[0] || 'Team';
+        const lastName = parts[2] || '';
+        return { email, firstName, lastName };
+      })
+      .filter((r) => r.email.includes('@'));
+
+    if (parsed.length === 0) {
+      toast.error('No valid rows found. Format: email@company.com, FirstName, LastName');
+      return;
+    }
+
+    setBulkRows((prev) => {
+      const existingNonEmpty = prev.filter((r) => r.email.trim().length > 0);
+      return [...existingNonEmpty, ...parsed];
+    });
+    setBulkPasteText('');
+    toast.success(`Added ${parsed.length} recipient(s) to queue`);
+  };
+
+  const handleSendBulkInvites = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const validRows = bulkRows.filter((r) => r.email.trim().includes('@'));
+    if (validRows.length === 0) {
+      toast.error('Please add at least one valid email address.');
+      return;
+    }
+
+    setSendingBulk(true);
+    setBulkResults(null);
+    try {
+      const invitationsPayload = validRows.map((row) => {
+        const rowDesigRaw = designations.find((rawD) => {
+          const d = rawD.data !== undefined ? rawD.data : rawD;
+          return d.id === (row.designationId || bulkDefaults.designationId);
+        });
+        const rowDesig = rowDesigRaw ? (rowDesigRaw.data !== undefined ? rowDesigRaw.data : rowDesigRaw) : null;
+        const rowPerms =
+          bulkPermCodes.length > 0
+            ? bulkPermCodes
+            : Array.isArray(rowDesig?.permissionCodes) && rowDesig.permissionCodes.length > 0
+            ? rowDesig.permissionCodes
+            : undefined;
+
+        return {
+          email: row.email.trim().toLowerCase(),
+          firstName: (row.firstName || row.email.split('@')[0] || 'Member').trim(),
+          lastName: (row.lastName || '').trim(),
+          accessRole: row.accessRole || rowDesig?.defaultAccessRole || bulkDefaults.accessRole || 'MEMBER',
+          roleId: bulkDefaults.roleId || rowDesig?.defaultRoleId || undefined,
+          departmentId: row.departmentId || bulkDefaults.departmentId || rowDesig?.departmentId || undefined,
+          teamId: row.teamId || bulkDefaults.teamId || undefined,
+          designationId: rowDesig?.id || row.designationId || bulkDefaults.designationId || undefined,
+          designationTitle: row.designationTitle || rowDesig?.title || bulkDefaults.designationTitle || undefined,
+          reportsToId: bulkDefaults.reportsToId || undefined,
+          dataScope: row.dataScope || rowDesig?.defaultDataScope || bulkDefaults.dataScope || 'ASSIGNED',
+          ...(rowPerms && rowPerms.length > 0 ? { permissionCodes: rowPerms } : {}),
+        };
+      });
+
+      const res = await fetch(`${BRANDING.apiUrl}/people/invite/bulk`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ invitations: invitationsPayload }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.message || 'Bulk invitation dispatch failed');
+      const payload = raw?.data !== undefined ? raw.data : raw;
+      const results = payload?.results || [];
+      setBulkResults(results);
+      toast.success(payload?.message || `Processed ${results.length} invitation(s)`);
+      loadData();
+    } catch (err: any) {
+      toast.error(err?.message || 'Bulk invitation dispatch failed');
+    } finally {
+      setSendingBulk(false);
     }
   };
 
@@ -902,7 +1324,7 @@ export default function PeoplePage() {
       return;
     }
     setEditingMember(m);
-    if (!isCurrentUserOwnerOrAdmin && editModalTab === 'org') {
+    if (!canManagePeople && editModalTab === 'org') {
       setEditModalTab('personal');
     }
     const extra = getMemberExtraData(m);
@@ -921,7 +1343,8 @@ export default function PeoplePage() {
       teamId: m.teamId || m.team?.id || '',
       designationId: m.designationId || m.designation?.id || '',
       designationTitle: m.designation?.title || '',
-      dataScope: m.dataScope || 'ASSIGNED',
+      reportsToId: m.reportsToId || m.reportsTo?.id || '',
+      dataScope: normalizeDataScopeValue(m.dataScope || 'ASSIGNED'),
 
       // Personal Details
       dateOfBirth: personal.dateOfBirth || extra.dateOfBirth || '',
@@ -995,8 +1418,8 @@ export default function PeoplePage() {
     }
 
     try {
-      // 2. Save org & role details via API (only authorized for Owner and HR/Admin)
-      if (isCurrentUserOwnerOrAdmin) {
+      // 2. Save org & role details via API (only authorized for Owner, Admin, or permitted HR)
+      if (canManagePeople) {
         await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
           method: 'PATCH',
           headers: getHeaders(),
@@ -1010,7 +1433,8 @@ export default function PeoplePage() {
             teamId: editForm.teamId || null,
             designationId: editForm.designationId || null,
             designationTitle: editForm.designationTitle || undefined,
-            dataScope: editForm.dataScope,
+            reportsToId: editForm.reportsToId || null,
+            dataScope: normalizeDataScopeValue(editForm.dataScope),
           }),
         }).catch(() => null);
       }
@@ -1046,6 +1470,9 @@ export default function PeoplePage() {
               phone: editForm.phone.trim() || m.user?.phone,
             },
             accessRole: editForm.accessRole,
+            dataScope: normalizeDataScopeValue(editForm.dataScope),
+            reportsToId: editForm.reportsToId || null,
+            reportsTo: members.find((rm: any) => rm.id === editForm.reportsToId) || null,
             designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || m.designation?.title || 'Unassigned' },
             department: departments.find((d: any) => d.id === editForm.departmentId) || m.department,
             team: teams.find((t: any) => t.id === editForm.teamId) || m.team,
@@ -1185,7 +1612,7 @@ export default function PeoplePage() {
 
               {/* Profile Sub-tabs */}
               <div className="flex border-b border-border space-x-3 pt-3 text-xs">
-                {((['personal', 'employment', ...(isCurrentUserOwnerOrAdmin || isSelfMember(member) ? ['access'] : []), 'assets', 'history', 'offboarding']) as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[]).map((tab) => (
+                {((['personal', 'employment', ...(canManagePeople || isSelfMember(member) ? ['access'] : []), 'assets', 'history', 'offboarding']) as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[]).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveProfileTab(tab)}
@@ -1458,7 +1885,7 @@ export default function PeoplePage() {
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">Employment & Organizational Assignment</span>
-                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
+                    {canEditMember(member) && canManagePeople && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1490,6 +1917,14 @@ export default function PeoplePage() {
                       <span className="font-semibold text-foreground">{member.team?.name || 'Unassigned'}</span>
                     </div>
                     <div>
+                      <span className="text-muted-foreground block">Reports To:</span>
+                      <span className="font-semibold text-foreground">
+                        {member.reportsTo?.user
+                          ? `${member.reportsTo.user.firstName} ${member.reportsTo.user.lastName}`
+                          : 'Not assigned'}
+                      </span>
+                    </div>
+                    <div>
                       <span className="text-muted-foreground block">Employment Type:</span>
                       <span className="font-semibold text-foreground">{member.employmentType || 'FULL_TIME'}</span>
                     </div>
@@ -1502,11 +1937,11 @@ export default function PeoplePage() {
               )}
 
               {/* SECTION C: Access */}
-              {activeProfileTab === 'access' && (isCurrentUserOwnerOrAdmin || isSelfMember(member)) && (
+              {activeProfileTab === 'access' && (canManagePeople || isSelfMember(member)) && (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between pb-2 border-b border-border">
                     <span className="font-semibold text-foreground text-xs">System Role & Security Privileges</span>
-                    {canEditMember(member) && isCurrentUserOwnerOrAdmin && (
+                    {canEditMember(member) && canManagePeople && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -1526,6 +1961,11 @@ export default function PeoplePage() {
                       <Badge variant={member.accessRole === 'OWNER' ? 'default' : member.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
                         {member.accessRole}
                       </Badge>
+                      {member.role?.name && !member.role?.isSystemRole && (
+                        <span className="text-[11px] text-primary font-medium ml-2">
+                          ({member.role.name})
+                        </span>
+                      )}
                     </div>
                     <div>
                       <span className="text-muted-foreground block">Account Status:</span>
@@ -1817,10 +2257,31 @@ export default function PeoplePage() {
                   Transfer Ownership
                 </Button>
               )}
-              {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') && (
-                <Button onClick={() => setShowInviteModal(true)} size="sm" className="gap-2 text-xs font-semibold rounded-xl">
-                  <UserPlus className="h-4 w-4" /> Invite Member
-                </Button>
+              {canInvite && (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      refreshOrgOptions();
+                      setBulkResults(null);
+                      setShowBulkInviteModal(true);
+                    }}
+                    className="gap-1.5 text-xs font-semibold rounded-xl"
+                  >
+                    <Users className="h-4 w-4 text-primary" /> Bulk Invite
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      refreshOrgOptions();
+                      setShowInviteModal(true);
+                    }}
+                    size="sm"
+                    className="gap-2 text-xs font-semibold rounded-xl"
+                  >
+                    <UserPlus className="h-4 w-4" /> Invite Member
+                  </Button>
+                </>
               )}
             </div>
           </div>
@@ -1955,13 +2416,23 @@ export default function PeoplePage() {
                               <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Workspace Owner
                             </span>
                           ) : (
-                            <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                              {m.accessRole}
-                            </Badge>
+                            <div className="flex flex-col items-start gap-1">
+                              <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
+                                {m.accessRole}
+                              </Badge>
+                              {m.role?.name && !m.role?.isSystemRole && (
+                                <span className="text-[10px] text-primary font-medium">{m.role.name}</span>
+                              )}
+                            </div>
                           )}
                         </td>
                         <td className="py-3 px-4 text-xs font-medium text-foreground">
-                          {m.designation?.title || 'Unassigned'}
+                          <div>{m.designation?.title || 'Unassigned'}</div>
+                          {m.reportsTo?.user && (
+                            <div className="text-[10px] text-muted-foreground font-normal mt-0.5">
+                              Reports to: {m.reportsTo.user.firstName} {m.reportsTo.user.lastName}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {m.department?.name || 'General'} {m.team?.name ? `/ ${m.team.name}` : ''}
@@ -2002,7 +2473,7 @@ export default function PeoplePage() {
                 <thead>
                   <tr className="border-b border-border text-xs uppercase text-muted-foreground bg-surface-secondary/50">
                     <th className="py-3 px-4">Invited Email</th>
-                    <th className="py-3 px-4">Role</th>
+                    <th className="py-3 px-4">Role &amp; Assignment</th>
                     <th className="py-3 px-4">Invited By</th>
                     <th className="py-3 px-4">Status</th>
                     <th className="py-3 px-4">Expires</th>
@@ -2012,7 +2483,7 @@ export default function PeoplePage() {
                 <tbody className="divide-y divide-border">
                   {invitations.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="py-8 text-center text-muted-foreground text-xs">
+                      <td colSpan={6} className="py-8 text-center text-muted-foreground text-xs">
                         No invitations sent yet.
                       </td>
                     </tr>
@@ -2024,7 +2495,33 @@ export default function PeoplePage() {
                           <div className="text-xs text-muted-foreground">{inv.email}</div>
                         </td>
                         <td className="py-3 px-4">
-                          <Badge variant="secondary" className="text-[10px]">{inv.accessRole}</Badge>
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <Badge variant="secondary" className="text-[10px]">{inv.accessRole}</Badge>
+                            {inv.role?.name && !inv.role?.isSystemRole && (
+                              <Badge variant="outline" className="text-[10px] border-primary/30 text-primary">
+                                {inv.role.name}
+                              </Badge>
+                            )}
+                            {inv.dataScope && (
+                              <Badge variant="outline" className="text-[10px]">{inv.dataScope}</Badge>
+                            )}
+                          </div>
+                          {(inv.designation?.title || inv.department?.name || inv.team?.name) && (
+                            <div className="text-[11px] text-muted-foreground mt-1">
+                              {[
+                                inv.designation?.title,
+                                inv.department?.name,
+                                inv.team?.name ? `Team: ${inv.team.name}` : null,
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </div>
+                          )}
+                          {Array.isArray(inv.permissionCodes) && inv.permissionCodes.length > 0 && (
+                            <div className="text-[10px] text-primary mt-0.5 font-medium">
+                              {inv.permissionCodes.length} configured permission(s)
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 text-xs text-muted-foreground">
                           {inv.invitedBy ? `${inv.invitedBy.firstName} ${inv.invitedBy.lastName}` : '-'}
@@ -2232,16 +2729,33 @@ export default function PeoplePage() {
       {/* MODAL 1: Invite Member Modal */}
       {showInviteModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-lg bg-card border-border shadow-xl max-h-[90vh] overflow-y-auto">
-            <CardHeader>
-              <CardTitle className="text-lg">Invite New Workspace Member</CardTitle>
-              <CardDescription>
-                Assign organization role, department, designation, and initial permission scope.
-              </CardDescription>
+          <Card className="w-full max-w-2xl bg-card border-border shadow-xl max-h-[92vh] overflow-y-auto">
+            <CardHeader className="pb-3 border-b border-border/60">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-lg">Invite New Workspace Member</CardTitle>
+                  <CardDescription className="text-xs mt-0.5">
+                    Configure designation, department, team, reporting hierarchy, role, and granular permissions.
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="text-xs gap-1.5 shrink-0"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setBulkResults(null);
+                    setShowBulkInviteModal(true);
+                  }}
+                >
+                  <Users className="h-3.5 w-3.5" /> Switch to Bulk Invite
+                </Button>
+              </div>
             </CardHeader>
             <form onSubmit={handleInvite}>
-              <CardContent className="space-y-4 text-xs">
-                <div className="grid grid-cols-2 gap-3">
+              <CardContent className="space-y-4 pt-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="font-semibold text-foreground">First Name *</label>
                     <input
@@ -2264,47 +2778,69 @@ export default function PeoplePage() {
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     />
                   </div>
-                </div>
-
-                <div>
-                  <label className="font-semibold text-foreground">Work Email *</label>
-                  <input
-                    type="email"
-                    required
-                    value={inviteForm.email}
-                    onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
-                    placeholder="alex@company.com"
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                  />
-                </div>
-
-                {/* 3. Designation with Smart Auto-Mapping */}
-                <div>
-                  <div className="flex items-center justify-between">
-                    <label className="font-semibold text-foreground flex items-center gap-1.5">
-                      <span>Designation (Job Title)</span>
-                      <span className="text-[10px] text-primary bg-primary/10 px-1.5 py-0.2 rounded font-medium">
-                        Smart Auto-Mapping
-                      </span>
-                    </label>
+                  <div>
+                    <label className="font-semibold text-foreground">Work Email *</label>
+                    <input
+                      type="email"
+                      required
+                      value={inviteForm.email}
+                      onChange={(e) => setInviteForm({ ...inviteForm, email: e.target.value })}
+                      placeholder="alex@company.com"
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    />
                   </div>
-                  <input
-                    type="text"
-                    list="designations-datalist"
-                    value={inviteForm.designationTitle}
-                    onChange={(e) => handleDesignationChange(e.target.value)}
-                    placeholder="e.g. Software Engineer, QA Auditor, Operations Manager..."
-                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                  />
-                  <datalist id="designations-datalist">
-                    {designations.map((rawD) => {
-                      const d = rawD.data !== undefined ? rawD.data : rawD;
-                      return <option key={d.id} value={d.title} />;
-                    })}
-                  </datalist>
+                </div>
+
+                {/* 3. Designation selector + Custom Title + Smart Auto-Mapping */}
+                <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="font-semibold text-foreground">Saved Designation Profile</label>
+                      <select
+                        value={inviteForm.designationId}
+                        onChange={(e) => handleSelectSavedDesignation(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                      >
+                        <option value="">Select configured designation (optional)...</option>
+                        {designations.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          const permCount = Array.isArray(d.permissionCodes) ? d.permissionCodes.length : 0;
+                          return (
+                            <option key={d.id} value={d.id}>
+                              {d.title}{permCount > 0 ? ` (${permCount} perms)` : ''}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <label className="font-semibold text-foreground flex items-center gap-1.5">
+                          <span>Designation Title</span>
+                          <span className="text-[10px] text-primary bg-primary/10 px-1.5 rounded font-medium">
+                            Auto-Maps
+                          </span>
+                        </label>
+                      </div>
+                      <input
+                        type="text"
+                        list="designations-datalist"
+                        value={inviteForm.designationTitle}
+                        onChange={(e) => handleDesignationChange(e.target.value)}
+                        placeholder="e.g. HR - Recruitment, Software Engineer..."
+                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                      />
+                      <datalist id="designations-datalist">
+                        {designations.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          return <option key={d.id} value={d.title} />;
+                        })}
+                      </datalist>
+                    </div>
+                  </div>
 
                   {/* Quick Preset Template Pills */}
-                  <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                  <div className="flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-muted-foreground font-medium flex items-center gap-1">
                       <Sparkles className="h-3 w-3 text-primary" /> Suggestions:
                     </span>
@@ -2325,12 +2861,12 @@ export default function PeoplePage() {
                   </div>
                 </div>
 
-                {/* Smart Template Matched Summary Banner */}
+                {/* Smart Template / Workspace Designation Matched Banner */}
                 {matchedTemplate && (
                   <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 text-xs space-y-1">
                     <div className="flex items-center justify-between">
                       <span className="font-semibold text-primary flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5" /> Auto-Configured from Template
+                        <Sparkles className="h-3.5 w-3.5" /> Auto-Configured from Designation / Template
                       </span>
                       <Badge variant="outline" className="text-[10px] font-medium border-primary/30 text-primary">
                         {matchedTemplate.label}
@@ -2340,28 +2876,15 @@ export default function PeoplePage() {
                       {matchedTemplate.description}
                     </p>
                     <div className="flex items-center gap-2 pt-0.5 text-[10px] text-foreground font-medium">
-                      <span>Preset Role: <strong className="text-primary">{matchedTemplate.role}</strong></span>
+                      <span>Role: <strong className="text-primary">{matchedTemplate.role}</strong></span>
                       <span>•</span>
-                      <span>Preset Scope: <strong className="text-primary">{matchedTemplate.scope}</strong></span>
+                      <span>Scope: <strong className="text-primary">{matchedTemplate.scope}</strong></span>
                     </div>
                   </div>
                 )}
 
-                {/* 4. Core Access Role & Department */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-semibold text-foreground">Core Access Role *</label>
-                    <select
-                      value={inviteForm.accessRole}
-                      onChange={(e) => setInviteForm({ ...inviteForm, accessRole: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                    >
-                      <option value="MEMBER">Member (Individual contributor)</option>
-                      <option value="MANAGER">Manager (Team & operations management)</option>
-                      <option value="ADMIN">Admin (Organization administration)</option>
-                      <option value="OWNER">Owner (Organization ownership)</option>
-                    </select>
-                  </div>
+                {/* 4. Department & Team (All created departments & teams) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="font-semibold text-foreground">Department</label>
                     <select
@@ -2380,10 +2903,6 @@ export default function PeoplePage() {
                       })}
                     </select>
                   </div>
-                </div>
-
-                {/* 5. Team & Data Access Scope */}
-                <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="font-semibold text-foreground">Team</label>
                     <select
@@ -2394,12 +2913,69 @@ export default function PeoplePage() {
                       <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Select Team</option>
                       {teams.map((rawT) => {
                         const t = rawT.data !== undefined ? rawT.data : rawT;
+                        const linkedDept =
+                          t.department?.name ||
+                          departments.find((rawD) => {
+                            const d = rawD.data !== undefined ? rawD.data : rawD;
+                            return d.id === t.departmentId;
+                          })?.name;
                         return (
                           <option key={t.id} value={t.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
-                            {t.name}
+                            {t.name}{linkedDept ? ` (${linkedDept})` : ''}
                           </option>
                         );
                       })}
+                    </select>
+                  </div>
+                </div>
+
+                {/* 5. Reporting Hierarchy & Role Policy */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-semibold text-foreground">Reports To (Manager)</label>
+                    <select
+                      value={inviteForm.reportsToId}
+                      onChange={(e) => setInviteForm({ ...inviteForm, reportsToId: e.target.value })}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    >
+                      <option value="">No Reporting Manager</option>
+                      {members.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.user?.firstName} {m.user?.lastName} ({m.designation?.title || m.accessRole})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-semibold text-foreground">Core Access Role *</label>
+                    <select
+                      value={inviteForm.accessRole}
+                      onChange={(e) => setInviteForm({ ...inviteForm, accessRole: e.target.value })}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    >
+                      <option value="MEMBER">Member (Individual contributor)</option>
+                      <option value="MANAGER">Manager (Team &amp; operations management)</option>
+                      <option value="ADMIN">Admin (Organization administration)</option>
+                      <option value="OWNER">Owner (Organization ownership)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* 6. Custom Role & Data Access Scope */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="font-semibold text-foreground">Custom Role Profile</label>
+                    <select
+                      value={inviteForm.roleId}
+                      onChange={(e) => setInviteForm({ ...inviteForm, roleId: e.target.value })}
+                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
+                    >
+                      <option value="">Auto from Designation / Base Role</option>
+                      {roles.map((r: any) => (
+                        <option key={r.id} value={r.id}>
+                          {r.name} {r.isSystemRole ? '(System)' : '(Custom)'}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -2413,7 +2989,7 @@ export default function PeoplePage() {
                       <option value="OWN">Own Records Only</option>
                       <option value="TEAM">Assigned Team Records</option>
                       <option value="DEPARTMENT">Assigned Department Records</option>
-                      <option value="WORKSPACE">Entire Workspace Records</option>
+                      <option value="GLOBAL">Entire Workspace Records</option>
                     </select>
                   </div>
                 </div>
@@ -2428,7 +3004,7 @@ export default function PeoplePage() {
                         {inviteForm.dataScope === 'OWN' && 'Own Records Scope'}
                         {inviteForm.dataScope === 'TEAM' && 'Team Records Scope'}
                         {inviteForm.dataScope === 'DEPARTMENT' && 'Department Records Scope'}
-                        {inviteForm.dataScope === 'WORKSPACE' && 'Entire Workspace Scope'}
+                        {(inviteForm.dataScope === 'GLOBAL' || inviteForm.dataScope === 'WORKSPACE') && 'Entire Workspace Scope'}
                       </div>
                       <p className="text-muted-foreground leading-relaxed">
                         {inviteForm.dataScope === 'ASSIGNED' &&
@@ -2439,14 +3015,100 @@ export default function PeoplePage() {
                           'Full collaboration across their squad. Can see, edit, and track all work items, sprint tickets, and team availability.'}
                         {inviteForm.dataScope === 'DEPARTMENT' &&
                           'Departmental leadership oversight. Can view all squads in this department, reassign tasks, approve leaves, and review metrics.'}
-                        {inviteForm.dataScope === 'WORKSPACE' &&
+                        {(inviteForm.dataScope === 'GLOBAL' || inviteForm.dataScope === 'WORKSPACE') &&
                           'Global organization-wide visibility across all projects, departments, teams, and member activities.'}
                       </p>
                     </div>
                   </div>
                 </div>
+
+                {/* 7. Granular Permissions Override inside Invitation */}
+                <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowInvitePermEditor((prev) => !prev)}
+                    className="w-full flex items-center justify-between text-left"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Sliders className="h-3.5 w-3.5 text-primary" />
+                      <span className="font-semibold text-foreground">
+                        Configure Permissions for This Invitation
+                      </span>
+                      <Badge variant={invitePermCodes.length > 0 ? 'default' : 'outline'} className="text-[10px]">
+                        {invitePermCodes.length > 0 ? `${invitePermCodes.length} selected` : 'Role / Designation Default'}
+                      </Badge>
+                    </div>
+                    <ChevronDown
+                      className={`h-4 w-4 text-muted-foreground transition-transform ${showInvitePermEditor ? 'rotate-180' : ''}`}
+                    />
+                  </button>
+
+                  {showInvitePermEditor && (
+                    <div className="pt-2 border-t border-border/60 space-y-3">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-semibold text-muted-foreground">Presets:</span>
+                        {INVITE_ROLE_PRESETS.map((preset) => (
+                          <button
+                            key={preset.label}
+                            type="button"
+                            onClick={() => {
+                              setInvitePermCodes(preset.perms);
+                              setInviteForm((prev) => ({
+                                ...prev,
+                                accessRole: preset.accessRole,
+                                dataScope: preset.dataScope,
+                              }));
+                            }}
+                            className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary hover:bg-primary/15 font-medium"
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                        {invitePermCodes.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setInvitePermCodes([])}
+                            className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground hover:text-foreground"
+                          >
+                            Clear ({invitePermCodes.length})
+                          </button>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                        {INVITE_PERMISSION_GROUPS.map((grp) => (
+                          <div key={grp.module} className="p-2 rounded-lg border border-border/70 bg-background space-y-1.5">
+                            <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                              {grp.module}
+                            </div>
+                            <div className="space-y-1">
+                              {grp.perms.map((p) => {
+                                const checked = invitePermCodes.includes(p.code);
+                                return (
+                                  <label key={p.code} className="flex items-center gap-2 cursor-pointer text-[11px]">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setInvitePermCodes((prev) =>
+                                          checked ? prev.filter((c) => c !== p.code) : [...prev, p.code],
+                                        )
+                                      }
+                                      className="rounded border-border text-primary h-3.5 w-3.5"
+                                    />
+                                    <span className="text-foreground">{p.label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               </CardContent>
-              <div className="flex items-center justify-end gap-2 p-4 border-t border-border mt-4">
+              <div className="flex items-center justify-end gap-2 p-4 border-t border-border mt-2">
                 <Button
                   type="button"
                   variant="outline"
@@ -2454,11 +3116,461 @@ export default function PeoplePage() {
                   onClick={() => {
                     setShowInviteModal(false);
                     setMatchedTemplate(null);
+                    setShowInvitePermEditor(false);
                   }}
                 >
                   Cancel
                 </Button>
                 <Button type="submit" size="sm">Send Invitation</Button>
+              </div>
+            </form>
+          </Card>
+        </div>
+      )}
+
+      {/* MODAL 1B: Bulk Invitations Modal */}
+      {showBulkInviteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <Card className="w-full max-w-4xl bg-card border-border shadow-2xl max-h-[92vh] flex flex-col overflow-hidden">
+            <CardHeader className="pb-3 border-b border-border/60 shrink-0">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Users className="h-5 w-5 text-primary" /> Bulk Invite Members &amp; Configure Hierarchy
+                  </CardTitle>
+                  <CardDescription className="text-xs mt-0.5">
+                    Set shared defaults or configure Designation, Department, Team, Role, and Permissions per person.
+                  </CardDescription>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowBulkInviteModal(false)}
+                >
+                  Close
+                </Button>
+              </div>
+            </CardHeader>
+
+            <form onSubmit={handleSendBulkInvites} className="flex flex-col flex-1 overflow-hidden">
+              <CardContent className="p-5 space-y-4 overflow-y-auto flex-1 text-xs">
+                {/* Shared Defaults */}
+                <div className="p-3.5 rounded-xl border border-border bg-muted/20 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-foreground flex items-center gap-1.5">
+                      <Layers className="h-3.5 w-3.5 text-primary" /> Shared Default Configuration (Applied to rows without overrides)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="font-semibold text-foreground">Default Designation</label>
+                      <select
+                        value={bulkDefaults.designationId}
+                        onChange={(e) => handleBulkSelectSavedDesignation(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="">None / Custom per row</option>
+                        {designations.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          return (
+                            <option key={d.id} value={d.id}>
+                              {d.title}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-semibold text-foreground">Default Department</label>
+                      <select
+                        value={bulkDefaults.departmentId}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, departmentId: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="">Select Department</option>
+                        {departments.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          return (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-semibold text-foreground">Default Team</label>
+                      <select
+                        value={bulkDefaults.teamId}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, teamId: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="">Select Team</option>
+                        {teams.map((rawT) => {
+                          const t = rawT.data !== undefined ? rawT.data : rawT;
+                          const linkedDept =
+                            t.department?.name ||
+                            departments.find((rawD) => {
+                              const d = rawD.data !== undefined ? rawD.data : rawD;
+                              return d.id === t.departmentId;
+                            })?.name;
+                          return (
+                            <option key={t.id} value={t.id}>
+                              {t.name}{linkedDept ? ` (${linkedDept})` : ''}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-semibold text-foreground">Default Access Role</label>
+                      <select
+                        value={bulkDefaults.accessRole}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, accessRole: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="MEMBER">Member</option>
+                        <option value="MANAGER">Manager</option>
+                        <option value="ADMIN">Admin</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-semibold text-foreground">Default Data Scope</label>
+                      <select
+                        value={bulkDefaults.dataScope}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, dataScope: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="ASSIGNED">Assigned Records</option>
+                        <option value="OWN">Own Records</option>
+                        <option value="TEAM">Team Records</option>
+                        <option value="DEPARTMENT">Department Records</option>
+                        <option value="GLOBAL">Entire Workspace</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="font-semibold text-foreground">Default Reports To</label>
+                      <select
+                        value={bulkDefaults.reportsToId}
+                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, reportsToId: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
+                      >
+                        <option value="">None</option>
+                        {members.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.user?.firstName} {m.user?.lastName} ({m.designation?.title || m.accessRole})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Collapsible Bulk Permission Overrides */}
+                  <div className="pt-2 border-t border-border/60">
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkPermEditor((prev) => !prev)}
+                      className="flex items-center justify-between w-full text-left"
+                    >
+                      <span className="font-semibold text-foreground flex items-center gap-1.5">
+                        <Sliders className="h-3.5 w-3.5 text-primary" />
+                        Shared Permission Overrides ({bulkPermCodes.length > 0 ? `${bulkPermCodes.length} active` : 'From Designation / Role'})
+                      </span>
+                      <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showBulkPermEditor ? 'rotate-180' : ''}`} />
+                    </button>
+                    {showBulkPermEditor && (
+                      <div className="mt-2.5 space-y-2.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {INVITE_ROLE_PRESETS.map((preset) => (
+                            <button
+                              key={preset.label}
+                              type="button"
+                              onClick={() => {
+                                setBulkPermCodes(preset.perms);
+                                setBulkDefaults((prev) => ({
+                                  ...prev,
+                                  accessRole: preset.accessRole,
+                                  dataScope: preset.dataScope,
+                                }));
+                              }}
+                              className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary hover:bg-primary/15 font-medium"
+                            >
+                              {preset.label}
+                            </button>
+                          ))}
+                          {bulkPermCodes.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setBulkPermCodes([])}
+                              className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted-foreground hover:text-foreground"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 max-h-44 overflow-y-auto">
+                          {INVITE_PERMISSION_GROUPS.map((grp) => (
+                            <div key={grp.module} className="p-2 rounded-lg border border-border/70 bg-background space-y-1">
+                              <div className="text-[10px] font-bold uppercase text-muted-foreground">{grp.module}</div>
+                              {grp.perms.map((p) => {
+                                const checked = bulkPermCodes.includes(p.code);
+                                return (
+                                  <label key={p.code} className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setBulkPermCodes((prev) =>
+                                          checked ? prev.filter((c) => c !== p.code) : [...prev, p.code],
+                                        )
+                                      }
+                                      className="rounded border-border text-primary h-3.5 w-3.5"
+                                    />
+                                    <span>{p.label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Batch Paste Box */}
+                <div className="p-3 rounded-xl border border-border bg-card space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="font-semibold text-foreground">
+                      Quick Paste Recipients (CSV / one per line: email, firstName, lastName)
+                    </label>
+                    <Button type="button" variant="outline" size="sm" className="h-7 text-xs" onClick={handleParseBulkPaste}>
+                      Parse &amp; Add Rows
+                    </Button>
+                  </div>
+                  <textarea
+                    rows={2}
+                    value={bulkPasteText}
+                    onChange={(e) => setBulkPasteText(e.target.value)}
+                    placeholder="priya@company.com, Priya, Nair&#10;arjun@company.com, Arjun, Mehta"
+                    className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs font-mono focus:ring-1 focus:ring-primary focus:outline-none"
+                  />
+                </div>
+
+                {/* Editable Rows Table */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold text-foreground">Invitation Queue ({bulkRows.length})</span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 text-xs gap-1"
+                      onClick={() => setBulkRows([...bulkRows, { email: '', firstName: '', lastName: '' }])}
+                    >
+                      <Plus className="h-3.5 w-3.5" /> Add Row
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto border border-border rounded-xl">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-muted/40 border-b border-border text-[10px] uppercase text-muted-foreground">
+                          <th className="py-2 px-2.5">Work Email *</th>
+                          <th className="py-2 px-2.5">First Name</th>
+                          <th className="py-2 px-2.5">Last Name</th>
+                          <th className="py-2 px-2.5">Designation</th>
+                          <th className="py-2 px-2.5">Department</th>
+                          <th className="py-2 px-2.5">Team</th>
+                          <th className="py-2 px-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {bulkRows.map((row, idx) => (
+                          <tr key={idx}>
+                            <td className="p-2">
+                              <input
+                                type="email"
+                                required
+                                placeholder="name@company.com"
+                                value={row.email}
+                                onChange={(e) => {
+                                  const next = [...bulkRows];
+                                  next[idx] = { ...next[idx], email: e.target.value };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[155px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                placeholder="First"
+                                value={row.firstName}
+                                onChange={(e) => {
+                                  const next = [...bulkRows];
+                                  next[idx] = { ...next[idx], firstName: e.target.value };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[85px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <input
+                                type="text"
+                                placeholder="Last"
+                                value={row.lastName}
+                                onChange={(e) => {
+                                  const next = [...bulkRows];
+                                  next[idx] = { ...next[idx], lastName: e.target.value };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[85px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              />
+                            </td>
+                            <td className="p-2">
+                              <select
+                                value={row.designationId || ''}
+                                onChange={(e) => {
+                                  const desigId = e.target.value;
+                                  const dRaw = designations.find((x) => (x.data !== undefined ? x.data : x).id === desigId);
+                                  const d = dRaw ? (dRaw.data !== undefined ? dRaw.data : dRaw) : null;
+                                  const next = [...bulkRows];
+                                  next[idx] = {
+                                    ...next[idx],
+                                    designationId: desigId,
+                                    designationTitle: d?.title || '',
+                                    ...(d?.departmentId ? { departmentId: d.departmentId } : {}),
+                                    ...(d?.defaultAccessRole ? { accessRole: d.defaultAccessRole } : {}),
+                                    ...(d?.defaultDataScope ? { dataScope: normalizeDataScopeValue(d.defaultDataScope) } : {}),
+                                  };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[125px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              >
+                                <option value="">Default</option>
+                                {designations.map((rawD) => {
+                                  const d = rawD.data !== undefined ? rawD.data : rawD;
+                                  return (
+                                    <option key={d.id} value={d.id}>
+                                      {d.title}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </td>
+                            <td className="p-2">
+                              <select
+                                value={row.departmentId || ''}
+                                onChange={(e) => {
+                                  const next = [...bulkRows];
+                                  next[idx] = { ...next[idx], departmentId: e.target.value };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[115px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              >
+                                <option value="">Default</option>
+                                {departments.map((rawD) => {
+                                  const d = rawD.data !== undefined ? rawD.data : rawD;
+                                  return (
+                                    <option key={d.id} value={d.id}>
+                                      {d.name}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </td>
+                            <td className="p-2">
+                              <select
+                                value={row.teamId || ''}
+                                onChange={(e) => {
+                                  const next = [...bulkRows];
+                                  next[idx] = { ...next[idx], teamId: e.target.value };
+                                  setBulkRows(next);
+                                }}
+                                className="w-full min-w-[115px] rounded border border-input bg-background px-2 py-1 text-xs"
+                              >
+                                <option value="">Default</option>
+                                {teams.map((rawT) => {
+                                  const t = rawT.data !== undefined ? rawT.data : rawT;
+                                  return (
+                                    <option key={t.id} value={t.id}>
+                                      {t.name}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                            </td>
+                            <td className="p-2 text-right">
+                              {bulkRows.length > 1 && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 w-7 p-0 text-destructive"
+                                  onClick={() => setBulkRows(bulkRows.filter((_, i) => i !== idx))}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Dispatch Results */}
+                {bulkResults && bulkResults.length > 0 && (
+                  <div className="p-3 rounded-xl border border-border bg-surface-secondary/40 space-y-2">
+                    <div className="font-semibold text-foreground">
+                      Bulk Invitation Summary ({bulkResults.filter((r) => r.status === 'SENT').length} Sent /{' '}
+                      {bulkResults.filter((r) => r.status === 'FAILED').length} Failed)
+                    </div>
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                      {bulkResults.map((resItem, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between gap-2 p-2 rounded-lg border border-border bg-background"
+                        >
+                          <div className="min-w-0">
+                            <span className="font-semibold text-foreground">{resItem.email}</span>
+                            {resItem.error && (
+                              <span className="text-[11px] text-destructive ml-2">{resItem.error}</span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Badge variant={resItem.status === 'SENT' ? 'success' : 'destructive'} className="text-[10px]">
+                              {resItem.status}
+                            </Badge>
+                            {resItem.inviteLink && (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="h-6 text-[10px] px-2 gap-1"
+                                onClick={() => copyInviteLink(resItem.inviteLink!)}
+                              >
+                                <Copy className="h-3 w-3" /> Copy Link
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+
+              <div className="flex items-center justify-end gap-2 p-4 border-t border-border bg-muted/10 shrink-0">
+                <Button type="button" variant="outline" size="sm" onClick={() => setShowBulkInviteModal(false)}>
+                  Close
+                </Button>
+                <Button type="submit" size="sm" disabled={sendingBulk} className="gap-1.5">
+                  {sendingBulk ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Mail className="h-3.5 w-3.5" />}
+                  {sendingBulk ? 'Sending Invitations...' : `Send Bulk Invitations (${bulkRows.filter((r) => r.email.trim()).length})`}
+                </Button>
               </div>
             </form>
           </Card>
@@ -2665,7 +3777,7 @@ export default function PeoplePage() {
                   }`}
                 >
                   <Briefcase className="h-4 w-4" /> Org & Role
-                  {!isCurrentUserOwnerOrAdmin && (
+                  {!canManagePeople && (
                     <Badge variant="outline" className="text-[9px] py-0 px-1 border-muted-foreground/30 text-muted-foreground">View-Only</Badge>
                   )}
                 </button>
@@ -2705,15 +3817,15 @@ export default function PeoplePage() {
                         <input
                           type="email"
                           required
-                          disabled={!isCurrentUserOwnerOrAdmin}
+                          disabled={!canManagePeople}
                           value={editForm.email}
                           onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
                           placeholder="email@company.com"
                           className={`w-full rounded-md border border-input bg-background px-3.5 py-2 text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all ${
-                            !isCurrentUserOwnerOrAdmin ? 'opacity-70 bg-muted/30 cursor-not-allowed' : ''
+                            !canManagePeople ? 'opacity-70 bg-muted/30 cursor-not-allowed' : ''
                           }`}
                         />
-                        {!isCurrentUserOwnerOrAdmin && (
+                        {!canManagePeople && (
                           <span className="text-[11px] text-muted-foreground block">Work email can only be changed by HR / Admin.</span>
                         )}
                       </div>
@@ -2963,30 +4075,30 @@ export default function PeoplePage() {
                     <div className="p-4 rounded-xl border border-border bg-muted/20 space-y-3">
                       <label className="font-semibold text-foreground text-xs sm:text-sm block">Statutory Document Verification Status</label>
                       <div className="space-y-2.5">
-                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!canManagePeople ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!isCurrentUserOwnerOrAdmin}
+                            disabled={!canManagePeople}
                             checked={editForm.docApprovedId}
                             onChange={(e) => setEditForm({ ...editForm, docApprovedId: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
-                          <span className="text-foreground text-xs sm:text-sm">Government Approved ID Proof (Aadhaar / Passport) Submitted & Verified</span>
+                          <span className="text-foreground text-xs sm:text-sm">Government Approved ID Proof (Aadhaar / Passport) Submitted &amp; Verified</span>
                         </label>
-                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!canManagePeople ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!isCurrentUserOwnerOrAdmin}
+                            disabled={!canManagePeople}
                             checked={editForm.docPanCard}
                             onChange={(e) => setEditForm({ ...editForm, docPanCard: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
                           />
                           <span className="text-foreground text-xs sm:text-sm">PAN Card Verified with Income Tax Department</span>
                         </label>
-                        <label className={`flex items-center gap-3 ${!isCurrentUserOwnerOrAdmin ? 'cursor-default' : 'cursor-pointer'}`}>
+                        <label className={`flex items-center gap-3 ${!canManagePeople ? 'cursor-default' : 'cursor-pointer'}`}>
                           <input
                             type="checkbox"
-                            disabled={!isCurrentUserOwnerOrAdmin}
+                            disabled={!canManagePeople}
                             checked={editForm.docPassportPhoto}
                             onChange={(e) => setEditForm({ ...editForm, docPassportPhoto: e.target.checked })}
                             className="rounded border-border text-primary focus:ring-primary h-4 w-4"
@@ -2994,7 +4106,7 @@ export default function PeoplePage() {
                           <span className="text-foreground text-xs sm:text-sm">Official Passport-size Color Photograph Attached</span>
                         </label>
                       </div>
-                      {!isCurrentUserOwnerOrAdmin && (
+                      {!canManagePeople && (
                         <span className="text-[11px] text-muted-foreground block pt-1">
                           Document verification status is managed and validated by HR (Admin).
                         </span>
@@ -3006,7 +4118,7 @@ export default function PeoplePage() {
                 {/* TAB 4: Organization & Role Placement */}
                 {editModalTab === 'org' && (
                   <div className="space-y-4">
-                    {!isCurrentUserOwnerOrAdmin ? (
+                    {!canManagePeople ? (
                       <div className="space-y-4">
                         <div className="p-3.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-700 dark:text-amber-400 text-xs sm:text-sm flex items-center gap-2.5">
                           <Shield className="h-5 w-5 shrink-0" />
@@ -3145,9 +4257,15 @@ export default function PeoplePage() {
                               <option value="">None / Unassigned</option>
                               {teams.map((rawT) => {
                                 const t = rawT.data !== undefined ? rawT.data : rawT;
+                                const linkedDept =
+                                  t.department?.name ||
+                                  departments.find((rawD) => {
+                                    const d = rawD.data !== undefined ? rawD.data : rawD;
+                                    return d.id === t.departmentId;
+                                  })?.name;
                                 return (
                                   <option key={t.id} value={t.id}>
-                                    {t.name}
+                                    {t.name}{linkedDept ? ` (${linkedDept})` : ''}
                                   </option>
                                 );
                               })}
@@ -3155,19 +4273,38 @@ export default function PeoplePage() {
                           </div>
                         </div>
 
-                        <div className="space-y-1.5">
-                          <label className="font-semibold text-foreground text-xs sm:text-sm">Data Access Scope</label>
-                          <select
-                            value={editForm.dataScope}
-                            onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
-                            className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
-                          >
-                            <option value="ASSIGNED">Assigned Records Only</option>
-                            <option value="OWN">Own Records Only</option>
-                            <option value="TEAM">Assigned Team Records</option>
-                            <option value="DEPARTMENT">Assigned Department Records</option>
-                            <option value="WORKSPACE">Entire Workspace Records</option>
-                          </select>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="space-y-1.5">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Reports To (Manager)</label>
+                            <select
+                              value={editForm.reportsToId}
+                              onChange={(e) => setEditForm({ ...editForm, reportsToId: e.target.value })}
+                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                            >
+                              <option value="">None / Top Level</option>
+                              {members
+                                .filter((m) => m.id !== editingMember.id)
+                                .map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    {m.user?.firstName} {m.user?.lastName} ({m.designation?.title || m.accessRole})
+                                  </option>
+                                ))}
+                            </select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Data Access Scope</label>
+                            <select
+                              value={editForm.dataScope}
+                              onChange={(e) => setEditForm({ ...editForm, dataScope: e.target.value })}
+                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
+                            >
+                              <option value="ASSIGNED">Assigned Records Only</option>
+                              <option value="OWN">Own Records Only</option>
+                              <option value="TEAM">Assigned Team Records</option>
+                              <option value="DEPARTMENT">Assigned Department Records</option>
+                              <option value="GLOBAL">Entire Workspace Records</option>
+                            </select>
+                          </div>
                         </div>
 
                         <div className="rounded-lg border border-border bg-muted/30 p-3 flex items-center justify-between">
@@ -3290,5 +4427,19 @@ export default function PeoplePage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function PeoplePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center min-h-[320px] text-sm text-muted-foreground">
+          Loading people directory...
+        </div>
+      }
+    >
+      <PeoplePageContent />
+    </Suspense>
   );
 }

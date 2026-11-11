@@ -53,6 +53,8 @@ interface Conversation {
   participantMembershipIds: string[];
   lastMessageSnippet?: string;
   lastMessageAt?: string;
+  lastMessageSenderMembershipId?: string;
+  unreadCount?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -63,6 +65,7 @@ export default function CommunicationPage() {
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
+  const [currentUserId, setCurrentUserId] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(true);
   const [messagesLoading, setMessagesLoading] = useState<boolean>(false);
   const [accessDenied, setAccessDenied] = useState<boolean>(false);
@@ -122,9 +125,37 @@ export default function CommunicationPage() {
     loadInitialData();
   }, []);
 
+  const emitChatUnread = (list: Conversation[]) => {
+    if (typeof window === 'undefined') return;
+    const totalUnread = list.reduce(
+      (sum, c) => sum + (typeof c.unreadCount === 'number' ? c.unreadCount : 0),
+      0,
+    );
+    window.dispatchEvent(new CustomEvent('chat-unread-updated', { detail: { totalUnread } }));
+  };
+
+  const markConversationRead = async (convId: string) => {
+    try {
+      setConversations((prev) => {
+        const next = prev.map((c) => (c.id === convId ? { ...c, unreadCount: 0 } : c));
+        emitChatUnread(next);
+        return next;
+      });
+      const headers = getHeaders();
+      await fetch(`${BRANDING.apiUrl}/communication/conversations/${convId}/read`, {
+        method: 'POST',
+        headers,
+      });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('notifications-refresh'));
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     if (activeConversation) {
       loadMessages(activeConversation.id);
+      markConversationRead(activeConversation.id);
     }
   }, [activeConversation?.id]);
 
@@ -157,8 +188,13 @@ export default function CommunicationPage() {
 
         for (const conv of updatedConvs) {
           const prevLastAt = lastKnownMessageAtRef.current[conv.id];
-          if (conv.lastMessageAt && prevLastAt && conv.lastMessageAt !== prevLastAt) {
-            // New message in another conversation
+          const isFromOtherUser =
+            !conv.lastMessageSenderMembershipId ||
+            !currentMembershipId ||
+            conv.lastMessageSenderMembershipId !== currentMembershipId;
+
+          if (conv.lastMessageAt && prevLastAt && conv.lastMessageAt !== prevLastAt && isFromOtherUser) {
+            // New message in another conversation from another user
             if (conv.id !== activeConversation?.id) {
               const title = getConversationTitle(conv);
               const snippet = conv.lastMessageSnippet || (conv as any).lastMessage || 'New message';
@@ -167,8 +203,10 @@ export default function CommunicationPage() {
                 senderName: title,
                 message: snippet,
                 conversationId: conv.id,
+                userId: currentUserId || undefined,
                 onOpen: () => {
                   setActiveConversation(conv);
+                  markConversationRead(conv.id);
                 },
               });
             }
@@ -178,14 +216,18 @@ export default function CommunicationPage() {
           }
         }
 
-        setConversations(updatedConvs);
+        const normalizedConvs = updatedConvs.map((c) =>
+          c.id === activeConversation?.id ? { ...c, unreadCount: 0 } : c,
+        );
+        setConversations(normalizedConvs);
+        emitChatUnread(normalizedConvs);
       } catch (err) {
         // silent polling catch
       }
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [activeConversation?.id]);
+  }, [activeConversation?.id, currentMembershipId, currentUserId]);
 
   const loadInitialData = async () => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
@@ -205,6 +247,7 @@ export default function CommunicationPage() {
       const peopleData = await peopleRes.json();
 
       if (meData.success && meData.data) {
+        if (meData.data.id) setCurrentUserId(meData.data.id);
         const currentMem = meData.data.memberships?.find((m: any) => m.workspaceId === wsId);
         if (currentMem) {
           setCurrentMembershipId(currentMem.id);
@@ -214,12 +257,20 @@ export default function CommunicationPage() {
       if (convData.success) {
         const convList: Conversation[] = convData.data || [];
         setConversations(convList);
+        emitChatUnread(convList);
         convList.forEach((c) => {
           if (c.lastMessageAt) {
             lastKnownMessageAtRef.current[c.id] = c.lastMessageAt;
           }
         });
-        if (convList.length > 0 && !activeConversation) {
+        const targetConvId =
+          typeof window !== 'undefined'
+            ? new URLSearchParams(window.location.search).get('conversationId')
+            : null;
+        const requestedConv = targetConvId ? convList.find((c) => c.id === targetConvId) : null;
+        if (requestedConv) {
+          setActiveConversation(requestedConv);
+        } else if (convList.length > 0 && !activeConversation) {
           setActiveConversation(convList[0]);
         }
       }
@@ -272,11 +323,15 @@ export default function CommunicationPage() {
                 message: newMsg.content || 'Sent an attachment',
                 conversationTitle: activeConversation ? getConversationTitle(activeConversation) : undefined,
                 conversationId: convId,
+                userId: currentUserId || undefined,
                 onOpen: () => {
                   window.focus();
                 },
               });
             }
+          }
+          if (newArrivals.some((m) => m.senderMembershipId !== currentMembershipId)) {
+            markConversationRead(convId);
           }
         }
 
@@ -894,16 +949,23 @@ export default function CommunicationPage() {
                               {conv.type === 'GROUP' ? <Hash className="h-4 w-4" /> : title.charAt(0).toUpperCase()}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs font-semibold text-foreground truncate">{title}</span>
-                                {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
-                                  <span className="text-[10px] text-muted-foreground">
-                                    {new Date(conv.lastMessageAt).toLocaleTimeString([], {
-                                      hour: '2-digit',
-                                      minute: '2-digit',
-                                    })}
-                                  </span>
-                                )}
+                              <div className="flex items-center justify-between gap-1">
+                                <span className={`text-xs truncate ${(conv.unreadCount || 0) > 0 ? 'font-bold text-foreground' : 'font-semibold text-foreground'}`}>{title}</span>
+                                <div className="flex items-center gap-1 shrink-0">
+                                  {(conv.unreadCount || 0) > 0 && (
+                                    <span className="inline-flex min-w-4 h-4 px-1 items-center justify-center rounded-full bg-blue-600 text-[9px] font-bold text-white">
+                                      {conv.unreadCount}
+                                    </span>
+                                  )}
+                                  {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
+                                    <span className="text-[10px] text-muted-foreground">
+                                      {new Date(conv.lastMessageAt).toLocaleTimeString([], {
+                                        hour: '2-digit',
+                                        minute: '2-digit',
+                                      })}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <p className="text-[11px] text-muted-foreground truncate mt-0.5">
                                 {getConversationSnippet(conv)}
@@ -1006,16 +1068,23 @@ export default function CommunicationPage() {
                       {conv.type === 'GROUP' ? <Hash className="h-4 w-4" /> : title.charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-foreground truncate">{title}</span>
-                        {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
-                          <span className="text-[10px] text-muted-foreground">
-                            {new Date(conv.lastMessageAt).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                        )}
+                      <div className="flex items-center justify-between gap-1">
+                        <span className={`text-xs truncate ${(conv.unreadCount || 0) > 0 ? 'font-bold text-foreground' : 'font-semibold text-foreground'}`}>{title}</span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {(conv.unreadCount || 0) > 0 && (
+                            <span className="inline-flex min-w-5 h-4 px-1.5 items-center justify-center rounded-full bg-blue-600 text-[10px] font-bold text-white">
+                              {conv.unreadCount}
+                            </span>
+                          )}
+                          {conv.lastMessageAt && (!getConversationClearedAt(conv.id) || new Date(conv.lastMessageAt).getTime() > new Date(getConversationClearedAt(conv.id)!).getTime()) && (
+                            <span className="text-[10px] text-muted-foreground">
+                              {new Date(conv.lastMessageAt).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <p className="text-[11px] text-muted-foreground truncate mt-0.5">
                         {getConversationSnippet(conv)}

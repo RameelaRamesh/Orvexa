@@ -49,11 +49,31 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
+  ChevronRight,
+  Crown,
+  Folder,
+  Network,
+  RotateCcw,
+  MoreVertical,
+  Info,
+  Bell,
+  Volume2,
+  VolumeX,
   Package,
   Search,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
+import { DEFAULT_ENABLED_MODULES } from '@/lib/permissions';
+import {
+  getNotificationPrefs,
+  saveNotificationPrefs,
+  testNotificationSound,
+  requestNotificationPermission,
+  getNotificationPermission,
+  NotificationPrefs,
+  NotificationSoundType,
+} from '@/lib/notifications';
 
 const DEFAULT_PERMISSIONS_CATALOG = [
   // Assets (5)
@@ -268,12 +288,13 @@ const MODULE_DISPLAY_ORDER: Record<string, number> = {
   Clients: 15,
   Reports: 16,
   Payroll: 17,
-  Organization: 18,
-  Invitations: 19,
-  Roles: 20,
-  Departments: 21,
-  Settings: 22,
-  Billing: 23,
+  Calendar: 18,
+  Organization: 19,
+  Invitations: 20,
+  Roles: 21,
+  Departments: 22,
+  Settings: 23,
+  Billing: 24,
 };
 
 const MODULE_DISPLAY_NAMES: Record<string, string> = {
@@ -281,11 +302,107 @@ const MODULE_DISPLAY_NAMES: Record<string, string> = {
   Inventory: 'INVENTORY & STOCK',
   Ledger: 'MOVEMENT LEDGER',
   Documents: 'DOCUMENT VAULT',
+  Payroll: 'PAYROLL & COMPENSATION',
+  Projects: 'PROJECTS',
+  Tasks: 'TASKS',
+  People: 'PEOPLE & ORG',
+  Attendance: 'ATTENDANCE',
+  Time: 'TIME TRACKING',
+  Leave: 'LEAVE & PTO',
+  Approvals: 'APPROVALS',
+  Reports: 'REPORTS & ANALYTICS',
+  Calendar: 'CALENDAR & HOLIDAYS',
+  WorkQueue: 'WORK QUEUE ENGINE',
+  Quality: 'QUALITY AUDIT',
+  SLA: 'SLA & ESCALATIONS',
+  Clients: 'CLIENT PORTAL',
+  Organization: 'ORGANIZATION',
+  Invitations: 'INVITATIONS',
+  Roles: 'ROLES',
+  Departments: 'DEPARTMENTS',
+  Settings: 'SETTINGS',
+  Billing: 'BILLING',
 };
 
+const DATA_SCOPE_OPTIONS = [
+  { key: 'OWN', label: 'Own Records', desc: 'Only records created by or directly belonging to the user' },
+  { key: 'ASSIGNED', label: 'Assigned Records', desc: 'Items explicitly assigned to the user' },
+  { key: 'TEAM', label: 'Team Records', desc: 'Records across the user\'s functional team' },
+  { key: 'DEPARTMENT', label: 'Department Records', desc: 'Records within the user\'s assigned department' },
+  { key: 'GLOBAL', label: 'Entire Workspace', desc: 'Full workspace-wide operational visibility' },
+];
+
+const DESIGNATION_PERMISSION_PRESETS: Array<{
+  label: string;
+  titleHint: string;
+  accessRole: 'MEMBER' | 'MANAGER' | 'ADMIN';
+  dataScope: 'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL';
+  permissionCodes: string[];
+}> = [
+  {
+    label: 'HR - Recruitment',
+    titleHint: 'Focused on hiring, invitations, onboarding, and directory profiles',
+    accessRole: 'MANAGER',
+    dataScope: 'DEPARTMENT',
+    permissionCodes: ['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:view:all', 'calendar:create'],
+  },
+  {
+    label: 'HR Generalist',
+    titleHint: 'Handles employee records, leave approvals, attendance, and onboarding',
+    accessRole: 'MANAGER',
+    dataScope: 'GLOBAL',
+    permissionCodes: ['people:view', 'people:create', 'people:edit', 'leave:view', 'leave:approve', 'leave:manage', 'attendance:view', 'attendance:edit', 'approvals:view', 'approvals:approve'],
+  },
+  {
+    label: 'Payroll Specialist',
+    titleHint: 'Processes salary runs, deductions, and compensation exports',
+    accessRole: 'MANAGER',
+    dataScope: 'GLOBAL',
+    permissionCodes: ['payroll:view', 'payroll:edit', 'payroll:export', 'attendance:view', 'leave:view', 'people:view', 'reports:view'],
+  },
+  {
+    label: 'Team Lead / Manager',
+    titleHint: 'Leads project delivery, task assignments, timesheet & leave approvals',
+    accessRole: 'MANAGER',
+    dataScope: 'TEAM',
+    permissionCodes: ['projects:view', 'projects:create', 'projects:edit', 'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'time:view', 'time:approve', 'leave:view', 'leave:approve', 'people:view', 'calendar:view:team', 'calendar:create'],
+  },
+  {
+    label: 'Standard Member',
+    titleHint: 'General employee access for tasks, timesheets, attendance & leave requests',
+    accessRole: 'MEMBER',
+    dataScope: 'OWN',
+    permissionCodes: ['projects:view', 'tasks:view', 'tasks:create', 'tasks:edit', 'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply', 'people:view'],
+  },
+];
+
 export default function SettingsPage() {
-const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'>('details');
+  const [activeTab, setActiveTab] = useState<
+    'overview' | 'details' | 'personal' | 'profile' | 'modules' | 'roles' | 'structure' | 'billing' | 'security'
+  >('overview');
   const [permissionSearch, setPermissionSearch] = useState('');
+  const [roleSearch, setRoleSearch] = useState('');
+  const [showCustomRolesList, setShowCustomRolesList] = useState(true);
+  const [roleRightTab, setRoleRightTab] = useState<'permissions' | 'members' | 'details'>('permissions');
+  const [selectedPermModule, setSelectedPermModule] = useState<string>('Assets');
+  const [draftRolePermIds, setDraftRolePermIds] = useState<string[]>([]);
+  const [draftRoleDataScope, setDraftRoleDataScope] = useState<string>('GLOBAL');
+  const [rolePermsDirty, setRolePermsDirty] = useState(false);
+  const [savingRolePerms, setSavingRolePerms] = useState(false);
+  const [resettingRole, setResettingRole] = useState(false);
+  const [showCreateRoleModal, setShowCreateRoleModal] = useState(false);
+  const [newRoleCopyFromId, setNewRoleCopyFromId] = useState('');
+  const [newRoleDataScope, setNewRoleDataScope] = useState<'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL'>('DEPARTMENT');
+  const [copyFromMenuOpen, setCopyFromMenuOpen] = useState(false);
+  const [roleMembers, setRoleMembers] = useState<any[]>([]);
+  const [loadingRoleMembers, setLoadingRoleMembers] = useState(false);
+  const [directoryMembers, setDirectoryMembers] = useState<any[]>([]);
+  const [expandedOverviewDepts, setExpandedOverviewDepts] = useState<Record<string, boolean>>({});
+  const [expandedOverviewTeams, setExpandedOverviewTeams] = useState<Record<string, boolean>>({});
+
+  // Alert & Sound preferences state (per-user)
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPrefs>(() => getNotificationPrefs());
+  const [browserNotifPermission, setBrowserNotifPermission] = useState<string>(() => getNotificationPermission());
   const [currentUserRole, setCurrentUserRole] = useState<string>(() => {
     if (typeof window === 'undefined') return 'MEMBER';
     try {
@@ -576,6 +693,11 @@ const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 
   const [newTeamDeptId, setNewTeamDeptId] = useState('');
   const [newDesigTitle, setNewDesigTitle] = useState('');
   const [newDesigLevel, setNewDesigLevel] = useState(1);
+  const [newDesigDeptId, setNewDesigDeptId] = useState('');
+  const [newDesigAccessRole, setNewDesigAccessRole] = useState<'MEMBER' | 'MANAGER' | 'ADMIN'>('MEMBER');
+  const [newDesigDataScope, setNewDesigDataScope] = useState<'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL'>('OWN');
+  const [newDesigPerms, setNewDesigPerms] = useState<string[]>([]);
+  const [showDesigConfigModal, setShowDesigConfigModal] = useState(false);
 
   // Structure Edit state
   const [editingDeptId, setEditingDeptId] = useState<string | null>(null);
@@ -591,6 +713,10 @@ const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 
   const [editingDesigId, setEditingDesigId] = useState<string | null>(null);
   const [editDesigTitle, setEditDesigTitle] = useState('');
   const [editDesigLevel, setEditDesigLevel] = useState(1);
+  const [editDesigDeptId, setEditDesigDeptId] = useState('');
+  const [editDesigAccessRole, setEditDesigAccessRole] = useState<'MEMBER' | 'MANAGER' | 'ADMIN'>('MEMBER');
+  const [editDesigDataScope, setEditDesigDataScope] = useState<'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL'>('OWN');
+  const [editDesigPerms, setEditDesigPerms] = useState<string[]>([]);
   const [savingDesig, setSavingDesig] = useState(false);
 
   // Billing state
@@ -644,7 +770,7 @@ const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 
         ...(currentWsId && currentWsId !== 'undefined' ? { 'x-workspace-id': currentWsId } : {}),
       };
 
-      const [wsRes, rolesRes, permsRes, deptsRes, teamsRes, desigRes, subRes, planRes, meRes] = await Promise.all([
+      const [wsRes, rolesRes, permsRes, deptsRes, teamsRes, desigRes, subRes, planRes, meRes, peopleRes, notifPrefsRes] = await Promise.all([
         currentWsId ? fetch(`${BRANDING.apiUrl}/workspaces/${currentWsId}`, { headers: activeHeaders }) : Promise.resolve(null),
         fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/roles/permissions`, { headers: activeHeaders }),
@@ -654,25 +780,51 @@ const [activeTab, setActiveTab] = useState<'details' | 'personal' | 'profile' | 
         fetch(`${BRANDING.apiUrl}/subscriptions/current`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/subscriptions/plans`),
         fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/notifications/preferences`, { headers: activeHeaders }).catch(() => null),
       ]);
 
+      let resolvedUid = '';
       if (meRes) {
         const rawMe = await meRes.json();
         const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
         if (meData && meData.id) {
+          resolvedUid = meData.id;
           setUserProfile(meData);
-if (meData.firstName) setPersonalFirstName(meData.firstName);
+          if (meData.firstName) setPersonalFirstName(meData.firstName);
           if (meData.lastName) setPersonalLastName(meData.lastName);
           if (meData.email) setPersonalEmail(meData.email);
           if (meData.phone) setPersonalPhone(meData.phone);
           if (meData.avatarUrl || meData.avatar) setPersonalAvatar(meData.avatarUrl || meData.avatar);
-          const activeMem = meData.memberships?.find((m: any) => m.workspaceId === wsId) || meData.memberships?.[0];
+          const activeMem = meData.memberships?.find((m: any) => m.workspaceId === currentWsId) || meData.memberships?.[0];
           if (activeMem?.accessRole) setCurrentUserRole(activeMem.accessRole);
           if (activeMem?.designation?.title) {
             setPersonalDesignation(activeMem.designation.title);
           } else if (activeMem?.role?.name) {
             setPersonalDesignation(activeMem.role.name);
           }
+        }
+      }
+
+      if (notifPrefsRes && notifPrefsRes.ok) {
+        const rawPrefs = await notifPrefsRes.json();
+        const prefsData = rawPrefs?.data !== undefined ? rawPrefs.data : rawPrefs;
+        if (prefsData && typeof prefsData === 'object') {
+          const synced = saveNotificationPrefs(
+            {
+              desktopNotificationsEnabled:
+                prefsData.browserPushNotifications !== undefined
+                  ? Boolean(prefsData.browserPushNotifications)
+                  : true,
+              soundEnabled: prefsData.soundEnabled !== undefined ? Boolean(prefsData.soundEnabled) : true,
+              soundType: prefsData.soundType || 'chime',
+              soundVolume: typeof prefsData.soundVolume === 'number' ? prefsData.soundVolume : 0.7,
+              taskSoundEnabled: prefsData.taskSoundEnabled !== undefined ? Boolean(prefsData.taskSoundEnabled) : true,
+              chatSoundEnabled: prefsData.chatSoundEnabled !== undefined ? Boolean(prefsData.chatSoundEnabled) : true,
+            },
+            resolvedUid || undefined,
+          );
+          setNotifPrefs(synced);
         }
       }
 
@@ -686,10 +838,22 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
           if (wsData.settings) {
             setCountry(wsData.settings.country || 'United States');
             setTimezone(wsData.settings.timezone || 'UTC-05:00 (Eastern Time)');
-            setEnabledModules(wsData.settings.enabledModules || [
-              'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
-            ]);
+            setEnabledModules(
+              Array.isArray(wsData.settings.enabledModules)
+                ? wsData.settings.enabledModules
+                : DEFAULT_ENABLED_MODULES,
+            );
+          } else {
+            setEnabledModules(DEFAULT_ENABLED_MODULES);
           }
+        }
+      }
+
+      if (peopleRes && peopleRes.ok) {
+        const rawPeople = await peopleRes.json();
+        const peopleList = rawPeople?.data !== undefined ? rawPeople.data : rawPeople;
+        if (Array.isArray(peopleList)) {
+          setDirectoryMembers(peopleList);
         }
       }
 
@@ -722,11 +886,21 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
 
       const rawDepts = await deptsRes.json();
       const deptsData = rawDepts.data !== undefined ? rawDepts.data : rawDepts;
-      if (Array.isArray(deptsData)) setDepartments(deptsData);
+      if (Array.isArray(deptsData)) {
+        setDepartments(deptsData);
+        if (deptsData.length > 0 && Object.keys(expandedOverviewDepts).length === 0) {
+          setExpandedOverviewDepts({ [deptsData[0].id]: true });
+        }
+      }
 
       const rawTeams = await teamsRes.json();
       const teamsData = rawTeams.data !== undefined ? rawTeams.data : rawTeams;
-      if (Array.isArray(teamsData)) setTeams(teamsData);
+      if (Array.isArray(teamsData)) {
+        setTeams(teamsData);
+        if (teamsData.length > 0 && Object.keys(expandedOverviewTeams).length === 0) {
+          setExpandedOverviewTeams({ [teamsData[0].id]: true });
+        }
+      }
 
       const rawDesig = await desigRes.json();
       const desigData = rawDesig.data !== undefined ? rawDesig.data : rawDesig;
@@ -757,7 +931,7 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       if (tabParam) {
         if (tabParam === 'personal' || tabParam === 'profile') {
           setActiveTab('personal');
-        } else if (['details', 'modules', 'roles', 'structure', 'billing', 'security'].includes(tabParam)) {
+        } else if (['overview', 'details', 'modules', 'roles', 'structure', 'billing', 'security'].includes(tabParam)) {
           setActiveTab(tabParam as any);
         }
       }
@@ -859,24 +1033,56 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     }
   };
 
+  const syncCachedWorkspaceModules = (nextModules: string[]) => {
+    setWorkspace((prev: any) => ({
+      ...prev,
+      settings: {
+        ...(prev?.settings || {}),
+        enabledModules: nextModules,
+      },
+    }));
+    if (typeof window !== 'undefined') {
+      try {
+        const raw = localStorage.getItem('orvexa_cached_workspace');
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const updatedWs = {
+            ...parsed,
+            workspace: {
+              ...(parsed.workspace || {}),
+              settings: {
+                ...(parsed.workspace?.settings || {}),
+                enabledModules: nextModules,
+              },
+            },
+          };
+          localStorage.setItem('orvexa_cached_workspace', JSON.stringify(updatedWs));
+        }
+      } catch {}
+      window.dispatchEvent(
+        new CustomEvent('workspace-updated', { detail: { enabledModules: nextModules } }),
+      );
+    }
+  };
+
   // Handler 2: Apply Profile Layout
   const handleApplyPreset = async (profileId: string) => {
     let presetModules = [
-      'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing'
+      'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing', 'payroll'
     ];
     if (profileId === 'CORE_OPS') {
       presetModules = ['people', 'work_queue', 'quality', 'sla', 'time', 'attendance', 'leave', 'approvals'];
     } else if (profileId === 'PROJECTS_DELIVERY') {
       presetModules = ['people', 'projects', 'tasks', 'time', 'clients', 'approvals'];
     } else if (profileId === 'LEAN_SERVICES') {
-      presetModules = ['people', 'projects', 'tasks', 'approvals', 'time', 'billing'];
+      presetModules = ['people', 'projects', 'tasks', 'approvals', 'time', 'billing', 'payroll'];
     }
 
     setBusinessType(profileId);
     setEnabledModules(presetModules);
 
     try {
-      await fetch(`${BRANDING.apiUrl}/workspaces/settings`, {
+      const res = await fetch(`${BRANDING.apiUrl}/workspaces/settings`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify({
@@ -884,34 +1090,36 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
           settings: { enabledModules: presetModules },
         }),
       });
+      if (!res.ok) throw new Error('Failed to apply operational profile');
+      syncCachedWorkspaceModules(presetModules);
       toast.success(`Applied ${profileId} operational profile!`);
     } catch (err: any) {
-      toast.error('Error applying operational profile');
+      toast.error(err?.message || 'Error applying operational profile');
     }
   };
 
   // Handler 3: Save Module Entitlements
-  const handleSaveModules = async () => {
+  const enabledModulesRef = React.useRef<string[]>(enabledModules);
+  useEffect(() => {
+    enabledModulesRef.current = enabledModules;
+  }, [enabledModules]);
+
+  const handleSaveModules = async (overrideModules?: string[]) => {
+    const modulesToSave = overrideModules || enabledModulesRef.current || enabledModules;
     setSavingModules(true);
     try {
       const res = await fetch(`${BRANDING.apiUrl}/workspaces/settings`, {
         method: 'PATCH',
         headers: getHeaders(),
         body: JSON.stringify({
-          settings: { enabledModules },
+          settings: { enabledModules: modulesToSave },
         }),
       });
 
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.message || 'Failed to update modules');
 
-      setWorkspace((prev: any) => ({
-        ...prev,
-        settings: {
-          ...(prev?.settings || {}),
-          enabledModules,
-        },
-      }));
+      syncCachedWorkspaceModules(modulesToSave);
       toast.success('Workspace module entitlements updated!');
     } catch (err: any) {
       toast.error(err.message || 'Error saving modules');
@@ -921,12 +1129,99 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
   };
 
   const toggleModule = (modKey: string) => {
-    if (enabledModules.includes(modKey)) {
-      setEnabledModules(enabledModules.filter((m) => m !== modKey));
-    } else {
-      setEnabledModules([...enabledModules, modKey]);
-    }
+    const base = enabledModulesRef.current;
+    const next = base.includes(modKey) ? base.filter((m) => m !== modKey) : [...base, modKey];
+    enabledModulesRef.current = next;
+    setEnabledModules(next);
+    syncCachedWorkspaceModules(next);
   };
+
+  const handleInstantToggleModule = async (modKey: string) => {
+    const base = enabledModulesRef.current;
+    const next = base.includes(modKey)
+      ? base.filter((m) => m !== modKey)
+      : [...base, modKey];
+    enabledModulesRef.current = next;
+    setEnabledModules(next);
+    syncCachedWorkspaceModules(next);
+    await handleSaveModules(next);
+  };
+
+  const handleUpdateNotifPrefs = async (patch: Partial<NotificationPrefs>) => {
+    const uid = userProfile?.id;
+    const next = saveNotificationPrefs(patch, uid);
+    setNotifPrefs(next);
+    try {
+      await fetch(`${BRANDING.apiUrl}/notifications/preferences`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          browserPushNotifications: next.desktopNotificationsEnabled,
+          soundEnabled: next.soundEnabled,
+          soundType: next.soundType,
+          soundVolume: next.soundVolume,
+          taskSoundEnabled: next.taskSoundEnabled,
+          chatSoundEnabled: next.chatSoundEnabled,
+        }),
+      });
+      toast.success('Notification & sound preferences saved');
+    } catch {}
+  };
+
+  // Helper: Resolve effective catalog & permission IDs for a role
+  const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
+
+  const extractRolePermissionIds = (role: any): string[] => {
+    if (!role) return [];
+    const ids = new Set<string>();
+    for (const p of role.permissions || []) {
+      const code = p?.permission?.code || p?.code || (typeof p === 'string' && p.includes(':') ? p : '');
+      const pid = p?.permissionId || p?.permission?.id || p?.id;
+      const matched = effectiveCatalog.find((c) => (code && c.code === code) || (pid && c.id === pid));
+      if (matched) ids.add(matched.id);
+      else if (pid) ids.add(pid);
+    }
+    return Array.from(ids);
+  };
+
+  const resolveRoleDataScope = (role: any): string => {
+    if (!role) return 'GLOBAL';
+    if (role.name === 'OWNER') return 'GLOBAL';
+    const configured = workspace?.settings?.roleDataScopes?.[role.id];
+    if (configured) return configured;
+    if (role.name === 'ADMIN') return 'GLOBAL';
+    if (role.name === 'MANAGER') return 'TEAM';
+    if (role.name === 'MEMBER') return 'OWN';
+    return 'DEPARTMENT';
+  };
+
+  useEffect(() => {
+    const role = roles.find((r) => r.id === selectedRoleId) || roles[0];
+    if (role) {
+      setDraftRolePermIds(extractRolePermissionIds(role));
+      setDraftRoleDataScope(resolveRoleDataScope(role));
+      setRolePermsDirty(false);
+    }
+  }, [selectedRoleId, roles.length, workspace?.id]);
+
+  useEffect(() => {
+    if (activeTab !== 'roles' || roleRightTab !== 'members' || !selectedRoleId) return;
+    setLoadingRoleMembers(true);
+    fetch(`${BRANDING.apiUrl}/roles/${selectedRoleId}/members`, { headers: getHeaders() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((res) => {
+        const list = res?.data !== undefined ? res.data : res;
+        if (Array.isArray(list)) {
+          setRoleMembers(list);
+        } else {
+          setRoleMembers(directoryMembers.filter((m: any) => m.roleId === selectedRoleId || m.role?.id === selectedRoleId));
+        }
+      })
+      .catch(() => {
+        setRoleMembers(directoryMembers.filter((m: any) => m.roleId === selectedRoleId || m.role?.id === selectedRoleId));
+      })
+      .finally(() => setLoadingRoleMembers(false));
+  }, [activeTab, roleRightTab, selectedRoleId]);
 
   // Handler 4: Create Custom Role
   const handleCreateRole = async (e: React.FormEvent) => {
@@ -937,16 +1232,25 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       const res = await fetch(`${BRANDING.apiUrl}/roles`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ name: newRoleName.trim(), description: newRoleDesc.trim() }),
+        body: JSON.stringify({
+          name: newRoleName.trim(),
+          description: newRoleDesc.trim(),
+          copyFromRoleId: newRoleCopyFromId || undefined,
+          dataScope: newRoleDataScope,
+        }),
       });
-      if (!res.ok) throw new Error('Failed to create role');
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || 'Failed to create role');
       const newRole = data.data !== undefined ? data.data : data;
-      toast.success('Custom role created!');
+      toast.success(`Custom role "${newRole.name}" created!`);
       setNewRoleName('');
       setNewRoleDesc('');
-      setRoles([...roles, newRole]);
-      setSelectedRoleId(newRole.id);
+      setNewRoleCopyFromId('');
+      setShowCreateRoleModal(false);
+      await loadAllData();
+      if (newRole?.id) {
+        setSelectedRoleId(newRole.id);
+      }
     } catch (err: any) {
       toast.error(err.message || 'Error creating role');
     } finally {
@@ -954,77 +1258,124 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     }
   };
 
-  // Handler 5: Toggle Role Permission with Group Dependency Rules
-  const handleTogglePermission = async (roleId: string, permId: string) => {
-    const role = roles.find((r) => r.id === roleId);
-    if (!role) return;
-
-    const currentPermIds: string[] = (role.permissions || []).map((p: any) => p.permissionId || p.permission?.id || p.id || p.code || (typeof p === 'string' ? p : '')).filter(Boolean);
-    const targetPerm = (allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG).find((p) => p.id === permId || p.code === permId);
-    const isCurrentlyChecked = (role.permissions || []).some((p: any) =>
-      p === permId ||
-      p.permissionId === permId ||
-      p.id === permId ||
-      p.permission?.id === permId ||
-      p.permission?.code === permId ||
-      p.code === permId ||
-      (targetPerm && (p.permission?.code === targetPerm.code || p.code === targetPerm.code || p.permissionId === targetPerm.id))
-    );
-
-    let updatedPermIds: string[];
-
-    // Modules with view-dependency enforcement
+  // Handler 5: Draft Toggle Role Permission with Dependency Rules + Save Changes
+  const handleToggleDraftPermission = (permId: string) => {
+    const targetPerm = effectiveCatalog.find((p) => p.id === permId || p.code === permId);
+    const actualId = targetPerm?.id || permId;
+    const isChecked = draftRolePermIds.includes(actualId);
     const dependencyGroups = ['assets', 'inventory', 'ledger', 'documents'];
     const targetCode = targetPerm?.code || '';
     const [targetGroup] = targetCode.split(':');
 
-    if (isCurrentlyChecked) {
-      // Unchecking
+    let next: string[];
+    if (isChecked) {
       if (dependencyGroups.includes(targetGroup) && targetCode === `${targetGroup}:view`) {
-        // Unchecking view unchecks all permissions in that group
-        const groupPermIds = allPermissions
+        const groupIds = effectiveCatalog
           .filter((p) => p.code.startsWith(`${targetGroup}:`))
           .map((p) => p.id);
-        updatedPermIds = currentPermIds.filter((id) => !groupPermIds.includes(id));
+        next = draftRolePermIds.filter((id) => !groupIds.includes(id));
       } else {
-        updatedPermIds = currentPermIds.filter((id) => id !== permId);
+        next = draftRolePermIds.filter((id) => id !== actualId);
       }
     } else {
-      // Checking
-      updatedPermIds = [...currentPermIds, permId];
-
+      next = [...draftRolePermIds, actualId];
       if (dependencyGroups.includes(targetGroup) && targetCode !== `${targetGroup}:view`) {
-        // Checking any non-view permission automatically checks the view permission
-        const viewPerm = allPermissions.find((p) => p.code === `${targetGroup}:view`);
-        if (viewPerm && !updatedPermIds.includes(viewPerm.id)) {
-          updatedPermIds.push(viewPerm.id);
+        const viewPerm = effectiveCatalog.find((p) => p.code === `${targetGroup}:view`);
+        if (viewPerm && !next.includes(viewPerm.id)) {
+          next.push(viewPerm.id);
         }
       }
     }
+    setDraftRolePermIds(next);
+    setRolePermsDirty(true);
+  };
 
+  const handleSaveRolePermissions = async () => {
+    if (!selectedRoleObj || selectedRoleObj.name === 'OWNER') return;
+    setSavingRolePerms(true);
     try {
-      const res = await fetch(`${BRANDING.apiUrl}/roles/${roleId}/permissions`, {
+      const res = await fetch(`${BRANDING.apiUrl}/roles/${selectedRoleObj.id}/permissions`, {
         method: 'PATCH',
         headers: getHeaders(),
-        body: JSON.stringify({ permissionIds: updatedPermIds }),
-      });
-
-      if (!res.ok) throw new Error('Failed to update permissions');
-
-      setRoles(
-        roles.map((r) => {
-          if (r.id === roleId) {
-            return {
-              ...r,
-              permissions: updatedPermIds.map((id) => ({ permissionId: id })),
-            };
-          }
-          return r;
+        body: JSON.stringify({
+          permissionIds: draftRolePermIds,
+          dataScope: draftRoleDataScope,
         }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || 'Failed to save role permissions');
+
+      setRoles((prev) =>
+        prev.map((r) =>
+          r.id === selectedRoleObj.id
+            ? {
+                ...r,
+                permissions: draftRolePermIds.map((id) => {
+                  const found = effectiveCatalog.find((c) => c.id === id);
+                  return { permissionId: id, code: found?.code, permission: found };
+                }),
+              }
+            : r,
+        ),
       );
-      toast.success('Role permissions updated');
+      setWorkspace((prev: any) =>
+        prev
+          ? {
+              ...prev,
+              settings: {
+                ...(prev.settings || {}),
+                roleDataScopes: {
+                  ...(prev.settings?.roleDataScopes || {}),
+                  [selectedRoleObj.id]: draftRoleDataScope,
+                },
+              },
+            }
+          : prev,
+      );
+      setRolePermsDirty(false);
+      window.dispatchEvent(new CustomEvent('workspace-updated'));
+      toast.success(`Saved permissions & data scope for ${selectedRoleObj.name}`);
     } catch (err: any) {
-      toast.error(err.message || 'Error updating role permission');
+      toast.error(err.message || 'Error saving role permissions');
+    } finally {
+      setSavingRolePerms(false);
+    }
+  };
+
+  const handleCopyFromRole = (sourceRoleId: string) => {
+    const source = roles.find((r) => r.id === sourceRoleId);
+    if (!source) return;
+    setDraftRolePermIds(extractRolePermissionIds(source));
+    setDraftRoleDataScope(resolveRoleDataScope(source));
+    setRolePermsDirty(true);
+    setCopyFromMenuOpen(false);
+    toast.info(`Copied permissions from ${source.name}. Click "Save Changes" to apply.`);
+  };
+
+  const handleResetRolePermissions = async () => {
+    if (!selectedRoleObj) return;
+    if (rolePermsDirty && !selectedRoleObj.isSystemRole) {
+      setDraftRolePermIds(extractRolePermissionIds(selectedRoleObj));
+      setDraftRoleDataScope(resolveRoleDataScope(selectedRoleObj));
+      setRolePermsDirty(false);
+      toast.info('Reverted unsaved changes');
+      return;
+    }
+    setResettingRole(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/roles/${selectedRoleObj.id}/reset`, {
+        method: 'POST',
+        headers: getHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.message || 'Failed to reset role');
+      await loadAllData();
+      setRolePermsDirty(false);
+      toast.success(`Reset ${selectedRoleObj.name} to default configuration`);
+    } catch (err: any) {
+      toast.error(err.message || 'Error resetting role');
+    } finally {
+      setResettingRole(false);
     }
   };
 
@@ -1039,8 +1390,9 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.message || 'Failed to update role');
+      const updatedRole = data?.data !== undefined ? data.data : data;
       toast.success('Role updated successfully');
-      setRoles(roles.map((r) => (r.id === roleId ? data : r)));
+      setRoles(roles.map((r) => (r.id === roleId ? { ...r, ...updatedRole } : r)));
       setEditingRoleId(null);
     } catch (err: any) {
       toast.error(err.message || 'Error updating role');
@@ -1300,7 +1652,7 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     }
   };
 
-  // Handler 8: Create Designation
+  // Handler 8: Create & Configure Designation with Permissions & Role Mapping
   const handleAddDesig = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newDesigTitle.trim()) return;
@@ -1308,14 +1660,28 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
       const res = await fetch(`${BRANDING.apiUrl}/designations`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ title: newDesigTitle.trim(), level: Number(newDesigLevel) }),
+        body: JSON.stringify({
+          title: newDesigTitle.trim(),
+          level: Number(newDesigLevel) || 1,
+          departmentId: newDesigDeptId || undefined,
+          defaultAccessRole: newDesigAccessRole,
+          defaultDataScope: newDesigDataScope,
+          permissionCodes: newDesigPerms,
+        }),
       });
-      if (!res.ok) throw new Error('Failed to add designation');
       const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || 'Failed to add designation');
       const newDesig = data.data !== undefined ? data.data : data;
       setDesignations([...designations, newDesig]);
       setNewDesigTitle('');
-      toast.success('Designation created');
+      setNewDesigLevel(1);
+      setNewDesigDeptId('');
+      setNewDesigAccessRole('MEMBER');
+      setNewDesigDataScope('OWN');
+      setNewDesigPerms([]);
+      setShowDesigConfigModal(false);
+      await loadAllData();
+      toast.success('Designation and permission profile created!');
     } catch (err: any) {
       toast.error(err.message || 'Error creating designation');
     }
@@ -1337,12 +1703,20 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     setEditingDesigId(desig.id);
     setEditDesigTitle(desig.title || '');
     setEditDesigLevel(desig.level || 1);
+    setEditDesigDeptId(desig.departmentId || '');
+    setEditDesigAccessRole((desig.defaultAccessRole as any) || 'MEMBER');
+    setEditDesigDataScope((desig.defaultDataScope as any) || 'OWN');
+    setEditDesigPerms(Array.isArray(desig.permissionCodes) ? desig.permissionCodes : []);
   };
 
   const cancelEditDesig = () => {
     setEditingDesigId(null);
     setEditDesigTitle('');
     setEditDesigLevel(1);
+    setEditDesigDeptId('');
+    setEditDesigAccessRole('MEMBER');
+    setEditDesigDataScope('OWN');
+    setEditDesigPerms([]);
   };
 
   const handleSaveDesig = async (id: string) => {
@@ -1358,27 +1732,17 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
         body: JSON.stringify({
           title: editDesigTitle.trim(),
           level: Number(editDesigLevel) || 1,
+          departmentId: editDesigDeptId || undefined,
+          defaultAccessRole: editDesigAccessRole,
+          defaultDataScope: editDesigDataScope,
+          permissionCodes: editDesigPerms,
         }),
       });
-      if (!res.ok) throw new Error('Failed to update designation');
       const data = await res.json();
-      const updated = data.data !== undefined ? data.data : data;
-      setDesignations((prev) =>
-        prev.map((d) => {
-          const did = d.id || d.data?.id;
-          if (did === id) {
-            return {
-              ...(d.data !== undefined ? d.data : d),
-              title: editDesigTitle.trim(),
-              level: Number(editDesigLevel) || 1,
-              ...(updated && typeof updated === 'object' ? updated : {}),
-            };
-          }
-          return d;
-        })
-      );
+      if (!res.ok) throw new Error(data?.message || 'Failed to update designation');
       cancelEditDesig();
-      toast.success('Designation updated successfully');
+      await loadAllData();
+      toast.success('Designation & permissions updated successfully');
     } catch (err: any) {
       toast.error(err.message || 'Error updating designation');
     } finally {
@@ -1650,97 +2014,544 @@ if (meData.firstName) setPersonalFirstName(meData.firstName);
     { key: 'clients', name: 'Client Portal', icon: Building2, desc: 'Client account management, external portal access, and contracts.' },
     { key: 'billing', name: 'Invoicing & Billing', icon: DollarSign, desc: 'Service billing, payment tracking, and financial summary reports.' },
     { key: 'assets', name: 'Assets, Inventory & Docs', icon: Package, desc: 'Company hardware and asset tracking, stock inventory, movements ledger, and document vault.' },
+    { key: 'payroll', name: 'Payroll & Compensation', icon: CreditCard, desc: 'Payroll cycles, salary slips, statutory deductions, and permission-gated payouts.' },
   ];
 
-const selectedRoleObj =
+  const selectedRoleObj =
     roles.find((r) => r.id === selectedRoleId) ||
     roles.find((r) => r.name === 'ADMIN') ||
     roles[0];
 
+  const allMembersList: any[] =
+    directoryMembers && directoryMembers.length > 0
+      ? directoryMembers
+      : workspace?.memberships || [];
+
+  const getRoleMemberCount = (role: any) => {
+    const matched = allMembersList.filter(
+      (m: any) =>
+        m.roleId === role.id ||
+        m.role?.id === role.id ||
+        (!m.roleId && m.accessRole === role.name),
+    ).length;
+    return Math.max(matched, role?._count?.memberships || 0);
+  };
+
+  const formatRoleDisplayName = (roleName: string) => {
+    if (!roleName) return 'Role';
+    const upper = roleName.toUpperCase();
+    if (upper === 'ADMIN') return 'Admin';
+    if (upper === 'MANAGER') return 'Manager';
+    if (upper === 'MEMBER') return 'Member';
+    if (upper === 'OWNER') return 'Owner';
+    return roleName;
+  };
+
+  const overviewModulesSubset = allModulesList.filter((m) =>
+    ['people', 'projects', 'tasks', 'time', 'attendance', 'leave', 'approvals', 'work_queue', 'payroll', 'assets'].includes(m.key),
+  );
+  const enabledCountTotal = allModulesList.filter((m) => enabledModules.includes(m.key)).length;
+
+  const catalogModuleNames = Array.from(new Set(effectiveCatalog.map((p) => p.module || 'General'))).sort(
+    (a, b) => {
+      const orderA = MODULE_DISPLAY_ORDER[a] ?? 99;
+      const orderB = MODULE_DISPLAY_ORDER[b] ?? 99;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.localeCompare(b);
+    },
+  );
+
+  const selectedRoleMemberCount = selectedRoleObj ? getRoleMemberCount(selectedRoleObj) : 0;
+
   return (
     <div className="space-y-6">
-      {/* Topics (Tabs) & Badge - Single Unified Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-border pb-1 gap-2">
-        <div className="flex flex-wrap gap-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+      {/* Workspace Settings Header */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">Workspace Settings</h1>
+          <p className="text-xs text-muted-foreground mt-1">
+            Configure your workspace modules, organization structure, and access control.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="px-3 py-1 font-mono text-xs">
+            Workspace ID: {wsId?.slice(0, 8)}...
+          </Badge>
+        </div>
+      </div>
+
+      {/* Navigation Tabs */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-border pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
         <button
-          onClick={() => setActiveTab('details')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'details'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
+          onClick={() => setActiveTab('overview')}
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+            activeTab === 'overview'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
           }`}
         >
-          <Building2 className="h-4 w-4" /> Organization Details
-        </button>
-        <button
-          onClick={() => setActiveTab('personal')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'personal'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
-          }`}
-        >
-          <User className="h-4 w-4" /> Personal Details
+          <LayoutGrid className="h-3.5 w-3.5" /> Overview
         </button>
         <button
           onClick={() => setActiveTab('modules')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
             activeTab === 'modules'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
           }`}
         >
-          <Sliders className="h-4 w-4" /> Modules & Features
+          <Layers className="h-3.5 w-3.5" /> Modules & Features
+        </button>
+        <button
+          onClick={() => setActiveTab('structure')}
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+            activeTab === 'structure'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+          }`}
+        >
+          <Network className="h-3.5 w-3.5" /> Organization Structure
         </button>
         {isOwnerOrAdmin && (
           <button
             onClick={() => setActiveTab('roles')}
-            className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+            className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
               activeTab === 'roles'
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                ? 'bg-background text-primary border border-border shadow-xs'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
             }`}
           >
-            <Shield className="h-4 w-4" /> Roles & Permissions
+            <Shield className="h-3.5 w-3.5" /> Roles & Permissions
           </button>
         )}
         <button
-          onClick={() => setActiveTab('structure')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
-            activeTab === 'structure'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
+          onClick={() => setActiveTab('details')}
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+            activeTab === 'details'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
           }`}
         >
-          <Users className="h-4 w-4" /> Org Structure
+          <Building2 className="h-3.5 w-3.5" /> Organization Details
+        </button>
+        <button
+          onClick={() => setActiveTab('personal')}
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
+            activeTab === 'personal' || activeTab === 'profile'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
+          }`}
+        >
+          <User className="h-3.5 w-3.5" /> Personal & Alerts
         </button>
         <button
           onClick={() => setActiveTab('billing')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
             activeTab === 'billing'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
           }`}
         >
-          <CreditCard className="h-4 w-4" /> Subscription & Billing
+          <CreditCard className="h-3.5 w-3.5" /> Subscription & Billing
         </button>
         <button
           onClick={() => setActiveTab('security')}
-          className={`flex items-center gap-2 border-b-2 px-4 py-2.5 text-xs font-semibold transition-colors ${
+          className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
             activeTab === 'security'
-              ? 'border-primary text-primary'
-              : 'border-transparent text-muted-foreground hover:text-foreground'
+              ? 'bg-background text-primary border border-border shadow-xs'
+              : 'text-muted-foreground hover:text-foreground hover:bg-muted/40'
           }`}
         >
-          <KeyRound className="h-4 w-4" /> Security & 2FA
+          <KeyRound className="h-3.5 w-3.5" /> Security & 2FA
         </button>
       </div>
-        <div className="flex items-center justify-end shrink-0 pb-1 sm:pb-0">
-        <Badge variant="outline" className="px-3 py-1 font-mono text-xs">
-          Workspace ID: {wsId?.slice(0, 8)}...
-        </Badge>
-      </div>
-      </div>
+
+      {/* TAB 0: Overview (3-Card Dashboard) */}
+      {activeTab === 'overview' && (
+        <div className="space-y-5">
+          <div className="grid gap-5 lg:grid-cols-3">
+            {/* Card 1: Modules & Features */}
+            <Card className="border-border flex flex-col justify-between shadow-xs">
+              <div>
+                <CardHeader className="pb-3 flex flex-row items-start justify-between space-y-0">
+                  <div className="flex items-start gap-3">
+                    <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                      <Layers className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-bold text-foreground">Modules & Features</CardTitle>
+                      <CardDescription className="text-xs mt-0.5 leading-snug">
+                        Enable or disable operational modules for your workspace.
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('modules')}
+                    className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-muted/60"
+                    title="Manage all modules"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </CardHeader>
+                <CardContent className="pt-1 space-y-2 max-h-[380px] overflow-y-auto">
+                  {overviewModulesSubset.map((mod) => {
+                    const Icon = mod.icon;
+                    const isOn = enabledModules.includes(mod.key);
+                    return (
+                      <div
+                        key={mod.key}
+                        className="flex items-center justify-between px-3 py-2 rounded-lg border border-border/70 bg-card hover:bg-muted/20 transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 ${isOn ? 'bg-blue-500/10 text-blue-600' : 'bg-muted text-muted-foreground'}`}>
+                            <Icon className="h-3.5 w-3.5" />
+                          </div>
+                          <span className="text-xs font-semibold text-foreground truncate">{mod.name}</span>
+                        </div>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isOn}
+                          disabled={savingModules}
+                          onClick={() => handleInstantToggleModule(mod.key)}
+                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none ${
+                            isOn ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                              isOn ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </CardContent>
+              </div>
+              <CardFooter className="pt-3 mt-2 border-t border-border/60 flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                  {enabledCountTotal} of {allModulesList.length} modules enabled
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('modules')}
+                  className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                >
+                  Manage Modules <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </CardFooter>
+            </Card>
+
+            {/* Card 2: Organization Structure */}
+            <Card className="border-border flex flex-col justify-between shadow-xs">
+              <div>
+                <CardHeader className="pb-3 flex flex-row items-start justify-between space-y-0">
+                  <div className="flex items-start gap-3">
+                    <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                      <Network className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-bold text-foreground">Organization Structure</CardTitle>
+                      <CardDescription className="text-xs mt-0.5 leading-snug">
+                        Manage departments, teams, designations and member assignments.
+                      </CardDescription>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('structure')}
+                    className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-muted/60"
+                    title="Manage structure"
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </CardHeader>
+                <CardContent className="pt-1 space-y-2 max-h-[380px] overflow-y-auto">
+                  {departments.length === 0 ? (
+                    <div className="py-8 text-center border border-dashed border-border rounded-lg text-xs text-muted-foreground">
+                      <Folder className="h-6 w-6 mx-auto mb-1.5 opacity-40" />
+                      <p>No departments added yet.</p>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('structure')}
+                        className="text-blue-600 font-semibold mt-1 hover:underline"
+                      >
+                        Create Departments & Teams →
+                      </button>
+                    </div>
+                  ) : (
+                    departments.map((rawDept) => {
+                      const dept = rawDept?.data !== undefined ? rawDept.data : rawDept;
+                      const deptTeams = teams.filter(
+                        (rawT) => (rawT.departmentId || rawT.department?.id) === dept.id,
+                      );
+                      const deptMembers = allMembersList.filter(
+                        (m: any) => (m.departmentId || m.department?.id) === dept.id,
+                      );
+                      const isDeptOpen = !!expandedOverviewDepts[dept.id];
+                      return (
+                        <div key={dept.id} className="rounded-lg border border-border/80 bg-card overflow-hidden">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedOverviewDepts((prev) => ({ ...prev, [dept.id]: !prev[dept.id] }))
+                            }
+                            className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-muted/30 transition-colors"
+                          >
+                            <div className="flex items-center gap-2 font-semibold text-foreground min-w-0">
+                              <div className="h-6 w-6 rounded bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                                <Folder className="h-3.5 w-3.5" />
+                              </div>
+                              <span className="truncate">{dept.name}</span>
+                              <span className="text-muted-foreground font-normal">({deptMembers.length})</span>
+                            </div>
+                            <ChevronDown
+                              className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                                isDeptOpen ? 'rotate-180' : ''
+                              }`}
+                            />
+                          </button>
+
+                          {isDeptOpen && (
+                            <div className="px-3 pb-2.5 pt-1 space-y-1.5 bg-muted/10 border-t border-border/50">
+                              {deptTeams.map((rawTeam) => {
+                                const team = rawTeam?.data !== undefined ? rawTeam.data : rawTeam;
+                                const teamMembers = allMembersList.filter(
+                                  (m: any) => (m.teamId || m.team?.id) === team.id,
+                                );
+                                const isTeamOpen = !!expandedOverviewTeams[team.id];
+                                return (
+                                  <div key={team.id} className="rounded-md border border-border/60 bg-background">
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setExpandedOverviewTeams((prev) => ({
+                                          ...prev,
+                                          [team.id]: !prev[team.id],
+                                        }))
+                                      }
+                                      className="w-full flex items-center justify-between px-2.5 py-1.5 text-xs hover:bg-muted/20"
+                                    >
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <Users className="h-3.5 w-3.5 text-blue-600 shrink-0" />
+                                        <span className="font-semibold text-foreground truncate">{team.name}</span>
+                                        <span className="text-muted-foreground text-[11px]">({teamMembers.length})</span>
+                                      </div>
+                                      <ChevronDown
+                                        className={`h-3 w-3 text-muted-foreground transition-transform ${
+                                          isTeamOpen ? 'rotate-180' : ''
+                                        }`}
+                                      />
+                                    </button>
+                                    {isTeamOpen && (
+                                      <div className="px-2.5 pb-2 pt-1 space-y-1 border-t border-border/40">
+                                        {teamMembers.length === 0 ? (
+                                          <p className="text-[11px] text-muted-foreground italic py-1 pl-4">
+                                            No members assigned yet
+                                          </p>
+                                        ) : (
+                                          teamMembers.map((m: any) => {
+                                            const fullName =
+                                              [m.user?.firstName, m.user?.lastName].filter(Boolean).join(' ') ||
+                                              m.user?.email ||
+                                              'Member';
+                                            const desigLabel = m.designation?.title || m.role?.name || m.accessRole;
+                                            const isLead =
+                                              team.leadMembershipId === m.id ||
+                                              m.accessRole === 'MANAGER' ||
+                                              m.accessRole === 'ADMIN' ||
+                                              m.accessRole === 'OWNER' ||
+                                              (m.designation?.level || 0) >= 5 ||
+                                              (m.designation?.title || '').toLowerCase().includes('lead');
+                                            return (
+                                              <div
+                                                key={m.id}
+                                                className="flex items-center justify-between gap-2 text-[11px] py-0.5 pl-1"
+                                              >
+                                                <div className="flex items-center gap-1.5 min-w-0">
+                                                  {isLead ? (
+                                                    <Crown className="h-3.5 w-3.5 text-amber-500 shrink-0" />
+                                                  ) : (
+                                                    <User className="h-3 w-3 text-muted-foreground shrink-0" />
+                                                  )}
+                                                  <span className={`truncate ${isLead ? 'font-bold text-foreground' : 'text-foreground'}`}>
+                                                    {fullName}
+                                                  </span>
+                                                  {desigLabel && (
+                                                    <span className="text-muted-foreground truncate">— {desigLabel}</span>
+                                                  )}
+                                                </div>
+                                                {isLead && (
+                                                  <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-blue-500/15 text-blue-600 shrink-0">
+                                                    Lead
+                                                  </span>
+                                                )}
+                                              </div>
+                                            );
+                                          })
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+
+                              {/* Dept members without a team */}
+                              {deptMembers.filter((m: any) => !m.teamId && !m.team?.id).length > 0 && (
+                                <div className="pl-2 pt-1 space-y-1">
+                                  {deptMembers
+                                    .filter((m: any) => !m.teamId && !m.team?.id)
+                                    .map((m: any) => (
+                                      <div key={m.id} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                        <User className="h-3 w-3 shrink-0" />
+                                        <span className="text-foreground font-medium">
+                                          {[m.user?.firstName, m.user?.lastName].filter(Boolean).join(' ') || m.user?.email}
+                                        </span>
+                                        {m.designation?.title && <span>— {m.designation.title}</span>}
+                                      </div>
+                                    ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </CardContent>
+              </div>
+              <CardFooter className="pt-3 mt-2 border-t border-border/60 flex items-center justify-between text-xs">
+                <span className="text-muted-foreground font-medium">
+                  {departments.length} Departments • {teams.length} Teams • {allMembersList.length} Members
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('structure')}
+                  className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                >
+                  Manage Structure <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </CardFooter>
+            </Card>
+
+            {/* Card 3: Roles & Permissions */}
+            <Card className="border-border flex flex-col justify-between shadow-xs">
+              <div>
+                <CardHeader className="pb-3 flex flex-row items-start justify-between space-y-0">
+                  <div className="flex items-start gap-3">
+                    <div className="h-10 w-10 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                      <Shield className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-base font-bold text-foreground">Roles & Permissions</CardTitle>
+                      <CardDescription className="text-xs mt-0.5 leading-snug">
+                        Create permission profiles and control access to modules and data.
+                      </CardDescription>
+                    </div>
+                  </div>
+                  {isOwnerOrAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('roles')}
+                      className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-muted/60"
+                      title="Manage roles"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  )}
+                </CardHeader>
+                <CardContent className="pt-1 space-y-2 max-h-[380px] overflow-y-auto">
+                  {roles.map((r) => {
+                    const memberCount = getRoleMemberCount(r);
+                    return (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => {
+                          if (isOwnerOrAdmin) {
+                            setSelectedRoleId(r.id);
+                            setActiveTab('roles');
+                          }
+                        }}
+                        className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg border border-border/70 bg-card hover:bg-muted/20 hover:border-border transition-all text-left"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          <div className="h-8 w-8 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                            <Users className="h-4 w-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-foreground truncate">
+                              {formatRoleDisplayName(r.name)}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground truncate">
+                              {r.description || 'Workspace permission profile'}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="h-6 min-w-6 px-1.5 rounded-md bg-muted text-foreground text-[11px] font-bold flex items-center justify-center">
+                            {memberCount}
+                          </span>
+                          {isOwnerOrAdmin && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </CardContent>
+              </div>
+              <CardFooter className="pt-3 mt-2 border-t border-border/60 flex items-center justify-between text-xs">
+                <span className="flex items-center gap-1.5 text-muted-foreground font-medium">
+                  <Users className="h-3.5 w-3.5" />
+                  {roles.length} Roles • {allMembersList.length} Assigned Members
+                </span>
+                {isOwnerOrAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab('roles')}
+                    className="text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                  >
+                    Manage Roles <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </CardFooter>
+            </Card>
+          </div>
+
+          {/* Post-Setup Team Invitation Quick Action Bar */}
+          <Card className="border-border bg-gradient-to-r from-blue-500/5 via-card to-indigo-500/5">
+            <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  <Users className="h-4 w-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-foreground">
+                    Invite & Configure Team Access After Setup
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Send single or bulk invitations with pre-configured departments, teams, designations, and role permissions.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Link href="/app/people?invite=1">
+                  <Button size="sm" variant="outline" className="text-xs h-8 gap-1.5">
+                    <Plus className="h-3.5 w-3.5" /> Invite Member
+                  </Button>
+                </Link>
+                <Link href="/app/people?bulkInvite=1">
+                  <Button size="sm" className="text-xs h-8 gap-1.5">
+                    <Users className="h-3.5 w-3.5" /> Bulk Invite Team
+                  </Button>
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* TAB 1: Organization Details */}
       {activeTab === 'details' && (
@@ -2059,6 +2870,224 @@ const selectedRoleObj =
               </form>
             </CardContent>
           </Card>
+
+          {/* Desktop Notifications & Sound Alert Configuration */}
+          <Card className="border-border shadow-xs">
+            <CardHeader className="border-b border-border/60 pb-4">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="h-8 w-8 rounded-lg bg-blue-500/10 flex items-center justify-center text-blue-600">
+                    <Bell className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-base font-bold text-foreground">
+                      Desktop Notifications & Sound Preferences
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      Personal per-user alert and audio chime settings for tasks and chat messages assigned to you.
+                    </CardDescription>
+                  </div>
+                </div>
+                <Badge variant="outline" className="text-[10px] font-mono">
+                  Per-User Settings
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="p-6 space-y-5">
+              {/* Chrome Desktop Permission */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 rounded-lg border border-border bg-muted/20">
+                <div>
+                  <div className="text-xs font-semibold text-foreground flex items-center gap-2">
+                    <span>Chrome / Browser Desktop Notifications</span>
+                    <Badge
+                      variant="secondary"
+                      className={`text-[10px] ${
+                        browserNotifPermission === 'granted'
+                          ? 'bg-emerald-500/15 text-emerald-600'
+                          : browserNotifPermission === 'denied'
+                          ? 'bg-destructive/15 text-destructive'
+                          : ''
+                      }`}
+                    >
+                      {browserNotifPermission === 'granted'
+                        ? 'Allowed'
+                        : browserNotifPermission === 'denied'
+                        ? 'Blocked in Browser'
+                        : 'Not Enabled'}
+                    </Badge>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground mt-0.5">
+                    Receive real-time Chrome alerts when tasks, approvals, calendar invites, or chat messages target your account.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2.5 shrink-0">
+                  {browserNotifPermission !== 'granted' && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-8"
+                      onClick={async () => {
+                        const perm = await requestNotificationPermission();
+                        setBrowserNotifPermission(perm);
+                        if (perm === 'granted') {
+                          handleUpdateNotifPrefs({ desktopNotificationsEnabled: true });
+                        }
+                      }}
+                    >
+                      Allow in Chrome
+                    </Button>
+                  )}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={notifPrefs.desktopNotificationsEnabled}
+                    onClick={() =>
+                      handleUpdateNotifPrefs({
+                        desktopNotificationsEnabled: !notifPrefs.desktopNotificationsEnabled,
+                      })
+                    }
+                    className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors ${
+                      notifPrefs.desktopNotificationsEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                        notifPrefs.desktopNotificationsEnabled ? 'translate-x-4' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+
+              {/* Master Sound + Tone + Volume */}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="p-3.5 rounded-lg border border-border space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {notifPrefs.soundEnabled ? (
+                        <Volume2 className="h-4 w-4 text-blue-600" />
+                      ) : (
+                        <VolumeX className="h-4 w-4 text-muted-foreground" />
+                      )}
+                      <div>
+                        <div className="text-xs font-semibold text-foreground">Alert Sound Effects</div>
+                        <div className="text-[11px] text-muted-foreground">Play synthesized chime when alerts arrive</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={notifPrefs.soundEnabled}
+                      onClick={() => handleUpdateNotifPrefs({ soundEnabled: !notifPrefs.soundEnabled })}
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors ${
+                        notifPrefs.soundEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          notifPrefs.soundEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-[1fr_auto] gap-2 items-center pt-1">
+                    <select
+                      value={notifPrefs.soundType}
+                      disabled={!notifPrefs.soundEnabled}
+                      onChange={(e) =>
+                        handleUpdateNotifPrefs({ soundType: e.target.value as NotificationSoundType })
+                      }
+                      className="rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground"
+                    >
+                      <option value="chime">Chime (Warm Two-Tone)</option>
+                      <option value="bell">Bell (Crisp Ring)</option>
+                      <option value="pop">Pop (Soft Ping)</option>
+                      <option value="subtle">Subtle (Soft Tone)</option>
+                    </select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-8 gap-1"
+                      onClick={() => testNotificationSound(notifPrefs.soundType, notifPrefs.soundVolume)}
+                    >
+                      <Volume2 className="h-3.5 w-3.5" /> Test Sound
+                    </Button>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span>Volume</span>
+                      <span className="font-mono">{Math.round((notifPrefs.soundVolume || 0.7) * 100)}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      disabled={!notifPrefs.soundEnabled}
+                      value={notifPrefs.soundVolume}
+                      onChange={(e) => handleUpdateNotifPrefs({ soundVolume: Number(e.target.value) })}
+                      className="w-full accent-blue-600"
+                    />
+                  </div>
+                </div>
+
+                {/* Per-Category Sound Toggles */}
+                <div className="p-3.5 rounded-lg border border-border space-y-3">
+                  <div className="text-xs font-semibold text-foreground">Category Sound Triggers</div>
+                  <div className="flex items-center justify-between py-1.5 border-b border-border/60">
+                    <div>
+                      <div className="text-xs font-medium text-foreground">Tasks, Work Items & Calendar Alerts</div>
+                      <div className="text-[11px] text-muted-foreground">Chime when a task or event is assigned to you</div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={notifPrefs.taskSoundEnabled}
+                      onClick={() =>
+                        handleUpdateNotifPrefs({ taskSoundEnabled: !notifPrefs.taskSoundEnabled })
+                      }
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors ${
+                        notifPrefs.taskSoundEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          notifPrefs.taskSoundEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between py-1.5">
+                    <div>
+                      <div className="text-xs font-medium text-foreground">Team Chat Messages</div>
+                      <div className="text-[11px] text-muted-foreground">Chime when someone sends a message in your chats</div>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={notifPrefs.chatSoundEnabled}
+                      onClick={() =>
+                        handleUpdateNotifPrefs({ chatSoundEnabled: !notifPrefs.chatSoundEnabled })
+                      }
+                      className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors ${
+                        notifPrefs.chatSoundEnabled ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-700'
+                      }`}
+                    >
+                      <span
+                        className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                          notifPrefs.chatSoundEnabled ? 'translate-x-4' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
@@ -2072,7 +3101,7 @@ const selectedRoleObj =
                 Enable or disable operational modules according to your organization's workflow needs.
               </CardDescription>
             </div>
-            <Button onClick={handleSaveModules} disabled={savingModules} size="sm">
+            <Button onClick={() => handleSaveModules()} disabled={savingModules} size="sm">
               {savingModules ? 'Saving...' : 'Save Module Entitlements'}
             </Button>
           </CardHeader>
@@ -2084,7 +3113,7 @@ const selectedRoleObj =
                 return (
                   <div
                     key={mod.key}
-                    onClick={() => toggleModule(mod.key)}
+                    onClick={() => handleInstantToggleModule(mod.key)}
                     className={`cursor-pointer p-4 rounded-lg border transition-all flex flex-col justify-between ${
                       isEnabled
                         ? 'border-primary bg-card ring-1 ring-primary/30 shadow-sm'
@@ -2125,137 +3154,862 @@ const selectedRoleObj =
         </Card>
       )}
 
-      {/* TAB 3: Roles & Permissions */}
+      {/* TAB 3: Roles & Permissions (Image 3 2-Pane Configurator) */}
       {activeTab === 'roles' && isOwnerOrAdmin && (
         <div className="space-y-6">
-          <div className="grid gap-6 md:grid-cols-3">
-            {/* Roles List & Create */}
-            <div className="space-y-4">
-              {/* Workspace Roles Card */}
-              <div className="rounded-xl border border-border/80 bg-card p-5 shadow-xs">
+          <div className="grid gap-6 lg:grid-cols-[310px_1fr] items-start">
+            {/* Left Column: Workspace Roles Directory */}
+            <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-3.5">
+              <div>
                 <h3 className="text-sm font-bold text-foreground">Workspace Roles</h3>
-                <p className="text-xs text-muted-foreground mt-0.5 mb-3.5">
-                  Select a role to inspect or edit permissions
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Manage roles and their permissions for this workspace.
                 </p>
+              </div>
 
-                <div className="space-y-2">
-                  {roles.map((r) => {
-                    const isSelected = selectedRoleObj?.id === r.id || selectedRoleId === r.id;
+              {/* Search Roles */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Search roles..."
+                  value={roleSearch}
+                  onChange={(e) => setRoleSearch(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background pl-8 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              {/* System Roles */}
+              <div className="space-y-1.5">
+                {roles
+                  .filter((r) => {
+                    if (!r.isSystemRole) return false;
+                    if (!roleSearch.trim()) return true;
+                    const q = roleSearch.toLowerCase();
                     return (
-                      <div
+                      r.name.toLowerCase().includes(q) ||
+                      (r.description || '').toLowerCase().includes(q)
+                    );
+                  })
+                  .map((r) => {
+                    const isSelected = selectedRoleObj?.id === r.id || selectedRoleId === r.id;
+                    const IconComp =
+                      r.name === 'OWNER'
+                        ? Crown
+                        : r.name === 'ADMIN'
+                        ? ShieldCheck
+                        : Users;
+                    return (
+                      <button
                         key={r.id}
-                        onClick={() => setSelectedRoleId(r.id)}
-                        className={`cursor-pointer p-3 rounded-lg text-xs transition-all flex items-center justify-between border ${
+                        type="button"
+                        onClick={() => {
+                          setSelectedRoleId(r.id);
+                          setRoleRightTab('permissions');
+                        }}
+                        className={`w-full text-left p-2.5 rounded-lg text-xs transition-all flex items-center justify-between gap-2 border ${
                           isSelected
-                            ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 shadow-xs'
-                            : 'border-border/80 bg-card hover:border-border hover:bg-muted/30'
+                            ? 'border-blue-500/60 bg-blue-50/70 dark:bg-blue-950/30 shadow-xs'
+                            : 'border-transparent bg-card hover:bg-muted/40'
                         }`}
                       >
-                        <div className="min-w-0 pr-2">
-                          <div className={`font-bold ${isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-foreground'}`}>
-                            {r.name}
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          <div
+                            className={`h-7 w-7 rounded-md flex items-center justify-center shrink-0 mt-0.5 ${
+                              isSelected
+                                ? 'bg-blue-600/15 text-blue-600'
+                                : r.name === 'OWNER'
+                                ? 'bg-amber-500/15 text-amber-600'
+                                : 'bg-muted text-muted-foreground'
+                            }`}
+                          >
+                            <IconComp className="h-3.5 w-3.5" />
                           </div>
-                          <div className="text-[11px] text-muted-foreground font-normal truncate mt-0.5 max-w-[190px]">
-                            {r.description || 'Workspace role'}
+                          <div className="min-w-0">
+                            <div
+                              className={`font-bold truncate ${
+                                isSelected ? 'text-blue-600 dark:text-blue-400' : 'text-foreground'
+                              }`}
+                            >
+                              {formatRoleDisplayName(r.name)}
+                            </div>
+                            <div className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">
+                              {r.description || 'Core platform role'}
+                            </div>
                           </div>
                         </div>
-                        <div className="shrink-0 flex items-center gap-1">
-                          {r.isSystemRole ? (
-                            <span className="text-[10px] text-muted-foreground border border-border/80 px-2 py-0.5 rounded-md bg-background font-medium">
-                              System
-                            </span>
-                          ) : (
-                            <span className="text-[10px] text-muted-foreground bg-muted px-2 py-0.5 rounded-md font-medium">
-                              {r._count?.memberships || 0} members
-                            </span>
-                          )}
-                        </div>
-                      </div>
+                        <span className="shrink-0 text-[10px] text-muted-foreground border border-border/80 px-2 py-0.5 rounded-md bg-background font-medium">
+                          System
+                        </span>
+                      </button>
                     );
                   })}
+              </div>
+
+              {/* Custom Roles Collapsible Section */}
+              <div className="pt-2 border-t border-border/70 space-y-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCustomRolesList(!showCustomRolesList)}
+                  className="w-full flex items-center justify-between text-xs font-bold text-foreground py-1"
+                >
+                  <span>
+                    Custom Roles ({roles.filter((r) => !r.isSystemRole).length})
+                  </span>
+                  <ChevronDown
+                    className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${
+                      showCustomRolesList ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {showCustomRolesList && (
+                  <div className="space-y-1.5">
+                    {roles
+                      .filter((r) => {
+                        if (r.isSystemRole) return false;
+                        if (!roleSearch.trim()) return true;
+                        const q = roleSearch.toLowerCase();
+                        return (
+                          r.name.toLowerCase().includes(q) ||
+                          (r.description || '').toLowerCase().includes(q)
+                        );
+                      })
+                      .map((r) => {
+                        const isSelected = selectedRoleObj?.id === r.id || selectedRoleId === r.id;
+                        const count = getRoleMemberCount(r);
+                        return (
+                          <button
+                            key={r.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedRoleId(r.id);
+                              setRoleRightTab('permissions');
+                            }}
+                            className={`w-full text-left p-2.5 rounded-lg text-xs transition-all flex items-center justify-between gap-2 border ${
+                              isSelected
+                                ? 'border-blue-500/60 bg-blue-50/70 dark:bg-blue-950/30 shadow-xs'
+                                : 'border-transparent bg-card hover:bg-muted/40'
+                            }`}
+                          >
+                            <div className="flex items-start gap-2.5 min-w-0">
+                              <div className="h-7 w-7 rounded-md bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0 mt-0.5">
+                                <Code2 className="h-3.5 w-3.5" />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="font-bold text-foreground truncate flex items-center gap-1.5">
+                                  <span className="truncate">{r.name}</span>
+                                  {r.isActive === false && (
+                                    <span className="text-[9px] px-1 py-0 rounded bg-amber-500/15 text-amber-600">
+                                      Inactive
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-muted-foreground line-clamp-1 mt-0.5">
+                                  {r.description || 'Custom workspace role'}
+                                </div>
+                              </div>
+                            </div>
+                            <span className="shrink-0 flex items-center gap-1 text-[11px] text-muted-foreground border border-border/80 px-2 py-0.5 rounded-md bg-background font-medium">
+                              <Users className="h-3 w-3" /> {count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    {roles.filter((r) => !r.isSystemRole).length === 0 && (
+                      <p className="text-[11px] text-muted-foreground italic py-1.5 px-1">
+                        No custom roles created yet. Create role profiles for HR Recruitment, Generalist, Payroll, etc.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* + Create Custom Role Button */}
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowCreateRoleModal(true)}
+                className="w-full text-xs font-semibold h-9 gap-1.5 border-blue-500/30 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/30"
+              >
+                <Plus className="h-3.5 w-3.5" /> Create Custom Role
+              </Button>
+            </div>
+
+            {/* Right Column: Selected Role Details, Permissions, Members */}
+            <div className="rounded-xl border border-border bg-card shadow-xs overflow-hidden">
+              {/* Role Banner Header */}
+              <div className="p-5 pb-4 border-b border-border/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-11 w-11 rounded-xl bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                    {selectedRoleObj?.name === 'OWNER' ? (
+                      <Crown className="h-5 w-5 text-amber-500" />
+                    ) : (
+                      <ShieldCheck className="h-5 w-5" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-bold text-foreground">
+                        {formatRoleDisplayName(selectedRoleObj?.name || 'ADMIN')}
+                      </h3>
+                      <span className="text-[11px] font-medium px-2.5 py-0.5 rounded-md bg-blue-500/10 text-blue-600 border border-blue-500/20">
+                        {selectedRoleObj?.isSystemRole ? 'System Role' : 'Custom Role'}
+                      </span>
+                      {selectedRoleObj?.isActive === false && (
+                        <span className="text-[11px] font-medium px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-600">
+                          Deactivated
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {selectedRoleObj?.description || 'Organization administration and workspace management.'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setRoleRightTab('members')}
+                    className="h-8 text-xs gap-1.5"
+                  >
+                    <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                    <span>{selectedRoleMemberCount} Members</span>
+                  </Button>
+                  {selectedRoleObj && !selectedRoleObj.isSystemRole && (
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      className="h-8 w-8"
+                      onClick={() => setRoleRightTab('details')}
+                      title="Role Details & Lifecycle"
+                    >
+                      <MoreVertical className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </div>
 
-              {/* Selected Role Actions (For Custom Roles) */}
-              {selectedRoleObj && !selectedRoleObj.isSystemRole && (
-                <Card className="border-border bg-card">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-xs font-bold uppercase tracking-wider">Role Configuration</CardTitle>
-                    <CardDescription className="text-[11px]">Manage lifecycle for {selectedRoleObj.name}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-3 pt-0">
-                    {editingRoleId === selectedRoleObj.id ? (
-                      <div className="space-y-2 border border-border p-2.5 rounded-md bg-muted/20">
-                        <input
-                          type="text"
-                          value={editRoleName}
-                          onChange={(e) => setEditRoleName(e.target.value)}
-                          placeholder="Role Name"
-                          className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-                        />
-                        <input
-                          type="text"
-                          value={editRoleDesc}
-                          onChange={(e) => setEditRoleDesc(e.target.value)}
-                          placeholder="Description"
-                          className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
-                        />
-                        <div className="flex gap-1.5 pt-1">
-                          <Button size="sm" className="h-7 text-xs flex-1" onClick={() => handleRenameRole(selectedRoleObj.id)}>
-                            Save
+              {/* Sub-Navigation: Permissions | Members | Role Details */}
+              <div className="px-5 flex items-center gap-5 border-b border-border/70 bg-muted/10">
+                <button
+                  type="button"
+                  onClick={() => setRoleRightTab('permissions')}
+                  className={`flex items-center gap-1.5 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                    roleRightTab === 'permissions'
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Layers className="h-3.5 w-3.5" /> Permissions
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoleRightTab('members')}
+                  className={`flex items-center gap-1.5 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                    roleRightTab === 'members'
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Users className="h-3.5 w-3.5" /> Members ({selectedRoleMemberCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRoleRightTab('details')}
+                  className={`flex items-center gap-1.5 py-2.5 text-xs font-semibold border-b-2 transition-colors ${
+                    roleRightTab === 'details'
+                      ? 'border-blue-600 text-blue-600'
+                      : 'border-transparent text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Info className="h-3.5 w-3.5" /> Role Details
+                </button>
+              </div>
+
+              {/* SUB-TAB 1: Permissions (2-Pane Module List + Actions & Data Access Scope) */}
+              {roleRightTab === 'permissions' && (
+                <div className="p-5 space-y-4">
+                  {/* Top Control Strip */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <h4 className="text-sm font-bold text-foreground">Configure Permissions</h4>
+                      <p className="text-xs text-muted-foreground">
+                        Choose what this role can access and do across modules.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 relative">
+                      {selectedRoleObj?.name !== 'OWNER' && (
+                        <>
+                          <div className="relative">
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setCopyFromMenuOpen(!copyFromMenuOpen)}
+                              className="h-8 text-xs gap-1.5"
+                            >
+                              <Copy className="h-3.5 w-3.5" /> Copy from Role
+                            </Button>
+                            {copyFromMenuOpen && (
+                              <div className="absolute right-0 mt-1.5 w-56 rounded-lg border border-border bg-card shadow-lg z-30 py-1">
+                                <div className="px-3 py-1 text-[10px] font-bold uppercase text-muted-foreground border-b border-border/60">
+                                  Clone Permissions From
+                                </div>
+                                {roles
+                                  .filter((r) => r.id !== selectedRoleObj?.id)
+                                  .map((r) => (
+                                    <button
+                                      key={r.id}
+                                      type="button"
+                                      onClick={() => handleCopyFromRole(r.id)}
+                                      className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/60 flex items-center justify-between"
+                                    >
+                                      <span className="font-medium text-foreground">{formatRoleDisplayName(r.name)}</span>
+                                      <span className="text-[10px] text-muted-foreground">
+                                        {extractRolePermissionIds(r).length} perms
+                                      </span>
+                                    </button>
+                                  ))}
+                              </div>
+                            )}
+                          </div>
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            disabled={resettingRole}
+                            onClick={handleResetRolePermissions}
+                            className="h-8 text-xs gap-1.5"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            {resettingRole ? 'Resetting...' : 'Reset'}
                           </Button>
-                          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setEditingRoleId(null)}>
-                            Cancel
-                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Quick Filter Input */}
+                  <div className="relative">
+                    <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      placeholder="Filter permissions or modules (e.g. payroll, assets, invitations, leave)..."
+                      value={permissionSearch}
+                      onChange={(e) => setPermissionSearch(e.target.value)}
+                      className="w-full rounded-lg border border-input bg-background pl-9 pr-14 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    {permissionSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setPermissionSearch('')}
+                        className="absolute right-2.5 top-1.5 text-muted-foreground hover:text-foreground text-[11px] font-medium"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+
+                  {/* 2-Pane Split: Left Module Picker + Right Actions & Data Scope */}
+                  {(() => {
+                    const q = permissionSearch.toLowerCase().trim();
+                    const visibleModules = catalogModuleNames.filter((modName) => {
+                      if (!q) return true;
+                      const display = (MODULE_DISPLAY_NAMES[modName] || modName).toLowerCase();
+                      if (modName.toLowerCase().includes(q) || display.includes(q)) return true;
+                      return effectiveCatalog.some(
+                        (p) =>
+                          (p.module || 'General') === modName &&
+                          (p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q)),
+                      );
+                    });
+
+                    const activeModule = visibleModules.includes(selectedPermModule)
+                      ? selectedPermModule
+                      : visibleModules[0] || catalogModuleNames[0] || 'Assets';
+
+                    const activeModPerms = effectiveCatalog
+                      .filter((p) => {
+                        if ((p.module || 'General') !== activeModule) return false;
+                        if (!q) return true;
+                        const display = (MODULE_DISPLAY_NAMES[activeModule] || activeModule).toLowerCase();
+                        if (activeModule.toLowerCase().includes(q) || display.includes(q)) return true;
+                        return p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+                      })
+                      .sort((a, b) => a.code.localeCompare(b.code));
+
+                    const isOwnerSelected = selectedRoleObj?.name === 'OWNER';
+                    const isRoleDisabled = selectedRoleObj?.isActive === false;
+
+                    const getModuleFriendlyLabel = (modName: string) => {
+                      const raw = MODULE_DISPLAY_NAMES[modName] || modName;
+                      return raw
+                        .toLowerCase()
+                        .split(' ')
+                        .map((w) => (w === '&' ? '&' : w.charAt(0).toUpperCase() + w.slice(1)))
+                        .join(' ');
+                    };
+
+                    const getModuleIcon = (modName: string) => {
+                      switch (modName) {
+                        case 'Assets':
+                          return Package;
+                        case 'Inventory':
+                          return Package;
+                        case 'Ledger':
+                          return FileCheck;
+                        case 'Documents':
+                          return Folder;
+                        case 'Projects':
+                          return Briefcase;
+                        case 'Tasks':
+                          return CheckCircle2;
+                        case 'People':
+                          return Users;
+                        case 'Attendance':
+                        case 'Time':
+                          return Clock;
+                        case 'Leave':
+                        case 'Calendar':
+                          return Calendar;
+                        case 'Approvals':
+                          return ShieldCheck;
+                        case 'Payroll':
+                          return CreditCard;
+                        case 'Reports':
+                          return Award;
+                        case 'WorkQueue':
+                          return LayoutGrid;
+                        default:
+                          return Sliders;
+                      }
+                    };
+
+                    const ActiveModIcon = getModuleIcon(activeModule);
+                    const allModuleSelected =
+                      isOwnerSelected ||
+                      (activeModPerms.length > 0 &&
+                        activeModPerms.every((p) => draftRolePermIds.includes(p.id)));
+
+                    return (
+                      <div className="rounded-xl border border-border overflow-hidden grid md:grid-cols-[220px_1fr] bg-background">
+                        {/* Left Module List */}
+                        <div className="border-b md:border-b-0 md:border-r border-border bg-muted/15 p-2 space-y-1 max-h-[430px] overflow-y-auto">
+                          {visibleModules.length === 0 ? (
+                            <p className="text-[11px] text-muted-foreground p-3 text-center">No matching modules</p>
+                          ) : (
+                            visibleModules.map((modName) => {
+                              const ModIcon = getModuleIcon(modName);
+                              const modActions = effectiveCatalog.filter(
+                                (p) => (p.module || 'General') === modName,
+                              );
+                              const grantedCount = isOwnerSelected
+                                ? modActions.length
+                                : modActions.filter((p) => draftRolePermIds.includes(p.id)).length;
+                              const isModActive = activeModule === modName;
+                              return (
+                                <button
+                                  key={modName}
+                                  type="button"
+                                  onClick={() => setSelectedPermModule(modName)}
+                                  className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-lg text-xs transition-all text-left ${
+                                    isModActive
+                                      ? 'bg-blue-500/10 text-blue-600 font-semibold border border-blue-500/20'
+                                      : 'text-foreground hover:bg-muted/50 border border-transparent'
+                                  }`}
+                                >
+                                  <span className="flex items-center gap-2 min-w-0">
+                                    <ModIcon className={`h-3.5 w-3.5 shrink-0 ${isModActive ? 'text-blue-600' : 'text-muted-foreground'}`} />
+                                    <span className="truncate">{getModuleFriendlyLabel(modName)}</span>
+                                  </span>
+                                  <span
+                                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
+                                      grantedCount > 0
+                                        ? 'bg-blue-500/10 text-blue-600 font-semibold'
+                                        : 'text-muted-foreground'
+                                    }`}
+                                  >
+                                    {grantedCount}/{modActions.length}
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+
+                        {/* Right Module Actions + Data Access Scope */}
+                        <div className="p-4 flex flex-col justify-between space-y-5">
+                          <div className="space-y-4">
+                            <div className="flex items-start justify-between gap-3 pb-3 border-b border-border/60">
+                              <div className="flex items-start gap-2.5">
+                                <div className="h-9 w-9 rounded-lg bg-blue-500/10 text-blue-600 flex items-center justify-center shrink-0">
+                                  <ActiveModIcon className="h-4 w-4" />
+                                </div>
+                                <div>
+                                  <h5 className="text-sm font-bold text-foreground">
+                                    {getModuleFriendlyLabel(activeModule)}
+                                  </h5>
+                                  <p className="text-[11px] text-muted-foreground">
+                                    Control granular capabilities and access actions for {getModuleFriendlyLabel(activeModule).toLowerCase()}.
+                                  </p>
+                                </div>
+                              </div>
+
+                              {!isOwnerSelected && !isRoleDisabled && activeModPerms.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const ids = activeModPerms.map((p) => p.id);
+                                    if (allModuleSelected) {
+                                      setDraftRolePermIds((prev) => prev.filter((id) => !ids.includes(id)));
+                                    } else {
+                                      setDraftRolePermIds((prev) => Array.from(new Set([...prev, ...ids])));
+                                    }
+                                    setRolePermsDirty(true);
+                                  }}
+                                  className="text-[11px] font-semibold text-blue-600 hover:underline shrink-0"
+                                >
+                                  {allModuleSelected ? 'Clear Module' : 'Select All'}
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Actions */}
+                            <div className="space-y-2.5">
+                              <div className="text-xs font-bold text-foreground">Actions</div>
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                {activeModPerms.map((perm) => {
+                                  const isGranted = isOwnerSelected || draftRolePermIds.includes(perm.id);
+                                  return (
+                                    <button
+                                      key={perm.id}
+                                      type="button"
+                                      disabled={isOwnerSelected || isRoleDisabled}
+                                      onClick={() => handleToggleDraftPermission(perm.id)}
+                                      className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-left transition-all ${
+                                        isGranted
+                                          ? 'border-blue-500/40 bg-blue-50/40 dark:bg-blue-950/20'
+                                          : 'border-border/70 bg-card hover:bg-muted/20'
+                                      } ${isOwnerSelected || isRoleDisabled ? 'opacity-80 cursor-default' : 'cursor-pointer'}`}
+                                    >
+                                      <div
+                                        className={`mt-0.5 h-4 w-4 rounded flex items-center justify-center shrink-0 transition-colors ${
+                                          isGranted
+                                            ? 'bg-blue-600 border border-blue-600 text-white'
+                                            : 'border border-border bg-background'
+                                        }`}
+                                      >
+                                        {isGranted && <Check className="h-3 w-3 stroke-[3]" />}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <div className="text-xs font-semibold text-foreground leading-snug">
+                                          {perm.name}
+                                        </div>
+                                        <div className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                                          {perm.code}
+                                        </div>
+                                      </div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Data Access Scope */}
+                          <div className="pt-4 border-t border-border/60 space-y-2.5">
+                            <div className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+                              <span>Data Access Scope</span>
+                              <Info className="h-3.5 w-3.5 text-muted-foreground" />
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {DATA_SCOPE_OPTIONS.map((opt) => {
+                                const isActiveScope =
+                                  (isOwnerSelected ? 'GLOBAL' : draftRoleDataScope) === opt.key;
+                                return (
+                                  <button
+                                    key={opt.key}
+                                    type="button"
+                                    disabled={isOwnerSelected || isRoleDisabled}
+                                    onClick={() => {
+                                      setDraftRoleDataScope(opt.key);
+                                      setRolePermsDirty(true);
+                                    }}
+                                    title={opt.desc}
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
+                                      isActiveScope
+                                        ? 'border-blue-600 bg-blue-500/10 text-blue-700 dark:text-blue-400 font-semibold'
+                                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                                    }`}
+                                  >
+                                    <span
+                                      className={`h-3.5 w-3.5 rounded-full border flex items-center justify-center ${
+                                        isActiveScope ? 'border-blue-600 bg-blue-600' : 'border-muted-foreground/50'
+                                      }`}
+                                    >
+                                      {isActiveScope && <span className="h-1.5 w-1.5 rounded-full bg-white" />}
+                                    </span>
+                                    <span>{opt.label}</span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       </div>
-                    ) : (
-                      <div className="flex flex-col gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-xs h-7 justify-start"
-                          onClick={() => {
-                            setEditingRoleId(selectedRoleObj.id);
-                            setEditRoleName(selectedRoleObj.name);
-                            setEditRoleDesc(selectedRoleObj.description || '');
-                          }}
-                        >
-                          Rename / Edit Description
-                        </Button>
+                    );
+                  })()}
 
-                        {selectedRoleObj.isActive ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs h-7 justify-start text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
-                            onClick={() => handleDeactivateRole(selectedRoleObj.id)}
-                          >
-                            Deactivate Role
-                          </Button>
+                  {/* Bottom Save Changes Bar */}
+                  <div className="pt-2 border-t border-border/60 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-xs">
+                      {selectedRoleObj?.name === 'OWNER' ? (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                          <span className="text-muted-foreground">
+                            Owner automatically retains full permissions across the entire workspace.
+                          </span>
+                        </>
+                      ) : rolePermsDirty ? (
+                        <>
+                          <span className="h-2.5 w-2.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                          <span className="text-amber-600 font-medium">
+                            You have unsaved permission or data scope changes.
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
+                          <span className="text-muted-foreground">
+                            All permissions are configured for this role.
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {selectedRoleObj?.name !== 'OWNER' && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!rolePermsDirty || savingRolePerms || selectedRoleObj?.isActive === false}
+                        onClick={handleSaveRolePermissions}
+                        className="h-9 px-5 text-xs font-semibold"
+                      >
+                        {savingRolePerms ? 'Saving...' : 'Save Changes'}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* SUB-TAB 2: Assigned Members */}
+              {roleRightTab === 'members' && (
+                <div className="p-5 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-foreground">
+                        Assigned Members ({selectedRoleMemberCount})
+                      </h4>
+                      <p className="text-xs text-muted-foreground">
+                        Workspace users currently assigned to {formatRoleDisplayName(selectedRoleObj?.name || '')}.
+                      </p>
+                    </div>
+                    <Link href="/app/people?invite=1">
+                      <Button size="sm" variant="outline" className="text-xs h-8 gap-1">
+                        <Plus className="h-3.5 w-3.5" /> Assign / Invite Member
+                      </Button>
+                    </Link>
+                  </div>
+
+                  {loadingRoleMembers ? (
+                    <div className="py-8 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin text-primary" /> Loading members...
+                    </div>
+                  ) : (
+                    (() => {
+                      const list =
+                        roleMembers.length > 0
+                          ? roleMembers
+                          : allMembersList.filter(
+                              (m: any) =>
+                                m.roleId === selectedRoleObj?.id ||
+                                m.role?.id === selectedRoleObj?.id ||
+                                (!m.roleId && m.accessRole === selectedRoleObj?.name),
+                            );
+                      if (list.length === 0) {
+                        return (
+                          <div className="py-10 text-center border border-dashed border-border rounded-lg text-xs text-muted-foreground">
+                            No members assigned to this role yet.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="divide-y divide-border border border-border rounded-lg overflow-hidden">
+                          {list.map((m: any) => {
+                            const fullName =
+                              [m.user?.firstName, m.user?.lastName].filter(Boolean).join(' ') ||
+                              m.user?.email ||
+                              'Member';
+                            return (
+                              <div
+                                key={m.id}
+                                className="flex items-center justify-between p-3 bg-card hover:bg-muted/20 text-xs"
+                              >
+                                <div className="flex items-center gap-3 min-w-0">
+                                  <UserAvatar
+                                    firstName={m.user?.firstName}
+                                    lastName={m.user?.lastName}
+                                    avatarUrl={m.user?.avatarUrl}
+                                    size="sm"
+                                  />
+                                  <div className="min-w-0">
+                                    <div className="font-semibold text-foreground truncate">{fullName}</div>
+                                    <div className="text-[11px] text-muted-foreground truncate">
+                                      {m.user?.email}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {m.designation?.title && (
+                                    <Badge variant="outline" className="text-[10px]">
+                                      {m.designation.title}
+                                    </Badge>
+                                  )}
+                                  {m.department?.name && (
+                                    <Badge variant="secondary" className="text-[10px]">
+                                      {m.department.name}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()
+                  )}
+                </div>
+              )}
+
+              {/* SUB-TAB 3: Role Details & Lifecycle */}
+              {roleRightTab === 'details' && (
+                <div className="p-5 space-y-5">
+                  {selectedRoleObj?.isSystemRole ? (
+                    <div className="p-4 rounded-lg border border-border bg-muted/20 text-xs space-y-2">
+                      <div className="font-bold text-foreground flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-blue-600" /> Core System Role
+                      </div>
+                      <p className="text-muted-foreground">
+                        <strong>{formatRoleDisplayName(selectedRoleObj.name)}</strong> is a built-in workspace role and cannot be deleted.
+                        {selectedRoleObj.name !== 'OWNER' &&
+                          ' You can customize its granular actions and data access scope from the Permissions tab.'}
+                      </p>
+                    </div>
+                  ) : (
+                    selectedRoleObj && (
+                      <div className="space-y-4">
+                        <div>
+                          <h4 className="text-sm font-bold text-foreground">Role Lifecycle & Settings</h4>
+                          <p className="text-xs text-muted-foreground">
+                            Rename, deactivate, or safely remove {selectedRoleObj.name} with member migration.
+                          </p>
+                        </div>
+
+                        {editingRoleId === selectedRoleObj.id ? (
+                          <div className="space-y-3 border border-border p-4 rounded-lg bg-muted/20 max-w-md">
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-foreground">Role Title *</label>
+                              <input
+                                type="text"
+                                value={editRoleName}
+                                onChange={(e) => setEditRoleName(e.target.value)}
+                                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-foreground">Description</label>
+                              <input
+                                type="text"
+                                value={editRoleDesc}
+                                onChange={(e) => setEditRoleDesc(e.target.value)}
+                                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                              />
+                            </div>
+                            <div className="flex gap-2">
+                              <Button size="sm" className="text-xs" onClick={() => handleRenameRole(selectedRoleObj.id)}>
+                                Save Changes
+                              </Button>
+                              <Button size="sm" variant="ghost" className="text-xs" onClick={() => setEditingRoleId(null)}>
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
                         ) : (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="text-xs h-7 justify-start text-emerald-600 hover:text-emerald-700 hover:bg-emerald-500/10"
-                            onClick={() => handleReactivateRole(selectedRoleObj.id)}
-                          >
-                            Reactivate Role
-                          </Button>
+                          <div className="flex flex-wrap gap-2.5">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs"
+                              onClick={() => {
+                                setEditingRoleId(selectedRoleObj.id);
+                                setEditRoleName(selectedRoleObj.name);
+                                setEditRoleDesc(selectedRoleObj.description || '');
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5 mr-1.5" /> Rename / Edit Description
+                            </Button>
+
+                            {selectedRoleObj.isActive !== false ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs text-amber-600 hover:bg-amber-500/10"
+                                onClick={() => handleDeactivateRole(selectedRoleObj.id)}
+                              >
+                                Deactivate Role
+                              </Button>
+                            ) : (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs text-emerald-600 hover:bg-emerald-500/10"
+                                onClick={() => handleReactivateRole(selectedRoleObj.id)}
+                              >
+                                Reactivate Role
+                              </Button>
+                            )}
+
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              className="text-xs"
+                              onClick={() => {
+                                setDeletingRoleId(selectedRoleObj.id);
+                                setDeleteReassignRoleId('');
+                              }}
+                            >
+                              <Trash2 className="h-3.5 w-3.5 mr-1.5" /> Delete Custom Role
+                            </Button>
+                          </div>
                         )}
 
-                        {deletingRoleId === selectedRoleObj.id ? (
-                          <div className="space-y-2 border border-destructive/30 p-2.5 rounded-md bg-destructive/5 text-xs">
-                            <p className="text-[11px] text-destructive font-medium">
-                              {selectedRoleObj._count?.memberships > 0
-                                ? `Migrate ${selectedRoleObj._count.memberships} member(s) to a fallback role before deleting:`
-                                : 'Confirm deletion of this custom role:'}
+                        {deletingRoleId === selectedRoleObj.id && (
+                          <div className="space-y-3 border border-destructive/30 p-4 rounded-lg bg-destructive/5 text-xs max-w-md">
+                            <p className="text-destructive font-semibold">
+                              {selectedRoleMemberCount > 0
+                                ? `Migrate ${selectedRoleMemberCount} member(s) to a fallback role before deleting:`
+                                : 'Confirm permanent deletion of this custom role:'}
                             </p>
-                            {selectedRoleObj._count?.memberships > 0 && (
+                            {selectedRoleMemberCount > 0 && (
                               <select
                                 value={deleteReassignRoleId}
                                 onChange={(e) => setDeleteReassignRoleId(e.target.value)}
-                                className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
                               >
                                 <option value="">-- Select Fallback Role --</option>
                                 {roles
@@ -2267,230 +4021,27 @@ const selectedRoleObj =
                                   ))}
                               </select>
                             )}
-                            <div className="flex gap-1.5">
+                            <div className="flex gap-2">
                               <Button
                                 size="sm"
                                 variant="destructive"
-                                className="h-7 text-xs flex-1"
-                                disabled={selectedRoleObj._count?.memberships > 0 && !deleteReassignRoleId}
+                                className="text-xs"
+                                disabled={selectedRoleMemberCount > 0 && !deleteReassignRoleId}
                                 onClick={() => handleDeleteRole(selectedRoleObj.id)}
                               >
                                 Confirm Delete
                               </Button>
-                              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setDeletingRoleId(null)}>
+                              <Button size="sm" variant="ghost" className="text-xs" onClick={() => setDeletingRoleId(null)}>
                                 Cancel
                               </Button>
                             </div>
                           </div>
-                        ) : (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-xs h-7 justify-start text-destructive hover:bg-destructive/10"
-                            onClick={() => {
-                              setDeletingRoleId(selectedRoleObj.id);
-                              setDeleteReassignRoleId('');
-                            }}
-                          >
-                            Delete Custom Role
-                          </Button>
                         )}
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                    )
+                  )}
+                </div>
               )}
-
-              {/* CREATE CUSTOM ROLE Card */}
-              <div className="rounded-xl border border-border/80 bg-card p-5 shadow-xs">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-foreground mb-3">
-                  CREATE CUSTOM ROLE
-                </h4>
-                <form onSubmit={handleCreateRole} className="space-y-2.5">
-                  <input
-                    type="text"
-                    required
-                    placeholder="Role Title (e.g. Auditor Level 2)"
-                    value={newRoleName}
-                    onChange={(e) => setNewRoleName(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Description"
-                    value={newRoleDesc}
-                    onChange={(e) => setNewRoleDesc(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button
-                    type="submit"
-                    disabled={creatingRole}
-                    className="w-full mt-2 rounded-md border border-border/80 bg-muted/40 hover:bg-muted py-2 text-xs font-medium text-foreground transition-colors flex items-center justify-center gap-1"
-                  >
-                    {creatingRole ? 'Creating...' : '+ Create Role'}
-                  </button>
-                </form>
-              </div>
-            </div>
-
-            {/* Right Column: Permissions for Selected Role */}
-            <div className="lg:col-span-2 space-y-4">
-              <div className="rounded-xl border border-border/80 bg-card p-6 shadow-xs">
-                {/* Header */}
-                <div className="flex items-start justify-between pb-5 border-b border-border/60">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="text-base font-bold text-foreground">
-                        Permissions for <span className="text-blue-600 dark:text-blue-400 font-bold">{selectedRoleObj?.name || 'ADMIN'}</span>
-                      </h3>
-                      <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
-                        Active
-                      </span>
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Configure fine-grained module actions and permissions for this role.
-                    </p>
-                  </div>
-                  {selectedRoleObj?.isSystemRole && (
-                    <span className="text-xs font-medium text-foreground border border-border px-3 py-1 rounded-md bg-background shrink-0">
-                      Core Platform Role
-                    </span>
-                  )}
-                </div>
-
-                {selectedRoleObj && !selectedRoleObj.isSystemRole && selectedRoleObj.isActive === false && (
-                  <div className="mt-4 p-3 rounded-md bg-amber-500/10 border border-amber-500/20 text-xs text-amber-600 flex items-center gap-2">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>This role is currently deactivated. Permissions are suspended for all assigned members.</span>
-                  </div>
-                )}
-
-                {/* Quick Search for Permissions */}
-                <div className="relative mt-4">
-                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    placeholder="Search permissions or modules (e.g. assets, inventory, stock, attendance)..."
-                    value={permissionSearch}
-                    onChange={(e) => setPermissionSearch(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background pl-9 pr-3 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  {permissionSearch && (
-                    <button
-                      type="button"
-                      onClick={() => setPermissionSearch('')}
-                      className="absolute right-2.5 top-2 text-muted-foreground hover:text-foreground text-xs font-medium"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-
-                {/* Permissions by Module */}
-                <div className="space-y-6 max-h-[620px] overflow-y-auto pr-2 mt-4">
-                  {Array.from(new Set((allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG).map((p) => p.module || 'General')))
-                    .sort((a, b) => {
-                      const orderA = MODULE_DISPLAY_ORDER[a] ?? 99;
-                      const orderB = MODULE_DISPLAY_ORDER[b] ?? 99;
-                      if (orderA !== orderB) return orderA - orderB;
-                      return a.localeCompare(b);
-                    })
-                    .filter((modName) => {
-                      if (!permissionSearch.trim()) return true;
-                      const q = permissionSearch.toLowerCase().trim();
-                      const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
-                      const matchesMod = modName.toLowerCase().includes(q) || (MODULE_DISPLAY_NAMES[modName] || '').toLowerCase().includes(q);
-                      const hasMatchingPerm = effectiveCatalog.some(
-                        (p) => (p.module || 'General') === modName && (p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q))
-                      );
-                      return matchesMod || hasMatchingPerm;
-                    })
-                    .map((modName) => {
-                      const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
-                      const q = permissionSearch.toLowerCase().trim();
-                      const modPerms = effectiveCatalog
-                        .filter((p) => {
-                          if ((p.module || 'General') !== modName) return false;
-                          if (!q) return true;
-                          const matchesMod = modName.toLowerCase().includes(q) || (MODULE_DISPLAY_NAMES[modName] || '').toLowerCase().includes(q);
-                          if (matchesMod) return true;
-                          return p.code.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
-                        })
-                        .sort((a, b) => a.code.localeCompare(b.code));
-
-                      if (modPerms.length === 0) return null;
-
-                      const groupTitle = MODULE_DISPLAY_NAMES[modName] || modName.toUpperCase();
-
-                      return (
-                        <div key={modName} className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <h4 className="text-xs font-bold text-foreground tracking-wider uppercase flex items-center gap-2">
-                              <span>{groupTitle}</span>
-                              {['Assets', 'Inventory', 'Ledger', 'Documents'].includes(modName) && (
-                                <Badge variant="outline" className="text-[9px] py-0 px-1.5 border-primary/40 text-primary">
-                                  Assets & Docs
-                                </Badge>
-                              )}
-                            </h4>
-                            <span className="text-[10px] text-muted-foreground bg-muted font-medium px-2 py-0.5 rounded-md">
-                              {modPerms.length} {modPerms.length === 1 ? 'action' : 'actions'}
-                            </span>
-                          </div>
-
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                            {modPerms.map((perm) => {
-                              const assignedPerms: any[] = selectedRoleObj?.permissions || [];
-                              const isGranted =
-                                selectedRoleObj?.name === 'OWNER' ||
-                                assignedPerms.some((p) => {
-                                  const code = p.permission?.code || p.code || (typeof p === 'string' ? p : '');
-                                  const id = p.permissionId || p.permission?.id || p.id;
-                                  return code === perm.code || id === perm.id || p === perm.id || p === perm.code;
-                                });
-
-                              return (
-                                <div
-                                  key={perm.id}
-                                  onClick={() => {
-                                    if (selectedRoleObj?.name !== 'OWNER' && selectedRoleObj?.isActive !== false) {
-                                      handleTogglePermission(selectedRoleObj.id, perm.id);
-                                    }
-                                  }}
-                                  className={`flex items-start justify-between p-3.5 rounded-lg border text-xs transition-all cursor-pointer ${
-                                    isGranted
-                                      ? 'border-blue-200 bg-blue-50/40 dark:border-blue-900/60 dark:bg-blue-950/20'
-                                      : 'border-border/80 bg-card hover:border-border hover:bg-muted/10'
-                                  }`}
-                                >
-                                  <div className="pr-3 flex-1 min-w-0">
-                                    <div className="font-bold text-foreground text-xs leading-none">
-                                      {perm.code}
-                                    </div>
-                                    <div className="text-[11px] text-muted-foreground mt-1.5 leading-snug">
-                                      {perm.name}
-                                    </div>
-                                  </div>
-                                  <div className="shrink-0 mt-0.5">
-                                    <div
-                                      className={`h-4 w-4 rounded flex items-center justify-center transition-colors ${
-                                        isGranted
-                                          ? 'bg-blue-600 border border-blue-600 text-white'
-                                          : 'border border-border/80 bg-background'
-                                      }`}
-                                    >
-                                      {isGranted && <Check className="h-3 w-3 stroke-[3]" />}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
             </div>
           </div>
 
@@ -2904,45 +4455,96 @@ const selectedRoleObj =
             </CardContent>
           </Card>
 
-          {/* Designations */}
+          {/* Designations with Configurable Permissions & Role Mapping */}
           <Card className="border-border">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-bold flex items-center justify-between">
-                <span>Designations</span>
-                <Badge variant="secondary" className="text-[10px]">{designations.length}</Badge>
-              </CardTitle>
-              <CardDescription className="text-xs">Job titles & levels</CardDescription>
+            <CardHeader className="pb-3 flex flex-row items-start justify-between gap-2 space-y-0">
+              <div>
+                <CardTitle className="text-sm font-bold flex items-center gap-2">
+                  <span>Designations & Permission Profiles</span>
+                  <Badge variant="secondary" className="text-[10px]">{designations.length}</Badge>
+                </CardTitle>
+                <CardDescription className="text-xs mt-0.5">
+                  Configure job titles with linked departments, default roles & granular permissions
+                </CardDescription>
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => setShowDesigConfigModal(true)}
+                className="h-7 text-[11px] gap-1 shrink-0"
+              >
+                <Sliders className="h-3 w-3" /> Configure
+              </Button>
             </CardHeader>
             <CardContent className="space-y-3">
               <form onSubmit={handleAddDesig} className="space-y-2 border-b border-border pb-3">
                 <input
                   type="text"
                   required
-                  placeholder="Designation Title *"
+                  placeholder="Designation Title * (e.g. HR - Recruitment)"
                   value={newDesigTitle}
                   onChange={(e) => setNewDesigTitle(e.target.value)}
                   className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                 />
-                <div className="flex gap-2">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <select
+                    value={newDesigDeptId}
+                    onChange={(e) => setNewDesigDeptId(e.target.value)}
+                    className="rounded-md border border-input bg-background px-2 py-1.5 text-[11px] text-foreground focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="">All Departments</option>
+                    {departments.map((rawD) => {
+                      const dept = rawD.data !== undefined ? rawD.data : rawD;
+                      return (
+                        <option key={dept.id} value={dept.id}>
+                          {dept.name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <select
+                    value={newDesigAccessRole}
+                    onChange={(e) => setNewDesigAccessRole(e.target.value as any)}
+                    className="rounded-md border border-input bg-background px-2 py-1.5 text-[11px] text-foreground focus:ring-1 focus:ring-primary focus:outline-none"
+                  >
+                    <option value="MEMBER">Role: Member</option>
+                    <option value="MANAGER">Role: Manager</option>
+                    <option value="ADMIN">Role: Admin</option>
+                  </select>
+                </div>
+                <div className="flex gap-1.5">
                   <input
                     type="number"
                     min={1}
                     max={10}
-                    placeholder="Level (1-10)"
+                    placeholder="Level"
                     value={newDesigLevel}
                     onChange={(e) => setNewDesigLevel(Number(e.target.value))}
-                    className="w-24 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    className="w-16 rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                   />
-                  <Button type="submit" size="sm" className="h-8 text-xs px-3 w-full">Add Title</Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowDesigConfigModal(true)}
+                    className="h-8 text-[11px] px-2.5 shrink-0"
+                  >
+                    Perms ({newDesigPerms.length})
+                  </Button>
+                  <Button type="submit" size="sm" className="h-8 text-xs px-3 flex-1">Add</Button>
                 </div>
               </form>
-              <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              <div className="space-y-1.5 max-h-72 overflow-y-auto">
                 {designations.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-2 text-center">No designations created yet.</p>
                 ) : (
                   designations.map((rawD) => {
                     const d = rawD.data !== undefined ? rawD.data : rawD;
                     const isEditing = editingDesigId === d.id;
+                    const linkedDept = departments.find((dep) => (dep.id || dep.data?.id) === d.departmentId);
+                    const linkedDeptName = linkedDept?.name || linkedDept?.data?.name;
+                    const permCount = Array.isArray(d.permissionCodes) ? d.permissionCodes.length : 0;
 
                     if (isEditing) {
                       return (
@@ -2952,7 +4554,7 @@ const selectedRoleObj =
                             e.preventDefault();
                             handleSaveDesig(d.id);
                           }}
-                          className="p-2 rounded-md bg-muted/60 border border-primary/30 space-y-1.5 text-xs"
+                          className="p-2.5 rounded-md bg-muted/60 border border-primary/30 space-y-2 text-xs"
                         >
                           <input
                             type="text"
@@ -2963,21 +4565,104 @@ const selectedRoleObj =
                             className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                             autoFocus
                           />
-                          <div className="flex gap-1.5">
+                          <div className="grid grid-cols-3 gap-1">
                             <input
                               type="number"
                               min={1}
                               max={10}
                               value={editDesigLevel}
                               onChange={(e) => setEditDesigLevel(Number(e.target.value))}
-                              placeholder="Level (1-10)"
-                              className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                              placeholder="Lvl"
+                              className="rounded border border-input bg-background px-2 py-1 text-[11px]"
                             />
+                            <select
+                              value={editDesigAccessRole}
+                              onChange={(e) => setEditDesigAccessRole(e.target.value as any)}
+                              className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                            >
+                              <option value="MEMBER">MEMBER</option>
+                              <option value="MANAGER">MANAGER</option>
+                              <option value="ADMIN">ADMIN</option>
+                            </select>
+                            <select
+                              value={editDesigDataScope}
+                              onChange={(e) => setEditDesigDataScope(e.target.value as any)}
+                              className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
+                            >
+                              {DATA_SCOPE_OPTIONS.map((opt) => (
+                                <option key={opt.key} value={opt.key}>
+                                  {opt.key}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <select
+                            value={editDesigDeptId}
+                            onChange={(e) => setEditDesigDeptId(e.target.value)}
+                            className="w-full rounded border border-input bg-background px-2 py-1 text-[11px]"
+                          >
+                            <option value="">All / No Linked Department</option>
+                            {departments.map((dep) => {
+                              const depObj = dep.data !== undefined ? dep.data : dep;
+                              return (
+                                <option key={depObj.id} value={depObj.id}>
+                                  {depObj.name}
+                                </option>
+                              );
+                            })}
+                          </select>
+                          <div className="space-y-1">
+                            <div className="flex items-center justify-between text-[10px] text-muted-foreground font-semibold">
+                              <span>Permissions ({editDesigPerms.length} selected)</span>
+                              <div className="flex gap-1">
+                                {DESIGNATION_PERMISSION_PRESETS.slice(0, 3).map((preset) => (
+                                  <button
+                                    key={preset.label}
+                                    type="button"
+                                    onClick={() => {
+                                      setEditDesigAccessRole(preset.accessRole);
+                                      setEditDesigDataScope(preset.dataScope);
+                                      setEditDesigPerms(preset.permissionCodes);
+                                    }}
+                                    className="px-1.5 py-0.2 rounded bg-background border border-border hover:border-primary text-[9px]"
+                                  >
+                                    {preset.label.split(' ')[0]}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="max-h-28 overflow-y-auto grid grid-cols-1 gap-1 p-1.5 rounded bg-background border border-border">
+                              {effectiveCatalog.map((perm) => {
+                                const checked = editDesigPerms.includes(perm.code);
+                                return (
+                                  <label
+                                    key={perm.id}
+                                    className="flex items-center gap-1.5 text-[10px] cursor-pointer hover:bg-muted/30 px-1 py-0.5 rounded"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() =>
+                                        setEditDesigPerms((prev) =>
+                                          checked
+                                            ? prev.filter((c) => c !== perm.code)
+                                            : [...prev, perm.code],
+                                        )
+                                      }
+                                      className="h-3 w-3 accent-blue-600"
+                                    />
+                                    <span className="font-mono text-foreground">{perm.code}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          <div className="flex gap-1.5">
                             <Button
                               type="submit"
                               size="sm"
                               disabled={savingDesig}
-                              className="h-7 text-xs px-2.5 shrink-0"
+                              className="h-7 text-xs px-2.5 flex-1"
                             >
                               {savingDesig ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
                             </Button>
@@ -2997,17 +4682,41 @@ const selectedRoleObj =
                     }
 
                     return (
-                      <div key={d.id} className="group flex items-center justify-between p-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs">
-                        <div className="min-w-0 pr-2">
-                          <span className="font-semibold text-slate-900 dark:text-slate-100">{d.title}</span>
-                          <span className="text-[10px] text-muted-foreground ml-2">(Level {d.level || 1})</span>
+                      <div key={d.id} className="group flex items-start justify-between p-2.5 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs gap-2">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div>
+                            <span className="font-semibold text-slate-900 dark:text-slate-100">{d.title}</span>
+                            <span className="text-[10px] text-muted-foreground ml-1.5">(Lvl {d.level || 1})</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {d.defaultAccessRole && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-600">
+                                {d.defaultAccessRole}
+                              </span>
+                            )}
+                            {d.defaultDataScope && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-background border border-border text-muted-foreground">
+                                {d.defaultDataScope}
+                              </span>
+                            )}
+                            {linkedDeptName && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-background border border-border text-foreground">
+                                {linkedDeptName}
+                              </span>
+                            )}
+                            {permCount > 0 && (
+                              <span className="text-[9px] font-semibold px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-600">
+                                {permCount} perms
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
                             onClick={() => startEditDesig(d)}
                             className="text-muted-foreground hover:text-foreground transition-colors p-1 rounded hover:bg-background"
-                            title="Edit Designation"
+                            title="Edit Designation & Permissions"
                           >
                             <Pencil className="h-3.5 w-3.5" />
                           </button>
@@ -3718,6 +5427,290 @@ const selectedRoleObj =
               </CardContent>
             </Card>
           )}
+        </div>
+      )}
+
+      {/* Modal: Create Custom Role */}
+      {showCreateRoleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-base font-bold text-foreground">Create Custom Role</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Define a new role profile with tailored module actions and data access scope.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCreateRoleModal(false)}
+                className="text-muted-foreground hover:text-foreground p-1 rounded"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateRole} className="space-y-3.5 text-xs">
+              <div className="space-y-1">
+                <label className="font-semibold text-foreground">Role Name *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. HR Executive, Recruiter, Payroll Specialist"
+                  value={newRoleName}
+                  onChange={(e) => setNewRoleName(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-foreground">Description</label>
+                <input
+                  type="text"
+                  placeholder="What is this role responsible for?"
+                  value={newRoleDesc}
+                  onChange={(e) => setNewRoleDesc(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-semibold text-foreground">Copy Permissions From (Optional)</label>
+                <select
+                  value={newRoleCopyFromId}
+                  onChange={(e) => setNewRoleCopyFromId(e.target.value)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                >
+                  <option value="">Start from scratch (empty)</option>
+                  {roles.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {formatRoleDisplayName(r.name)} ({extractRolePermissionIds(r).length} permissions)
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="font-semibold text-foreground">Default Data Access Scope</label>
+                <select
+                  value={newRoleDataScope}
+                  onChange={(e) => setNewRoleDataScope(e.target.value as any)}
+                  className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                >
+                  {DATA_SCOPE_OPTIONS.map((opt) => (
+                    <option key={opt.key} value={opt.key}>
+                      {opt.label} — {opt.desc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2 border-t border-border">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowCreateRoleModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" disabled={creatingRole}>
+                  {creatingRole ? 'Creating...' : '+ Create Role'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Configure Designation & Permissions */}
+      {showDesigConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-2xl max-h-[90vh] overflow-y-auto rounded-xl border border-border bg-card p-6 shadow-2xl space-y-4">
+            <div className="flex items-start justify-between border-b border-border pb-3">
+              <div>
+                <h3 className="text-base font-bold text-foreground">
+                  Create Designation with Permission Profile
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Configure job title, linked department, default role/scope & module permissions (e.g. HR - Recruitment vs HR Generalist).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowDesigConfigModal(false)}
+                className="text-muted-foreground hover:text-foreground p-1 rounded"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            {/* Quick Role Presets */}
+            <div className="space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                Quick Designation Presets
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {DESIGNATION_PERMISSION_PRESETS.map((preset) => (
+                  <button
+                    key={preset.label}
+                    type="button"
+                    onClick={() => {
+                      if (!newDesigTitle.trim()) setNewDesigTitle(preset.label);
+                      setNewDesigAccessRole(preset.accessRole);
+                      setNewDesigDataScope(preset.dataScope);
+                      setNewDesigPerms(preset.permissionCodes);
+                    }}
+                    className="px-2.5 py-1 rounded-md border border-border bg-muted/30 hover:border-blue-500 hover:bg-blue-500/10 text-[11px] font-medium text-foreground transition-colors"
+                    title={preset.titleHint}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <form onSubmit={handleAddDesig} className="space-y-4 text-xs">
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-semibold text-foreground">Designation Title *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. HR - Recruitment, HR Generalist"
+                    value={newDesigTitle}
+                    onChange={(e) => setNewDesigTitle(e.target.value)}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">Hierarchy Level</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={newDesigLevel}
+                      onChange={(e) => setNewDesigLevel(Number(e.target.value))}
+                      className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="font-semibold text-foreground">Linked Dept</label>
+                    <select
+                      value={newDesigDeptId}
+                      onChange={(e) => setNewDesigDeptId(e.target.value)}
+                      className="w-full rounded-lg border border-input bg-background px-2 py-2 text-xs"
+                    >
+                      <option value="">All / None</option>
+                      {departments.map((rawD) => {
+                        const dep = rawD.data !== undefined ? rawD.data : rawD;
+                        return (
+                          <option key={dep.id} value={dep.id}>
+                            {dep.name}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="font-semibold text-foreground">Default Base Role</label>
+                  <select
+                    value={newDesigAccessRole}
+                    onChange={(e) => setNewDesigAccessRole(e.target.value as any)}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                  >
+                    <option value="MEMBER">MEMBER</option>
+                    <option value="MANAGER">MANAGER</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="font-semibold text-foreground">Default Data Access Scope</label>
+                  <select
+                    value={newDesigDataScope}
+                    onChange={(e) => setNewDesigDataScope(e.target.value as any)}
+                    className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
+                  >
+                    {DATA_SCOPE_OPTIONS.map((opt) => (
+                      <option key={opt.key} value={opt.key}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Granular Permissions Selection */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-foreground">
+                    Designation Permissions ({newDesigPerms.length} selected)
+                  </label>
+                  {newDesigPerms.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setNewDesigPerms([])}
+                      className="text-[11px] text-destructive hover:underline"
+                    >
+                      Clear All
+                    </button>
+                  )}
+                </div>
+                <div className="max-h-56 overflow-y-auto rounded-lg border border-border p-3 bg-muted/10 space-y-3">
+                  {catalogModuleNames.map((modName) => {
+                    const modPerms = effectiveCatalog.filter((p) => (p.module || 'General') === modName);
+                    if (modPerms.length === 0) return null;
+                    return (
+                      <div key={modName} className="space-y-1.5">
+                        <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                          {MODULE_DISPLAY_NAMES[modName] || modName}
+                        </div>
+                        <div className="grid sm:grid-cols-2 gap-1.5">
+                          {modPerms.map((perm) => {
+                            const checked = newDesigPerms.includes(perm.code);
+                            return (
+                              <label
+                                key={perm.id}
+                                className={`flex items-center gap-2 p-2 rounded border text-[11px] cursor-pointer ${
+                                  checked
+                                    ? 'border-blue-500/50 bg-blue-500/10 text-foreground'
+                                    : 'border-border/70 bg-background text-muted-foreground hover:text-foreground'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setNewDesigPerms((prev) =>
+                                      checked ? prev.filter((c) => c !== perm.code) : [...prev, perm.code],
+                                    )
+                                  }
+                                  className="h-3.5 w-3.5 accent-blue-600"
+                                />
+                                <div className="min-w-0">
+                                  <div className="font-mono font-semibold text-[10px] truncate">{perm.code}</div>
+                                  <div className="text-[10px] opacity-80 truncate">{perm.name}</div>
+                                </div>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-border">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setShowDesigConfigModal(false)}>
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm">
+                  Save Designation & Permissions
+                </Button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

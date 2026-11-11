@@ -1,6 +1,6 @@
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import { PERMISSIONS_KEY, ANY_PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { PrismaService } from '../../database/prisma.service';
 
 @Injectable()
@@ -10,13 +10,39 @@ export class PermissionsGuard implements CanActivate {
     private readonly prisma: PrismaService,
   ) {}
 
+  private satisfiesPermission(userPermissionCodes: string[], perm: string): boolean {
+    if (userPermissionCodes.includes(perm)) return true;
+
+    const [mod] = perm.split(':');
+    if (
+      userPermissionCodes.includes(`${mod}:manage`) ||
+      userPermissionCodes.includes(`${mod}:administer`)
+    ) {
+      return true;
+    }
+
+    if (perm === 'settings:manage' && (userPermissionCodes.includes('org:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
+    if (perm === 'org:manage' && (userPermissionCodes.includes('settings:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
+    if (perm === 'quality:manage' && userPermissionCodes.includes('quality:review')) return true;
+    if (perm === 'quality:review' && userPermissionCodes.includes('quality:manage')) return true;
+
+    return false;
+  }
+
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
+    const requiredAnyPermissions = this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
+    const hasRequiredAll = Array.isArray(requiredPermissions) && requiredPermissions.length > 0;
+    const hasRequiredAny = Array.isArray(requiredAnyPermissions) && requiredAnyPermissions.length > 0;
+
+    if (!hasRequiredAll && !hasRequiredAny) {
       return true;
     }
 
@@ -64,6 +90,11 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('Workspace membership context required for permission check');
     }
 
+    const userPermissionCodes =
+      membership.role?.permissions
+        ?.map((rp: { permission?: { code: string }; code?: string }) => rp.permission?.code || rp.code)
+        .filter((c): c is string => Boolean(c)) || [];
+
     // Attach userContext to request for downstream services and tenant-scoped queries
     request.userContext = {
       membershipId: membership.id,
@@ -74,6 +105,7 @@ export class PermissionsGuard implements CanActivate {
       dataScope: membership.dataScope || 'ASSIGNED',
       departmentId: membership.departmentId,
       teamId: membership.teamId,
+      permissions: userPermissionCodes,
     };
 
     // Platform-level security controls: OWNER holds root organization authority for recovery protection
@@ -89,34 +121,13 @@ export class PermissionsGuard implements CanActivate {
       );
     }
 
-    const userPermissionCodes =
-      membership.role?.permissions?.map(
-        (rp: { permission: { code: string } }) => rp.permission.code,
-      ) || [];
+    const allOk = !hasRequiredAll || requiredPermissions.every((perm) => this.satisfiesPermission(userPermissionCodes, perm));
+    const anyOk = !hasRequiredAny || requiredAnyPermissions.some((perm) => this.satisfiesPermission(userPermissionCodes, perm));
 
-    const hasPermission = requiredPermissions.every((perm) => {
-      if (userPermissionCodes.includes(perm)) return true;
-
-      // Module-level manager permission grants sub-actions (e.g. people:manage grants people:view, people:edit)
-      const [mod] = perm.split(':');
-      if (
-        userPermissionCodes.includes(`${mod}:manage`) ||
-        userPermissionCodes.includes(`${mod}:administer`)
-      ) {
-        return true;
-      }
-
-      if (perm === 'settings:manage' && (userPermissionCodes.includes('org:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-      if (perm === 'org:manage' && (userPermissionCodes.includes('settings:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-      if (perm === 'quality:manage' && userPermissionCodes.includes('quality:review')) return true;
-      if (perm === 'quality:review' && userPermissionCodes.includes('quality:manage')) return true;
-
-      return false;
-    });
-
-    if (!hasPermission) {
+    if (!allOk || !anyOk) {
+      const needed = [...(requiredPermissions || []), ...(requiredAnyPermissions || [])];
       throw new ForbiddenException(
-        `Insufficient workspace permissions. Required: ${requiredPermissions.join(', ')}`,
+        `Insufficient workspace permissions. Required: ${needed.join(', ')}`,
       );
     }
 

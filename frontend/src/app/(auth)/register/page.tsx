@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { BRANDING } from '@/config/branding';
+import { DEFAULT_ENABLED_MODULES } from '@/lib/permissions';
 import { toast } from 'sonner';
 import {
   Eye,
@@ -115,6 +116,27 @@ export default function RegisterPage() {
     INDUSTRY_DESIGNATION_MAP.TECHNOLOGY.map((d) => d.title)
   );
   const [customDesignation, setCustomDesignation] = useState('');
+  const [customDesignationRole, setCustomDesignationRole] = useState<'MEMBER' | 'MANAGER' | 'ADMIN'>('MEMBER');
+
+  const getDefaultPermsForDesignation = (role: string, title: string): string[] => {
+    const t = (title || '').toLowerCase();
+    if (t.includes('recruit')) {
+      return ['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:view:all', 'calendar:create'];
+    }
+    if (t.includes('hr') || t.includes('human resources') || t.includes('people')) {
+      return ['people:view', 'people:create', 'people:edit', 'invitations:manage', 'leave:view', 'leave:approve', 'leave:manage', 'attendance:view', 'attendance:edit', 'approvals:view', 'approvals:approve'];
+    }
+    if (t.includes('payroll') || t.includes('finance') || t.includes('accountant')) {
+      return ['payroll:view', 'payroll:edit', 'payroll:export', 'attendance:view', 'leave:view', 'people:view', 'reports:view'];
+    }
+    if (role === 'ADMIN') {
+      return ['people:view', 'people:create', 'people:edit', 'invitations:manage', 'departments:manage', 'projects:view', 'projects:create', 'tasks:view', 'tasks:assign', 'approvals:view', 'approvals:approve', 'calendar:view:all', 'calendar:create'];
+    }
+    if (role === 'MANAGER') {
+      return ['projects:view', 'projects:create', 'projects:edit', 'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'time:view', 'time:approve', 'leave:view', 'leave:approve', 'people:view', 'calendar:view:team', 'calendar:create'];
+    }
+    return ['projects:view', 'tasks:view', 'tasks:create', 'tasks:edit', 'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply', 'people:view'];
+  };
 
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -190,17 +212,22 @@ export default function RegisterPage() {
 
     const newDesig: PrebuiltDesignation = {
       title: clean,
-      role: 'MEMBER',
-      scope: 'TEAM',
+      role: customDesignationRole,
+      scope:
+        customDesignationRole === 'ADMIN'
+          ? 'DEPARTMENT'
+          : customDesignationRole === 'MANAGER'
+          ? 'TEAM'
+          : 'ASSIGNED',
       dept: 'General',
-      level: 2,
-      description: 'Custom workplace role',
+      level: customDesignationRole === 'ADMIN' ? 4 : customDesignationRole === 'MANAGER' ? 3 : 2,
+      description: `Custom workplace role (${customDesignationRole})`,
     };
 
     setAvailableDesignations([...availableDesignations, newDesig]);
     setSelectedDesignations([...selectedDesignations, clean]);
     setCustomDesignation('');
-    toast.success(`Added "${clean}"`);
+    toast.success(`Added "${clean}" (${customDesignationRole})`);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -269,32 +296,8 @@ export default function RegisterPage() {
           ? '200+'
           : orgSize || '10-50';
 
-      if (token && wsId && selectedDesignations.length > 0) {
-        try {
-          await Promise.all(
-            selectedDesignations.map(async (title) => {
-              const matched = availableDesignations.find((d) => d.title === title);
-              return fetch(`${BRANDING.apiUrl}/designations`, {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  Authorization: `Bearer ${token}`,
-                  'x-workspace-id': wsId,
-                },
-                body: JSON.stringify({
-                  title,
-                  level: matched?.level || 1,
-                  description: matched?.description || `Auto-mapped to ${matched?.role || 'MEMBER'}`,
-                }),
-              }).catch(() => {});
-            })
-          );
-        } catch (seedErr) {
-          console.warn('[Orvexa] Non-blocking designation prebuild notice:', seedErr);
-        }
-      }
-
-      // 3. Pre-seed Onboarding Step 1 (Organization Profile) & Step 5 (Departments)
+      // 2. Pre-seed Onboarding Step 1 (Profile) & Departments first so Designations can link cleanly
+      let createdDepts: any[] = [];
       if (token && wsId) {
         try {
           await fetch(`${BRANDING.apiUrl}/workspaces/onboarding/step`, {
@@ -318,7 +321,7 @@ export default function RegisterPage() {
           }).catch(() => {});
 
           if (departmentList.length > 0) {
-            await fetch(`${BRANDING.apiUrl}/workspaces/onboarding/step`, {
+            const deptStepRes = await fetch(`${BRANDING.apiUrl}/workspaces/onboarding/step`, {
               method: 'PATCH',
               headers: {
                 'Content-Type': 'application/json',
@@ -330,12 +333,57 @@ export default function RegisterPage() {
                 data: { departments: departmentList },
                 markCompleted: false,
               }),
-            }).catch(() => {});
+            }).catch(() => null);
+            if (deptStepRes && deptStepRes.ok) {
+              const rawDeptStep = await deptStepRes.json();
+              const deptStepPayload = rawDeptStep?.data !== undefined ? rawDeptStep.data : rawDeptStep;
+              if (Array.isArray(deptStepPayload?.setupData?.departments)) {
+                createdDepts = deptStepPayload.setupData.departments;
+              }
+            }
           }
         } catch {}
       }
 
-      // Cache user details & workspace info for seamless prefilling in personal details & onboarding
+      // 3. Prebuild & Configure Selected Designations with Role/Scope & Permissions
+      if (token && wsId && selectedDesignations.length > 0) {
+        try {
+          await Promise.all(
+            selectedDesignations.map(async (title) => {
+              const matched = availableDesignations.find((d) => d.title === title);
+              const matchedDept = matched?.dept
+                ? createdDepts.find((cd: any) => (cd.name || '').toLowerCase() === matched.dept.toLowerCase())
+                : undefined;
+              const accessRole = matched?.role === 'OWNER' ? 'ADMIN' : matched?.role || 'MEMBER';
+              const dataScope =
+                matched?.scope === 'WORKSPACE' ? 'GLOBAL' : matched?.scope || 'ASSIGNED';
+              const permissionCodes = getDefaultPermsForDesignation(accessRole, title);
+
+              return fetch(`${BRANDING.apiUrl}/designations`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${token}`,
+                  'x-workspace-id': wsId,
+                },
+                body: JSON.stringify({
+                  title,
+                  level: matched?.level || 1,
+                  description: matched?.description || `Auto-mapped to ${accessRole}`,
+                  departmentId: matchedDept?.id || undefined,
+                  defaultAccessRole: accessRole,
+                  defaultDataScope: dataScope,
+                  permissionCodes,
+                }),
+              }).catch(() => {});
+            })
+          );
+        } catch (seedErr) {
+          console.warn('[Orvexa] Non-blocking designation prebuild notice:', seedErr);
+        }
+      }
+
+      // Cache user details & workspace info for seamless prefilling in onboarding & app layout
       try {
         localStorage.setItem(
           'user',
@@ -358,6 +406,9 @@ export default function RegisterPage() {
               name: formData.workspaceName.trim(),
               slug: payload.workspace?.slug || formData.workspaceName.toLowerCase().replace(/[^a-z0-9]/g, '-'),
               businessType,
+              settings: {
+                enabledModules: payload.workspace?.settings?.enabledModules || DEFAULT_ENABLED_MODULES,
+              },
             },
             accessRole: 'OWNER',
           })
@@ -366,8 +417,8 @@ export default function RegisterPage() {
         localStorage.setItem('orvexa_registered_departments', JSON.stringify(departmentList));
       } catch {}
 
-      toast.success('Organization created with auto-mapped designations!');
-      router.push('/app/settings?tab=personal');
+      toast.success('Workspace created! Continue your organization setup & invite your team.');
+      router.push('/app/onboarding');
     } catch (err: any) {
       toast.error(err.message || 'Error creating organization');
     } finally {
@@ -725,7 +776,7 @@ export default function RegisterPage() {
                 </div>
 
                 {/* Add Custom Designation Inline */}
-                <div className="flex gap-2 pt-1">
+                <div className="flex flex-wrap sm:flex-nowrap gap-2 pt-1">
                   <input
                     type="text"
                     value={customDesignation}
@@ -736,9 +787,19 @@ export default function RegisterPage() {
                         handleAddCustomDesignation();
                       }
                     }}
-                    placeholder="Add custom designation (e.g. Solution Architect, Scrum Master)..."
-                    className="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    placeholder="Add custom designation (e.g. HR - Recruitment, HR Generalist)..."
+                    className="flex-1 min-w-[200px] h-9 rounded-lg border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                   />
+                  <select
+                    value={customDesignationRole}
+                    onChange={(e) => setCustomDesignationRole(e.target.value as any)}
+                    className="h-9 rounded-lg border border-input bg-background px-2 text-xs text-foreground focus:outline-none"
+                    title="Default role for this designation"
+                  >
+                    <option value="MEMBER">MEMBER</option>
+                    <option value="MANAGER">MANAGER</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
                   <Button
                     type="button"
                     variant="outline"

@@ -515,18 +515,26 @@ export class PayrollService {
     workspaceId: string,
     periodId: string,
     payslipId: string,
-    userContext?: { membershipId?: string; accessRole?: string },
+    userContext?: { membershipId?: string; accessRole?: string; permissions?: string[]; dataScope?: string },
   ): Promise<Payslip> {
     const period = await this.getPeriodById(workspaceId, periodId);
     const payslip = period.payslips.find((p) => p.id === payslipId);
     if (!payslip) throw new NotFoundException('Payslip not found');
+
+    const perms: string[] = Array.isArray(userContext?.permissions) ? userContext!.permissions! : [];
+    const hasPayrollPerm =
+      perms.includes('payroll:manage') ||
+      perms.includes('payroll:approve') ||
+      perms.includes('payroll:edit') ||
+      (perms.includes('payroll:view') && userContext?.dataScope !== 'OWN' && userContext?.dataScope !== 'ASSIGNED');
 
     // Strict record permission check
     if (
       userContext &&
       userContext.accessRole !== 'OWNER' &&
       userContext.accessRole !== 'ADMIN' &&
-      userContext.accessRole !== 'HR'
+      userContext.accessRole !== 'HR' &&
+      !hasPayrollPerm
     ) {
       if (userContext.membershipId !== payslip.membershipId) {
         throw new ForbiddenException('Access denied: You can only view your own payslip');
@@ -539,7 +547,7 @@ export class PayrollService {
   async getHistoricalReports(
     workspaceId: string,
     query?: { membershipId?: string; startDate?: string; endDate?: string },
-    userContext?: { membershipId?: string; accessRole?: string },
+    userContext?: { membershipId?: string; accessRole?: string; permissions?: string[]; dataScope?: string },
   ) {
     const periods = await this.listPeriods(workspaceId);
 
@@ -553,12 +561,20 @@ export class PayrollService {
       eligiblePeriods = eligiblePeriods.filter((p) => p.endDate <= query.endDate!);
     }
 
-    // Role-based filtering
+    const perms: string[] = Array.isArray(userContext?.permissions) ? userContext!.permissions! : [];
+    const hasPayrollPerm =
+      perms.includes('payroll:manage') ||
+      perms.includes('payroll:approve') ||
+      perms.includes('payroll:edit') ||
+      (perms.includes('payroll:view') && userContext?.dataScope !== 'OWN' && userContext?.dataScope !== 'ASSIGNED');
+
+    // Role & permission-based filtering
     const isRestricted =
       userContext &&
       userContext.accessRole !== 'OWNER' &&
       userContext.accessRole !== 'ADMIN' &&
-      userContext.accessRole !== 'HR';
+      userContext.accessRole !== 'HR' &&
+      !hasPayrollPerm;
 
     const targetMembershipId = isRestricted ? userContext?.membershipId : query?.membershipId;
 

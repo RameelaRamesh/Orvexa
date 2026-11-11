@@ -54,6 +54,16 @@ export class NotificationsController {
     return this.notificationsService.markAllAsRead(workspaceId, membershipId);
   }
 
+  @Post('mark-read-by-context')
+  async markReadByContext(
+    @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
+    @Body() body: { prefix?: string; link?: string; type?: string },
+  ) {
+    const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    return this.notificationsService.markReadByContext(workspaceId, membershipId, body || {});
+  }
+
   @Delete(':id')
   async deleteNotification(
     @CurrentWorkspace() workspaceId: string,

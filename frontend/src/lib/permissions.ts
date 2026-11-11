@@ -12,6 +12,65 @@ export interface PermissionContext {
     description?: string;
     permissions?: Array<string | { code?: string; permission?: { code: string } }>;
   } | null;
+  workspace?: {
+    id?: string;
+    name?: string;
+    settings?: {
+      enabledModules?: string[];
+      roleDataScopes?: Record<string, string>;
+      [key: string]: any;
+    };
+    [key: string]: any;
+  } | null;
+}
+
+export const DEFAULT_ENABLED_MODULES: string[] = [
+  'people',
+  'projects',
+  'tasks',
+  'work_queue',
+  'time',
+  'attendance',
+  'leave',
+  'approvals',
+  'payroll',
+];
+
+/**
+ * Resolves the workspace's currently enabled modules, falling back to DEFAULT_ENABLED_MODULES.
+ */
+export function getEnabledModules(ctx?: PermissionContext | null): string[] {
+  const configured = ctx?.workspace?.settings?.enabledModules;
+  if (Array.isArray(configured)) {
+    return configured;
+  }
+  return DEFAULT_ENABLED_MODULES;
+}
+
+/**
+ * Checks strictly whether a module key is enabled in the active workspace's settings.
+ */
+export function isModuleEnabled(
+  ctx: PermissionContext | null | undefined,
+  moduleKey: string,
+): boolean {
+  return getEnabledModules(ctx).includes(moduleKey);
+}
+
+/**
+ * Extracts the data access scope configured for the active role (if any).
+ */
+export function getDataScope(ctx?: PermissionContext | null): string {
+  const accessRole = (ctx?.accessRole || ctx?.role?.name || '').toUpperCase();
+  if (accessRole === 'OWNER') return 'GLOBAL';
+  const roleId = ctx?.role?.id;
+  const roleScopes = ctx?.workspace?.settings?.roleDataScopes || {};
+  if (roleId && roleScopes[roleId]) {
+    return roleScopes[roleId];
+  }
+  if (accessRole === 'ADMIN') return 'GLOBAL';
+  if (accessRole === 'MANAGER') return 'TEAM';
+  return 'OWN';
 }
 
 /**
@@ -59,8 +118,13 @@ export function checkPermission(ctx: PermissionContext | null | undefined, requi
 
   const grantedCodes = extractPermissionCodes(ctx);
 
-  // Platform ADMIN has operational authority for all standard operations
-  if (accessRole === 'ADMIN' && grantedCodes.length === 0 && requiredPerm !== 'billing:manage') {
+  // Platform system ADMIN with no explicit permissions row retains operational defaults (custom roles must match explicit permissions)
+  if (
+    accessRole === 'ADMIN' &&
+    ctx.role?.isSystemRole !== false &&
+    grantedCodes.length === 0 &&
+    requiredPerm !== 'billing:manage'
+  ) {
     return true;
   }
 

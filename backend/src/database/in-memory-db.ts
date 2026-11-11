@@ -4,6 +4,9 @@ export class InMemoryDatabase {
   users: any[] = [];
   workspaces: any[] = [];
   memberships: any[] = [];
+  invitations: any[] = [];
+  plans: any[] = [];
+  subscriptions: any[] = [];
   roles: any[] = [];
   permissions: any[] = [];
   rolePermissions: any[] = [];
@@ -16,13 +19,21 @@ export class InMemoryDatabase {
   notifications: any[] = [];
   tickets: any[] = [];
   tasks: any[] = [];
+  workItems: any[] = [];
   projects: any[] = [];
   leaveRequests: any[] = [];
+  leavePolicies: any[] = [];
+  leaveBalances: any[] = [];
   shifts: any[] = [];
   holidays: any[] = [];
   attendances: any[] = [];
   qualityReviews: any[] = [];
   calendarEvents: any[] = [];
+  approvalRequests: any[] = [];
+  overtimeRequests: any[] = [];
+  invoices: any[] = [];
+  payments: any[] = [];
+  timesheets: any[] = [];
 
   constructor() {
     this.seed();
@@ -38,6 +49,10 @@ export class InMemoryDatabase {
       slug: 'vattara-solutions',
       businessType: 'GENERAL',
       settings: {
+        enabledModules: [
+          'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance',
+          'leave', 'approvals', 'quality', 'sla', 'clients', 'billing', 'assets', 'payroll',
+        ],
         requestCategories: [
           { id: 'cat_it', name: 'IT support', code: 'IT_SUPPORT', description: 'Hardware, software, network, access and DB requests', defaultPriority: 'MEDIUM', isActive: true },
           { id: 'cat_facilities', name: 'Facilities', code: 'FACILITIES', description: 'Building maintenance, seating, air conditioning, and electricals', defaultPriority: 'MEDIUM', isActive: true },
@@ -424,6 +439,80 @@ export class InMemoryDatabase {
       { id: 'shift_general', workspaceId: wsId, name: 'General Shift', startTime: '09:00', endTime: '18:00', workDays: ['MON', 'TUE', 'WED', 'THU', 'FRI'] },
     );
 
+    // Plans & Active Subscription
+    this.plans.push(
+      {
+        id: 'plan_free',
+        name: 'Free Tier',
+        code: 'FREE',
+        priceMonthly: 0,
+        priceYearly: 0,
+        entitlements: { maxUsers: 50, maxStorageMb: 1000, features: ['all'] },
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'plan_starter',
+        name: 'Starter Growth',
+        code: 'STARTER',
+        priceMonthly: 4999,
+        priceYearly: 49990,
+        entitlements: {
+          maxUsers: 25,
+          maxStorageMb: 10000,
+          features: ['people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'leave', 'approvals', 'quality', 'sla', 'clients', 'billing', 'assets', 'payroll'],
+        },
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      {
+        id: 'plan_business',
+        name: 'Business Pro',
+        code: 'BUSINESS',
+        priceMonthly: 14999,
+        priceYearly: 149990,
+        entitlements: { maxUsers: 100, maxStorageMb: 50000, features: ['all'] },
+        isActive: true,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    );
+
+    this.subscriptions.push({
+      id: 'sub_default_1',
+      workspaceId: wsId,
+      planId: 'plan_free',
+      status: 'ACTIVE',
+      seatCount: 50,
+      currentPeriodStart: new Date(),
+      currentPeriodEnd: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+  }
+
+  private matchUniqueWhere(item: any, where: any): boolean {
+    if (!where || Object.keys(where).length === 0) return false;
+    for (const k of Object.keys(where)) {
+      if (k === 'userId_workspaceId') {
+        if (
+          item.userId !== where.userId_workspaceId.userId ||
+          item.workspaceId !== where.userId_workspaceId.workspaceId
+        ) {
+          return false;
+        }
+      } else if (k === 'email') {
+        if (String(item.email || '').toLowerCase() !== String(where.email || '').toLowerCase()) {
+          return false;
+        }
+      } else if (item[k] !== where[k]) {
+        return false;
+      }
+    }
+    return true;
   }
 
   // Model Query Handlers
@@ -434,15 +523,7 @@ export class InMemoryDatabase {
       findUnique: async (args: any) => {
         const col = getCollection();
         const where = args?.where || {};
-        const found = col.find((item) => {
-          if (where.id && item.id !== where.id) return false;
-          if (where.email && item.email?.toLowerCase() !== where.email.toLowerCase()) return false;
-          if (where.slug && item.slug !== where.slug) return false;
-          if (where.userId_workspaceId) {
-            if (item.userId !== where.userId_workspaceId.userId || item.workspaceId !== where.userId_workspaceId.workspaceId) return false;
-          }
-          return true;
-        });
+        const found = col.find((item) => this.matchUniqueWhere(item, where));
         if (!found) return null;
         return this.hydrate(found, collectionName, args?.include);
       },
@@ -458,7 +539,10 @@ export class InMemoryDatabase {
       findMany: async (args: any) => {
         const col = getCollection();
         const where = args?.where || {};
-        const filtered = col.filter((item) => this.matchWhere(item, where));
+        let filtered = col.filter((item) => this.matchWhere(item, where));
+        if (args?.take) {
+          filtered = filtered.slice(0, args.take);
+        }
         return filtered.map((item) => this.hydrate(item, collectionName, args?.include));
       },
 
@@ -478,13 +562,21 @@ export class InMemoryDatabase {
       update: async (args: any) => {
         const col = getCollection();
         const where = args?.where || {};
-        const index = col.findIndex((item) => this.matchWhere(item, where));
+        const index = col.findIndex((item) => this.matchUniqueWhere(item, where) || this.matchWhere(item, where));
         if (index === -1) {
           throw new Error(`Record not found in ${collectionName}`);
         }
+        const patch: any = {};
+        for (const [k, v] of Object.entries(args.data || {})) {
+          if (v && typeof v === 'object' && 'increment' in (v as any)) {
+            patch[k] = Number(col[index][k] || 0) + Number((v as any).increment || 0);
+          } else {
+            patch[k] = v;
+          }
+        }
         col[index] = {
           ...col[index],
-          ...args.data,
+          ...patch,
           updatedAt: new Date(),
         };
         return this.hydrate(col[index], collectionName, args?.include);
@@ -493,7 +585,7 @@ export class InMemoryDatabase {
       upsert: async (args: any) => {
         const col = getCollection();
         const where = args?.where || {};
-        const index = col.findIndex((item) => this.matchWhere(item, where));
+        const index = col.findIndex((item) => this.matchUniqueWhere(item, where) || this.matchWhere(item, where));
         if (index !== -1) {
           col[index] = {
             ...col[index],
@@ -503,7 +595,7 @@ export class InMemoryDatabase {
           return this.hydrate(col[index], collectionName, args?.include);
         } else {
           const newItem = {
-            id: `gen_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+            id: args.create?.id || `gen_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
             ...args.create,
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -511,6 +603,17 @@ export class InMemoryDatabase {
           col.push(newItem);
           return this.hydrate(newItem, collectionName, args?.include);
         }
+      },
+
+      delete: async (args: any) => {
+        const col = getCollection();
+        const where = args?.where || {};
+        const index = col.findIndex((item) => this.matchUniqueWhere(item, where) || this.matchWhere(item, where));
+        if (index === -1) {
+          throw new Error(`Record not found in ${collectionName}`);
+        }
+        const [removed] = col.splice(index, 1);
+        return this.hydrate(removed, collectionName, args?.include);
       },
 
       createMany: async (args: any) => {
@@ -690,6 +793,9 @@ export class InMemoryDatabase {
             if (include.memberships.include?.team) {
               mClone.team = this.teams.find((t) => t.id === m.teamId);
             }
+            if (include.memberships.include?.designation) {
+              mClone.designation = this.designations.find((dg) => dg.id === m.designationId);
+            }
             return mClone;
           });
       }
@@ -722,6 +828,84 @@ export class InMemoryDatabase {
       }
       if (include.designation) {
         cloned.designation = this.designations.find((dg) => dg.id === item.designationId);
+      }
+      if (include.reportsTo) {
+        const mgr = this.memberships.find((m) => m.id === item.reportsToId);
+        cloned.reportsTo = mgr ? this.hydrate(mgr, 'memberships', include.reportsTo.include || { user: true }) : null;
+      }
+      if (include.directReports) {
+        cloned.directReports = this.memberships
+          .filter((m) => m.reportsToId === item.id)
+          .map((m) => this.hydrate(m, 'memberships', include.directReports.include || { user: true }));
+      }
+      if (include._count?.select) {
+        cloned._count = cloned._count || {};
+        if (include._count.select.assignedTasks) {
+          cloned._count.assignedTasks = this.tasks.filter((t) => t.assigneeMembershipId === item.id).length;
+        }
+        if (include._count.select.assignedWorkItems) {
+          cloned._count.assignedWorkItems = this.workItems.filter((w) => w.assignedMembershipId === item.id).length;
+        }
+        if (include._count.select.assignedAssets) {
+          cloned._count.assignedAssets = this.assets.filter((a) => a.assignedToMembershipId === item.id).length;
+        }
+      }
+    } else if (collection === 'invitations') {
+      if (include.workspace) {
+        cloned.workspace = this.workspaces.find((w) => w.id === item.workspaceId) || null;
+      }
+      if (include.invitedBy) {
+        cloned.invitedBy = this.users.find((u) => u.id === item.invitedByUserId) || null;
+      }
+    } else if (collection === 'subscriptions') {
+      if (include.plan) {
+        cloned.plan = this.plans.find((p) => p.id === item.planId) || null;
+      }
+      if (include.payments) {
+        cloned.payments = this.payments.filter((pay) => pay.subscriptionId === item.id);
+      }
+    } else if (collection === 'workspaces') {
+      if (include.departments) {
+        cloned.departments = this.departments.filter((d) => d.workspaceId === item.id);
+      }
+      if (include.teams) {
+        cloned.teams = this.teams.filter((t) => t.workspaceId === item.id);
+      }
+      if (include.designations) {
+        cloned.designations = this.designations.filter((dg) => dg.workspaceId === item.id);
+      }
+      if (include.invitations) {
+        const whereInv = include.invitations.where || {};
+        cloned.invitations = this.invitations.filter(
+          (inv) => inv.workspaceId === item.id && this.matchWhere(inv, whereInv),
+        );
+      }
+      if (include.memberships) {
+        const whereMem = include.memberships.where || {};
+        cloned.memberships = this.memberships
+          .filter((m) => m.workspaceId === item.id && this.matchWhere(m, whereMem))
+          .map((m) => this.hydrate(m, 'memberships', include.memberships.include || { user: true, department: true, team: true, designation: true }));
+      }
+    } else if (collection === 'departments') {
+      if (include.teams) {
+        cloned.teams = this.teams.filter((t) => t.departmentId === item.id);
+      }
+      if (include._count?.select?.memberships) {
+        cloned._count = cloned._count || {};
+        cloned._count.memberships = this.memberships.filter((m) => m.departmentId === item.id).length;
+      }
+    } else if (collection === 'teams') {
+      if (include.department) {
+        cloned.department = this.departments.find((d) => d.id === item.departmentId) || null;
+      }
+      if (include._count?.select?.memberships) {
+        cloned._count = cloned._count || {};
+        cloned._count.memberships = this.memberships.filter((m) => m.teamId === item.id).length;
+      }
+    } else if (collection === 'designations') {
+      if (include._count?.select?.memberships) {
+        cloned._count = cloned._count || {};
+        cloned._count.memberships = this.memberships.filter((m) => m.designationId === item.id).length;
       }
     } else if (collection === 'roles') {
       if (include?.permissions) {

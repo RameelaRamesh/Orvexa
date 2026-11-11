@@ -244,17 +244,65 @@ export default function ProjectsAndTasksPage() {
     };
   };
 
-  // Load User Context
+  // Load User Context (storage + tab-isolated /auth/me verification)
   useEffect(() => {
+    let cancelled = false;
+    const token = typeof window !== 'undefined' ? (localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token')) : null;
+    const ws = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+
     try {
+      const cachedWsRaw = localStorage.getItem('orvexa_cached_workspace');
+      if (cachedWsRaw) {
+        const wsObj = JSON.parse(cachedWsRaw);
+        const wsObjWsId = wsObj?.workspaceId || wsObj?.id;
+        if (!ws || wsObjWsId === ws) {
+          const cachedMemId = wsObj?.membershipId || (wsObj?.workspaceId ? wsObj?.id : '');
+          const cachedRole = wsObj?.accessRole || wsObj?.role?.name || '';
+          if (cachedMemId) setCurrentMembershipId(cachedMemId);
+          if (cachedRole) setUserRole(cachedRole);
+        }
+      }
       const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
-      const ws = localStorage.getItem('activeWorkspaceId');
-      const mem = (p.memberships || []).find((m: any) => m.workspaceId === ws) || p.memberships?.[0];
+      const membershipsList = Array.isArray(p?.memberships) ? p.memberships : [];
+      const mem =
+        (ws && membershipsList.find((m: any) => m.workspaceId === ws)) ||
+        (!ws ? membershipsList[0] : null);
       if (mem) {
-        setCurrentMembershipId(mem.id);
-        setUserRole(mem.accessRole || 'MEMBER');
+        if (mem.id) setCurrentMembershipId(mem.id);
+        const roleLabel =
+          mem.accessRole && mem.accessRole !== 'MEMBER'
+            ? mem.accessRole
+            : mem.role?.name || mem.accessRole || 'MEMBER';
+        setUserRole(roleLabel);
       }
     } catch {}
+
+    if (token) {
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const prof = json.data !== undefined ? json.data : json;
+          const membershipsList = Array.isArray(prof?.memberships) ? prof.memberships : [];
+          const activeMem =
+            (ws && membershipsList.find((m: any) => m.workspaceId === ws)) || membershipsList[0];
+          if (activeMem) {
+            if (activeMem.id) setCurrentMembershipId(activeMem.id);
+            const liveRole =
+              activeMem.accessRole && activeMem.accessRole !== 'MEMBER'
+                ? activeMem.accessRole
+                : activeMem.role?.name || activeMem.accessRole || 'MEMBER';
+            setUserRole(liveRole);
+          }
+        })
+        .catch(() => null);
+    }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Initial Fetch Data
@@ -348,16 +396,33 @@ export default function ProjectsAndTasksPage() {
 
   // Check if current user is manager / team lead / admin
   const isManagerOrAdmin = useMemo(() => {
-    return ['OWNER', 'ADMIN', 'MANAGER'].includes(userRole.toUpperCase()) || userRole.toUpperCase().includes('LEAD');
+    const u = userRole.toUpperCase();
+    return (
+      ['OWNER', 'ADMIN', 'MANAGER'].includes(u) ||
+      u.includes('OWNER') ||
+      u.includes('ADMIN') ||
+      u.includes('MANAGER') ||
+      u.includes('LEAD') ||
+      u.includes('DIRECTOR') ||
+      u.includes('HEAD')
+    );
   }, [userRole]);
 
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
     return tasks.filter((t) => {
+      const sla = ((t as any).sla as any) || {};
+      const multiIds: string[] = Array.isArray((t as any).assigneeMembershipIds)
+        ? (t as any).assigneeMembershipIds
+        : Array.isArray(sla.assigneeMembershipIds)
+        ? sla.assigneeMembershipIds
+        : [];
+      const hasAnyAssignee = Boolean(t.assigneeMembershipId) || multiIds.length > 0;
       // Must be assigned to user (or unassigned tasks created by user)
       const isMine =
         t.assigneeMembershipId === currentMembershipId ||
-        (!t.assigneeMembershipId && (t as any).creatorMembershipId === currentMembershipId);
+        multiIds.includes(currentMembershipId) ||
+        (!hasAnyAssignee && (t as any).creatorMembershipId === currentMembershipId);
       if (!isMine) return false;
 
       // Status Filter
@@ -412,8 +477,16 @@ export default function ProjectsAndTasksPage() {
   // Filter Tasks for Team Work
   const teamWorkTasks = useMemo(() => {
     return tasks.filter((t) => {
-      if (teamMemberFilter !== 'ALL' && t.assigneeMembershipId !== teamMemberFilter) {
-        return false;
+      if (teamMemberFilter !== 'ALL') {
+        const sla = ((t as any).sla as any) || {};
+        const multiIds: string[] = Array.isArray((t as any).assigneeMembershipIds)
+          ? (t as any).assigneeMembershipIds
+          : Array.isArray(sla.assigneeMembershipIds)
+          ? sla.assigneeMembershipIds
+          : [];
+        if (t.assigneeMembershipId !== teamMemberFilter && !multiIds.includes(teamMemberFilter)) {
+          return false;
+        }
       }
       if (teamProjectFilter !== 'ALL' && t.projectId !== teamProjectFilter) {
         return false;
@@ -811,7 +884,7 @@ export default function ProjectsAndTasksPage() {
             <CheckSquare className="h-4 w-4" />
             My Work
             <span className="text-[11px] px-1.5 py-0.2 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-              {tasks.filter((t) => t.assigneeMembershipId === currentMembershipId).length}
+              {myWorkTasks.length}
             </span>
           </button>
 

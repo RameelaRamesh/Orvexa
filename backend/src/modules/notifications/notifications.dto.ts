@@ -13,4 +13,10 @@ export class NotificationPreferencesDto {
   deadlineReminders?: boolean;
   taskAssignmentAlerts?: boolean;
   reviewAlerts?: boolean;
+  chatAlerts?: boolean;
+  soundEnabled?: boolean;
+  soundType?: 'chime' | 'bell' | 'pop' | 'subtle';
+  soundVolume?: number;
+  taskSoundEnabled?: boolean;
+  chatSoundEnabled?: boolean;
 }

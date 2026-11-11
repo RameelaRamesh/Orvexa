@@ -371,6 +371,7 @@ export class PeopleService {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      permissionCodes?: string[];
     },
   ) {
     const emailLower = data.email.toLowerCase().trim();
@@ -410,10 +411,96 @@ export class PeopleService {
       }
     }
 
-    // Resolve Role ID
-    let roleId = data.roleId;
+    const cleanId = (id?: string) => (id && id.trim().length > 0 ? id.trim() : null);
+
+    // Resolve designation from manual title or designationId
+    let designationId = cleanId(data.designationId);
+    let resolvedDesignationTitle = data.designationTitle?.trim() || undefined;
+    const desigModel = (this.prisma as any).designation;
+    if (resolvedDesignationTitle && desigModel) {
+      let desig = await desigModel.findFirst({
+        where: { workspaceId, title: { equals: resolvedDesignationTitle, mode: 'insensitive' } },
+      }).catch(() => null);
+      if (!desig) {
+        desig = await desigModel.create({
+          data: { workspaceId, title: resolvedDesignationTitle, level: 1 },
+        }).catch(() => null);
+      }
+      if (desig?.id) designationId = desig.id;
+    } else if (designationId && desigModel && !resolvedDesignationTitle) {
+      const desigRec = await desigModel.findFirst({ where: { id: designationId, workspaceId } }).catch(() => null);
+      if (desigRec?.title) resolvedDesignationTitle = desigRec.title;
+    }
+
+    // Safely load workspace settings to honor designation configs & role scopes
+    const wsRecord = await (this.prisma as any).workspace?.findUnique?.({
+      where: { id: workspaceId },
+      select: { settings: true },
+    })?.catch(() => null);
+    const wsSettings: any = (wsRecord?.settings as any) || {};
+    const desigConfigs: Record<string, any> = wsSettings.designationConfigs || {};
+    const desigConfig = designationId ? desigConfigs[designationId] : undefined;
+
+    const effectiveAccessRole = (data.accessRole || desigConfig?.defaultAccessRole || 'MEMBER') as SystemAccessRole;
+    const effectiveDepartmentId = cleanId(data.departmentId) || desigConfig?.departmentId || null;
+    const effectiveDataScope = data.dataScope || desigConfig?.defaultDataScope || undefined;
+
+    // Resolve Role ID (supports per-invite custom permissionCodes, designation defaultRoleId, explicit roleId, or system role)
+    let roleId = cleanId(data.roleId) || undefined;
+    const permModel = (this.prisma as any).permission;
+    const rpModel = (this.prisma as any).rolePermission;
+
+    if (Array.isArray(data.permissionCodes) && permModel && rpModel) {
+      const normalizedRequested = [...data.permissionCodes].sort();
+      const desigPerms = Array.isArray(desigConfig?.permissionCodes) ? [...desigConfig.permissionCodes].sort() : [];
+      const matchesDesig =
+        desigConfig?.defaultRoleId &&
+        desigPerms.length === normalizedRequested.length &&
+        desigPerms.every((p, i) => p === normalizedRequested[i]);
+
+      if (matchesDesig) {
+        roleId = desigConfig.defaultRoleId;
+      } else if (normalizedRequested.length > 0) {
+        try {
+          const rolePrefix = resolvedDesignationTitle || `${data.firstName} ${data.lastName}`.trim() || 'Invited Member';
+          const customRoleName = `${rolePrefix} (${emailLower.split('@')[0]})`.slice(0, 80);
+          let customRole = await this.prisma.role.findFirst({
+            where: { workspaceId, name: { equals: customRoleName, mode: 'insensitive' }, isSystemRole: false },
+          }).catch(() => null);
+          if (!customRole) {
+            customRole = await this.prisma.role.create({
+              data: {
+                workspaceId,
+                name: customRoleName,
+                description: `Custom invitation access profile for ${emailLower}`,
+                isSystemRole: false,
+              },
+            });
+          }
+          if (customRole?.id) {
+            const matchingPerms = await permModel.findMany({ where: { code: { in: normalizedRequested } } }).catch(() => []);
+            const permIds = (matchingPerms || []).map((p: any) => p.id).filter(Boolean);
+            await rpModel.deleteMany({ where: { roleId: customRole.id } }).catch(() => null);
+            if (permIds.length > 0) {
+              await rpModel.createMany({
+                data: permIds.map((permissionId: string) => ({ roleId: customRole!.id, permissionId })),
+                skipDuplicates: true,
+              }).catch(() => null);
+            }
+            roleId = customRole.id;
+          }
+        } catch {
+          // Fallback to existing roleId or system role if custom role creation isn't supported in mock
+        }
+      }
+    }
+
+    if (!roleId && desigConfig?.defaultRoleId) {
+      roleId = desigConfig.defaultRoleId;
+    }
+
     if (!roleId) {
-      const targetRoleName = data.accessRole || 'MEMBER';
+      const targetRoleName = effectiveAccessRole || 'MEMBER';
       let role = await this.prisma.role.findFirst({
         where: { name: targetRoleName, isSystemRole: true },
       });
@@ -427,23 +514,6 @@ export class PeopleService {
         });
       }
       roleId = role.id;
-    }
-
-    const cleanId = (id?: string) => (id && id.trim().length > 0 ? id.trim() : null);
-
-    // Resolve designation from manual title or designationId
-    let designationId = cleanId(data.designationId);
-    if (data.designationTitle && data.designationTitle.trim()) {
-      const cleanTitle = data.designationTitle.trim();
-      let desig = await this.prisma.designation.findFirst({
-        where: { workspaceId, title: { equals: cleanTitle, mode: 'insensitive' } },
-      });
-      if (!desig) {
-        desig = await this.prisma.designation.create({
-          data: { workspaceId, title: cleanTitle, level: 1 },
-        });
-      }
-      designationId = desig.id;
     }
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -461,9 +531,9 @@ export class PeopleService {
         email: emailLower,
         firstName: data.firstName,
         lastName: data.lastName,
-        accessRole: data.accessRole || 'MEMBER',
+        accessRole: effectiveAccessRole,
         roleId,
-        departmentId: cleanId(data.departmentId),
+        departmentId: effectiveDepartmentId,
         teamId: cleanId(data.teamId),
         designationId,
         reportsToId: cleanId(data.reportsToId),
@@ -478,6 +548,36 @@ export class PeopleService {
       },
     });
 
+    // Store optional invitation metadata (dataScope, custom permissionCodes, custom role scope) safely
+    if (
+      (this.prisma as any).workspace?.update &&
+      wsRecord &&
+      (effectiveDataScope || Array.isArray(data.permissionCodes) || resolvedDesignationTitle)
+    ) {
+      const nextRoleDataScopes = { ...(wsSettings.roleDataScopes || {}) };
+      if (effectiveDataScope && roleId && !nextRoleDataScopes[roleId]) {
+        nextRoleDataScopes[roleId] = effectiveDataScope;
+      }
+      const nextInvitationMeta = {
+        ...(wsSettings.invitationMeta || {}),
+        [invitation.id]: {
+          ...(effectiveDataScope ? { dataScope: effectiveDataScope } : {}),
+          ...(Array.isArray(data.permissionCodes) ? { permissionCodes: data.permissionCodes } : {}),
+          ...(resolvedDesignationTitle ? { designationTitle: resolvedDesignationTitle } : {}),
+        },
+      };
+      await (this.prisma as any).workspace.update({
+        where: { id: workspaceId },
+        data: {
+          settings: {
+            ...wsSettings,
+            roleDataScopes: nextRoleDataScopes,
+            invitationMeta: nextInvitationMeta,
+          },
+        },
+      }).catch(() => null);
+    }
+
     const inviteLink = `${process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app'}/accept-invitation?token=${token}`;
     const inviterName = `${invitation.invitedBy.firstName} ${invitation.invitedBy.lastName}`.trim();
     const inviterEmail = invitation.invitedBy.email;
@@ -490,7 +590,7 @@ export class PeopleService {
       invitedByName: inviterName,
       senderName: inviterName,
       senderEmail: inviterEmail,
-      roleName: data.accessRole || 'MEMBER',
+      roleName: effectiveAccessRole || 'MEMBER',
     });
 
     return {
@@ -499,6 +599,8 @@ export class PeopleService {
         : 'Invitation created. Email dispatch recorded (SMTP credentials can be added to backend/.env)',
       invitation: {
         ...invitation,
+        dataScope: effectiveDataScope,
+        designationTitle: resolvedDesignationTitle,
         inviteLink,
       },
       inviteLink,
@@ -506,6 +608,72 @@ export class PeopleService {
       senderEmail: inviterEmail,
       emailDelivered: mailResult.delivered,
       hasSmtp: this.mailService.hasSmtp,
+    };
+  }
+
+  async inviteMembersBulk(
+    workspaceId: string,
+    invitedByUserId: string,
+    data: {
+      invitations: Array<{
+        email: string;
+        firstName: string;
+        lastName?: string;
+        accessRole?: SystemAccessRole;
+        roleId?: string;
+        departmentId?: string;
+        teamId?: string;
+        designationId?: string;
+        designationTitle?: string;
+        reportsToId?: string;
+        dataScope?: string;
+        permissionCodes?: string[];
+      }>;
+    },
+  ) {
+    const entries = Array.isArray(data?.invitations) ? data.invitations : [];
+    const results: Array<{
+      email: string;
+      status: 'SENT' | 'FAILED';
+      error?: string;
+      invitation?: any;
+      inviteLink?: string;
+    }> = [];
+
+    for (const entry of entries) {
+      const email = (entry?.email || '').trim().toLowerCase();
+      if (!email) continue;
+      try {
+        const res = await this.inviteMember(workspaceId, invitedByUserId, {
+          ...entry,
+          email,
+          firstName: (entry.firstName || email.split('@')[0] || 'Member').trim(),
+          lastName: (entry.lastName || '').trim(),
+        });
+        results.push({
+          email,
+          status: 'SENT',
+          invitation: res.invitation,
+          inviteLink: res.inviteLink,
+        });
+      } catch (err: any) {
+        results.push({
+          email,
+          status: 'FAILED',
+          error: err?.message || 'Failed to send invitation',
+        });
+      }
+    }
+
+    const sentCount = results.filter((r) => r.status === 'SENT').length;
+    const failedCount = results.filter((r) => r.status === 'FAILED').length;
+
+    return {
+      message: `Processed ${results.length} invitation(s): ${sentCount} sent, ${failedCount} failed.`,
+      total: results.length,
+      sentCount,
+      failedCount,
+      results,
     };
   }
 
@@ -613,8 +781,19 @@ export class PeopleService {
     }
     const roleUpper = (invitation.accessRole || 'MEMBER').toUpperCase();
     const roleNameUpper = (assignedRoleRecord?.name || '').toUpperCase();
+    let wsSettings: any = (invitation.workspace as any)?.settings || {};
+    if (!wsSettings?.invitationMeta && (this.prisma as any).workspace?.findUnique) {
+      const wsRec = await (this.prisma as any).workspace
+        .findUnique({ where: { id: invitation.workspaceId }, select: { settings: true } })
+        .catch(() => null);
+      if (wsRec?.settings) wsSettings = wsRec.settings;
+    }
+    const invitationMeta = wsSettings?.invitationMeta?.[invitation.id];
+    const roleDataScope = roleId ? wsSettings?.roleDataScopes?.[roleId] : undefined;
     const defaultDataScope =
-      roleUpper === 'OWNER' || roleUpper === 'ADMIN' || roleNameUpper.includes('ADMIN')
+      invitationMeta?.dataScope ||
+      roleDataScope ||
+      (roleUpper === 'OWNER' || roleUpper === 'ADMIN' || roleNameUpper.includes('ADMIN')
         ? 'GLOBAL'
         : roleUpper === 'MANAGER' ||
           roleNameUpper.includes('MANAGER') ||
@@ -622,7 +801,7 @@ export class PeopleService {
           roleNameUpper.includes('DIRECTOR') ||
           roleNameUpper.includes('HEAD')
         ? 'TEAM'
-        : 'ASSIGNED';
+        : 'ASSIGNED');
 
     // Upsert membership
     const membership = await this.prisma.membership.upsert({
@@ -703,11 +882,40 @@ export class PeopleService {
       orderBy: { createdAt: 'desc' },
     });
 
+    const wsRec = await (this.prisma as any).workspace
+      ?.findUnique?.({ where: { id: workspaceId }, select: { settings: true } })
+      ?.catch(() => null);
+    const invitationMetaMap: Record<string, any> = (wsRec?.settings as any)?.invitationMeta || {};
+
+    const [depts, teams, desigs, roles] = await Promise.all([
+      (this.prisma as any).department?.findMany?.({ where: { workspaceId } })?.catch(() => []) || [],
+      (this.prisma as any).team?.findMany?.({ where: { workspaceId } })?.catch(() => []) || [],
+      (this.prisma as any).designation?.findMany?.({ where: { workspaceId } })?.catch(() => []) || [],
+      (this.prisma as any).role?.findMany?.({ where: { OR: [{ workspaceId }, { isSystemRole: true }] } })?.catch(() => []) || [],
+    ]);
+    const deptMap = new Map<string, any>((depts || []).map((d: any) => [d.id, d]));
+    const teamMap = new Map<string, any>((teams || []).map((t: any) => [t.id, t]));
+    const desigMap = new Map<string, any>((desigs || []).map((dg: any) => [dg.id, dg]));
+    const roleMap = new Map<string, any>((roles || []).map((r: any) => [r.id, r]));
+
     const frontendUrl = process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app';
-    return list.map((inv) => ({
-      ...inv,
-      inviteLink: `${frontendUrl}/accept-invitation?token=${inv.token}`,
-    }));
+    return list.map((inv: any) => {
+      const meta = invitationMetaMap[inv.id] || {};
+      const dept = inv.departmentId ? deptMap.get(inv.departmentId) : undefined;
+      const team = inv.teamId ? teamMap.get(inv.teamId) : undefined;
+      const desig = inv.designationId ? desigMap.get(inv.designationId) : undefined;
+      const role = inv.roleId ? roleMap.get(inv.roleId) : undefined;
+      return {
+        ...inv,
+        department: dept ? { id: dept.id, name: dept.name } : undefined,
+        team: team ? { id: team.id, name: team.name } : undefined,
+        designation: desig ? { id: desig.id, title: desig.title } : meta.designationTitle ? { title: meta.designationTitle } : undefined,
+        role: role ? { id: role.id, name: role.name } : undefined,
+        dataScope: meta.dataScope || undefined,
+        permissionCodes: meta.permissionCodes || undefined,
+        inviteLink: `${frontendUrl}/accept-invitation?token=${inv.token}`,
+      };
+    });
   }
 
   async resendInvitation(workspaceId: string, invitationId: string, resendByUserId?: string) {

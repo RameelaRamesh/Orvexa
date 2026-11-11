@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
-import { checkPermission } from '@/lib/permissions';
+import { checkPermission, isModuleEnabled } from '@/lib/permissions';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -70,6 +70,7 @@ export default function AssetsPage() {
   const canDownloadDocuments = checkPermission(activeWorkspace, 'documents:download');
   const canDeleteDocuments = checkPermission(activeWorkspace, 'documents:delete');
 
+  const assetsModuleEnabled = isModuleEnabled(activeWorkspace, 'assets');
   const hasAnyAccess = canViewAssets || canViewInventory || canViewLedger || canViewDocuments;
 
   const getDefaultTab = (): 'assets' | 'inventory' | 'movements' | 'documents' => {
@@ -158,23 +159,33 @@ export default function AssetsPage() {
 
   // Revalidate profile and workspace membership
   useEffect(() => {
-    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
-    if (!token) return;
-    fetch(`${BRANDING.apiUrl}/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then((r) => r.json())
-      .then((res) => {
-        const profile = res.data || res;
-        const savedWsId = localStorage.getItem('activeWorkspaceId');
-        const mem =
-          (profile.memberships || []).find((m: any) => m.workspaceId === savedWsId) ||
-          profile.memberships?.[0];
-        if (mem) {
-          setActiveWorkspace(mem);
-        }
+    const syncWorkspace = () => {
+      try {
+        const cached = localStorage.getItem('orvexa_cached_workspace');
+        if (cached) setActiveWorkspace(JSON.parse(cached));
+      } catch {}
+      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+      if (!token) return;
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .catch(() => {});
+        .then((r) => r.json())
+        .then((res) => {
+          const profile = res.data || res;
+          const savedWsId = localStorage.getItem('activeWorkspaceId');
+          const mem =
+            (profile.memberships || []).find((m: any) => m.workspaceId === savedWsId) ||
+            profile.memberships?.[0];
+          if (mem) {
+            setActiveWorkspace(mem);
+          }
+        })
+        .catch(() => {});
+    };
+
+    syncWorkspace();
+    window.addEventListener('workspace-updated', syncWorkspace);
+    return () => window.removeEventListener('workspace-updated', syncWorkspace);
   }, []);
 
   // Ensure active tab corresponds to the first permitted tab
@@ -193,7 +204,7 @@ export default function AssetsPage() {
 
   const loadData = async () => {
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
-    if (!wsId || !hasAnyAccess) {
+    if (!wsId || !assetsModuleEnabled || !hasAnyAccess) {
       setLoading(false);
       return;
     }
@@ -602,6 +613,35 @@ export default function AssetsPage() {
   });
 
   const lowStockCount = inventoryItems.filter((i) => i.isLowStock).length;
+
+  // Module Entitlement Guard: show clear disabled state if workspace disabled Assets & Inventory
+  if (!loading && !assetsModuleEnabled) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <Card className="max-w-md w-full text-center p-8 border-border shadow-md">
+          <div className="mx-auto w-12 h-12 rounded-full bg-slate-500/10 flex items-center justify-center text-muted-foreground mb-4">
+            <Package className="h-6 w-6" />
+          </div>
+          <CardTitle className="text-lg font-bold text-foreground">
+            Assets, Inventory &amp; Docs Disabled
+          </CardTitle>
+          <CardDescription className="text-sm text-muted-foreground mt-2">
+            This module is currently turned off in Workspace Settings &rarr; Modules &amp; Features.
+          </CardDescription>
+          <div className="mt-6 flex items-center justify-center gap-2">
+            <Button variant="outline" onClick={() => router.push('/app/home')}>
+              Return to Home
+            </Button>
+            {checkPermission(activeWorkspace, 'settings:manage') && (
+              <Button onClick={() => router.push('/app/settings?tab=modules')}>
+                Manage Modules
+              </Button>
+            )}
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   // Route Guard: Access Restricted fallback if user has no view permission for any sub-module
   if (!loading && !hasAnyAccess) {

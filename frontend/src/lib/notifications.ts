@@ -79,22 +79,207 @@ export async function syncPushSubscription(apiUrl: string, token: string, worksp
   }
 }
 
+export type NotificationSoundType = 'chime' | 'bell' | 'pop' | 'subtle';
+
+export interface NotificationPrefs {
+  desktopNotificationsEnabled: boolean;
+  soundEnabled: boolean;
+  soundType: NotificationSoundType;
+  soundVolume: number;
+  taskSoundEnabled: boolean;
+  chatSoundEnabled: boolean;
+}
+
+export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
+  desktopNotificationsEnabled: true,
+  soundEnabled: true,
+  soundType: 'chime',
+  soundVolume: 0.7,
+  taskSoundEnabled: true,
+  chatSoundEnabled: true,
+};
+
+function resolveCurrentUserId(explicitUserId?: string | null): string {
+  if (explicitUserId) return explicitUserId;
+  if (typeof window === 'undefined') return 'default';
+  try {
+    const rawUser =
+      localStorage.getItem('user') || localStorage.getItem('orvexa_cached_profile');
+    if (rawUser) {
+      const parsed = JSON.parse(rawUser);
+      if (parsed?.id) return String(parsed.id);
+    }
+  } catch {}
+  return 'default';
+}
+
+export function getNotificationPrefs(userId?: string | null): NotificationPrefs {
+  if (typeof window === 'undefined') return { ...DEFAULT_NOTIFICATION_PREFS };
+  const uid = resolveCurrentUserId(userId);
+  try {
+    const raw =
+      localStorage.getItem(`orvexa_notif_prefs_${uid}`) ||
+      (uid !== 'default' ? null : localStorage.getItem('orvexa_notif_prefs_default'));
+    if (!raw) return { ...DEFAULT_NOTIFICATION_PREFS };
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_NOTIFICATION_PREFS,
+      ...parsed,
+      soundVolume:
+        typeof parsed?.soundVolume === 'number'
+          ? Math.max(0, Math.min(1, parsed.soundVolume))
+          : DEFAULT_NOTIFICATION_PREFS.soundVolume,
+    };
+  } catch {
+    return { ...DEFAULT_NOTIFICATION_PREFS };
+  }
+}
+
+export function saveNotificationPrefs(
+  prefs: Partial<NotificationPrefs>,
+  userId?: string | null,
+): NotificationPrefs {
+  const uid = resolveCurrentUserId(userId);
+  const current = getNotificationPrefs(uid);
+  const next: NotificationPrefs = {
+    ...current,
+    ...prefs,
+    soundVolume:
+      typeof prefs.soundVolume === 'number'
+        ? Math.max(0, Math.min(1, prefs.soundVolume))
+        : current.soundVolume,
+  };
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(`orvexa_notif_prefs_${uid}`, JSON.stringify(next));
+      window.dispatchEvent(
+        new CustomEvent('notification-prefs-updated', { detail: { userId: uid, prefs: next } }),
+      );
+    } catch {}
+  }
+  return next;
+}
+
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new AudioCtx();
+  }
+  if (sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+    sharedAudioCtx.resume().catch(() => null);
+  }
+  return sharedAudioCtx;
+}
+
+function playToneSequence(
+  ctx: AudioContext,
+  notes: Array<{ freq: number; delay: number; duration: number; type?: OscillatorType }>,
+  volume: number,
+) {
+  const now = ctx.currentTime;
+  const clampedVol = Math.max(0.02, Math.min(1, volume)) * 0.25;
+  for (const note of notes) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = note.type || 'sine';
+    osc.frequency.setValueAtTime(note.freq, now + note.delay);
+    gain.gain.setValueAtTime(0.0001, now + note.delay);
+    gain.gain.exponentialRampToValueAtTime(clampedVol, now + note.delay + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + note.delay + note.duration);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now + note.delay);
+    osc.stop(now + note.delay + note.duration + 0.02);
+  }
+}
+
+export function testNotificationSound(
+  soundType: NotificationSoundType = 'chime',
+  soundVolume: number = 0.7,
+) {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    if (soundType === 'chime') {
+      playToneSequence(
+        ctx,
+        [
+          { freq: 880, delay: 0, duration: 0.16, type: 'sine' },
+          { freq: 1174.66, delay: 0.11, duration: 0.24, type: 'sine' },
+        ],
+        soundVolume,
+      );
+    } else if (soundType === 'bell') {
+      playToneSequence(
+        ctx,
+        [
+          { freq: 1046.5, delay: 0, duration: 0.35, type: 'triangle' },
+          { freq: 1567.98, delay: 0.02, duration: 0.28, type: 'sine' },
+        ],
+        soundVolume,
+      );
+    } else if (soundType === 'pop') {
+      playToneSequence(
+        ctx,
+        [{ freq: 740, delay: 0, duration: 0.09, type: 'sine' }],
+        soundVolume,
+      );
+    } else {
+      playToneSequence(
+        ctx,
+        [{ freq: 587.33, delay: 0, duration: 0.18, type: 'sine' }],
+        soundVolume * 0.65,
+      );
+    }
+  } catch {
+    // Ignore Web Audio blocks when no user gesture occurred yet
+  }
+}
+
+export function playNotificationSound(
+  kind: 'task' | 'chat' | 'general' = 'general',
+  userId?: string | null,
+  overridePrefs?: Partial<NotificationPrefs>,
+) {
+  const prefs = { ...getNotificationPrefs(userId), ...(overridePrefs || {}) };
+  if (!prefs.soundEnabled) return;
+  if (kind === 'task' && !prefs.taskSoundEnabled) return;
+  if (kind === 'chat' && !prefs.chatSoundEnabled) return;
+  testNotificationSound(prefs.soundType, prefs.soundVolume);
+}
+
 export interface ChromeNotificationOptions {
   body?: string;
   tag?: string;
   icon?: string;
   data?: any;
+  userId?: string | null;
+  soundKind?: 'task' | 'chat' | 'general';
+  skipSound?: boolean;
   onClick?: () => void;
 }
 
 /**
- * Shows native Chrome / Web desktop notification.
- * Explicitly sets `silent: true` so the notification makes NO sound.
+ * Shows native Chrome / Web desktop notification and plays configured user alert tone.
  */
 export function showChromeNotification(
   title: string,
   options?: ChromeNotificationOptions,
 ): Notification | null {
+  const prefs = getNotificationPrefs(options?.userId);
+
+  if (!options?.skipSound) {
+    playNotificationSound(options?.soundKind || 'general', options?.userId, prefs);
+  }
+
+  if (!prefs.desktopNotificationsEnabled) {
+    return null;
+  }
+
   if (!isNotificationSupported() || Notification.permission !== 'granted') {
     return null;
   }
@@ -103,7 +288,7 @@ export function showChromeNotification(
     const notification = new Notification(title, {
       body: options?.body || '',
       icon: options?.icon || '/favicon.ico',
-      silent: true,
+      silent: true, // Sound is handled cleanly with user's configured tone & volume above
       tag: options?.tag,
       data: options?.data,
     });
@@ -128,6 +313,7 @@ export interface WorkNotificationParams {
   message: string;
   type?: 'TASK' | 'PROJECT' | 'CALENDAR' | 'MEETING' | 'SYSTEM';
   link?: string;
+  userId?: string | null;
   onOpen?: () => void;
 }
 
@@ -136,14 +322,17 @@ export function showWorkNotification({
   message,
   type = 'TASK',
   link,
+  userId,
   onOpen,
 }: WorkNotificationParams) {
   const preview = message.length > 100 ? `${message.slice(0, 100)}...` : message;
 
-  // 1. Chrome Web Notification
+  // 1. Chrome Web Notification + configured sound
   showChromeNotification(title, {
     body: preview,
     tag: `work-${type.toLowerCase()}-${Date.now()}`,
+    userId,
+    soundKind: 'task',
     onClick: onOpen,
   });
 
@@ -166,6 +355,7 @@ export interface MessageNotificationParams {
   message: string;
   conversationTitle?: string;
   conversationId?: string;
+  userId?: string | null;
   onOpen?: () => void;
 }
 
@@ -175,6 +365,7 @@ export function showMessageNotification({
   message,
   conversationTitle,
   conversationId,
+  userId,
   onOpen,
 }: MessageNotificationParams) {
   const notifTitle = title || (conversationTitle ? `${conversationTitle} • ${senderName}` : senderName);
@@ -183,6 +374,8 @@ export function showMessageNotification({
   showChromeNotification(notifTitle, {
     body: preview || 'Sent an attachment',
     tag: `team-msg-${conversationId || 'chat'}-${Date.now()}`,
+    userId,
+    soundKind: 'chat',
     onClick: onOpen,
   });
 

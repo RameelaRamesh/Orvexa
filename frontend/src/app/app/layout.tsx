@@ -6,7 +6,7 @@ import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
-import { checkPermission } from '@/lib/permissions';
+import { checkPermission, hasAnyPermission, getEnabledModules } from '@/lib/permissions';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -292,12 +292,43 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       }
     };
 
+    // Revalidate when workspace settings/modules change anywhere in the app
+    const handleWorkspaceUpdated = (e: any) => {
+      try {
+        const cachedWs = localStorage.getItem('orvexa_cached_workspace');
+        if (cachedWs) {
+          setActiveWorkspace(JSON.parse(cachedWs));
+        } else if (e?.detail?.enabledModules) {
+          setActiveWorkspace((prev: any) =>
+            prev
+              ? {
+                  ...prev,
+                  workspace: {
+                    ...prev.workspace,
+                    settings: {
+                      ...(prev.workspace?.settings || {}),
+                      enabledModules: e.detail.enabledModules,
+                    },
+                  },
+                }
+              : prev,
+          );
+        }
+      } catch {}
+      const currentToken = localStorage.getItem('accessToken');
+      if (currentToken) {
+        fetchProfile(0);
+      }
+    };
+
     document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('workspace-updated', handleWorkspaceUpdated as EventListener);
 
     return () => {
       isMounted = false;
       clearInterval(heartbeatInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('workspace-updated', handleWorkspaceUpdated as EventListener);
       window.removeEventListener('orvexa_avatar_updated', handleAvatarUpdate);
       window.removeEventListener('storage', handleAvatarUpdate);
     };
@@ -514,32 +545,68 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   };
   const isPlatformAdmin = accessRole === 'OWNER';
 
-  const [calendarBadgeCount, setCalendarBadgeCount] = useState<number>(() => {
-    if (typeof window === 'undefined') return 3;
-    try {
-      const b = localStorage.getItem('orvexa_calendar_badge_count');
-      return b !== null ? parseInt(b, 10) : 3;
-    } catch {
-      return 3;
-    }
-  });
+  const [calendarBadgeCount, setCalendarBadgeCount] = useState<number>(0);
+  const [chatBadgeCount, setChatBadgeCount] = useState<number>(0);
 
   useEffect(() => {
-    const handleUpdate = () => {
-      try {
-        const b = localStorage.getItem('orvexa_calendar_badge_count');
-        if (b !== null) setCalendarBadgeCount(parseInt(b, 10));
-      } catch {}
+    if (typeof window === 'undefined') return;
+    // Clear legacy hardcoded calendar badge counter if present
+    try {
+      localStorage.removeItem('orvexa_calendar_badge_count');
+    } catch {}
+
+    const handleNotificationsUpdated = (e: any) => {
+      const calUnread = e?.detail?.calendarUnreadCount;
+      if (typeof calUnread === 'number') {
+        setCalendarBadgeCount(pathname === '/app/calendar' ? 0 : calUnread);
+      }
+      const chUnread = e?.detail?.chatUnreadCount;
+      if (typeof chUnread === 'number' && chUnread > 0) {
+        setChatBadgeCount((prev) => Math.max(prev, chUnread));
+      }
     };
-    window.addEventListener('calendar_badge_updated', handleUpdate);
-    return () => window.removeEventListener('calendar_badge_updated', handleUpdate);
-  }, []);
+
+    const handleChatUnreadUpdated = (e: any) => {
+      const total = e?.detail?.totalUnread;
+      if (typeof total === 'number') {
+        setChatBadgeCount(total);
+      }
+    };
+
+    window.addEventListener('notifications-updated', handleNotificationsUpdated as EventListener);
+    window.addEventListener('chat-unread-updated', handleChatUnreadUpdated as EventListener);
+    return () => {
+      window.removeEventListener('notifications-updated', handleNotificationsUpdated as EventListener);
+      window.removeEventListener('chat-unread-updated', handleChatUnreadUpdated as EventListener);
+    };
+  }, [pathname]);
+
+  // Clear Operations Calendar unread badge automatically when user opens Calendar
+  useEffect(() => {
+    if (pathname !== '/app/calendar' || typeof window === 'undefined') return;
+    setCalendarBadgeCount(0);
+    const currentToken = localStorage.getItem('accessToken');
+    const wsId = localStorage.getItem('activeWorkspaceId');
+    if (!currentToken || !wsId) return;
+
+    fetch(`${BRANDING.apiUrl}/notifications/mark-read-by-context`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${currentToken}`,
+        'x-workspace-id': wsId,
+      },
+      body: JSON.stringify({ prefix: '/app/calendar' }),
+    })
+      .then(() => {
+        window.dispatchEvent(new CustomEvent('notifications-refresh'));
+      })
+      .catch(() => null);
+  }, [pathname]);
 
   const hasPerm = (perm: string) => checkPermission(activeWorkspace, perm);
 
-  const enabledModules: string[] = activeWorkspace?.workspace?.settings?.enabledModules || [
-    'people', 'projects', 'tasks', 'work_queue', 'time', 'attendance', 'quality', 'sla', 'settings'
-  ];
+  const enabledModules: string[] = getEnabledModules(activeWorkspace);
 
   const allNavItems = [
     { name: 'Home / My Work', href: '/app/home', icon: Home, visible: true },
@@ -578,6 +645,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       name: 'Team Communication',
       href: '/app/communication',
       icon: MessageSquare,
+      badge: chatBadgeCount,
       visible: true,
     },
     {
@@ -591,16 +659,25 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
       href: '/app/assets',
       icon: Package,
       visible:
-        hasPerm('assets:view') ||
-        hasPerm('inventory:view') ||
-        hasPerm('ledger:view') ||
-        hasPerm('documents:view'),
+        enabledModules.includes('assets') &&
+        (hasPerm('assets:view') ||
+          hasPerm('inventory:view') ||
+          hasPerm('ledger:view') ||
+          hasPerm('documents:view')),
     },
     {
       name: 'Payroll & Compensation',
       href: '/app/payroll',
       icon: CreditCard,
-      visible: isPlatformAdmin || hasPerm('payroll:view'),
+      visible:
+        enabledModules.includes('payroll') &&
+        hasAnyPermission(activeWorkspace, [
+          'payroll:view',
+          'payroll:edit',
+          'payroll:approve',
+          'payroll:export',
+          'payroll:manage',
+        ]),
     },
     {
       name: 'Workspace Settings',

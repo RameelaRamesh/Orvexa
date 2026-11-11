@@ -117,39 +117,16 @@ export class TasksService implements OnModuleInit {
       roleNameUpper.includes('HEAD');
 
     // Explicit filter.scope handling
+    let applyMyWorkFilter = false;
+    let applyTeamWorkFilter = false;
+    let applyDataScopeFilter = false;
+
     if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
-      where.assigneeMembershipId = userContext.membershipId;
-    } else if (filter?.scope === 'TEAM_WORK') {
-      if (isManagerOrAdmin) {
-        if (userContext?.teamId && userContext.accessRole === 'MANAGER') {
-          where.assignee = {
-            OR: [
-              { id: userContext.membershipId },
-              { teamId: userContext.teamId },
-              { reportsToId: userContext.membershipId },
-            ],
-          };
-        }
-      }
+      applyMyWorkFilter = true;
+    } else if (filter?.scope === 'TEAM_WORK' && userContext?.membershipId) {
+      applyTeamWorkFilter = true;
     } else if (userContext && !isManagerOrAdmin) {
-      // Non-manager members only see their assigned work or permitted dataScope
-      const scope = userContext.dataScope || 'ASSIGNED';
-      if (scope === 'ASSIGNED' || scope === 'OWN') {
-        where.assigneeMembershipId = userContext.membershipId;
-      } else if (scope === 'TEAM') {
-        // Team scope: tasks assigned to self, team members, or direct reports
-        where.assignee = {
-          OR: [
-            { id: userContext.membershipId },
-            ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
-            { reportsToId: userContext.membershipId },
-          ],
-        };
-      } else if (scope === 'DEPARTMENT') {
-        where.assignee = {
-          departmentId: userContext.departmentId || 'unassigned',
-        };
-      }
+      applyDataScopeFilter = true;
     }
 
     let tasks = await this.prisma.task.findMany({
@@ -168,6 +145,107 @@ export class TasksService implements OnModuleInit {
       },
       orderBy: { updatedAt: 'desc' },
     });
+
+    if (applyMyWorkFilter && userContext?.membershipId) {
+      tasks = tasks.filter((t: any) => {
+        const sla = (t.sla as any) || {};
+        const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
+        return t.assigneeMembershipId === userContext.membershipId || assigneeIds.includes(userContext.membershipId);
+      });
+    } else if (applyTeamWorkFilter && userContext?.membershipId) {
+      if (isManagerOrAdmin && !userContext?.teamId) {
+        // Managers/leads without an assigned team view workspace/direct-report tasks
+      } else if (isManagerOrAdmin && userContext?.teamId && roleUpper !== 'MANAGER' && roleUpper !== 'MEMBER') {
+        // OWNER / ADMIN in TEAM_WORK retain full team/workspace visibility
+      } else {
+        const workspaceMembers = await this.prisma.membership
+          .findMany({
+            where: { workspaceId },
+            select: { id: true, teamId: true, departmentId: true, reportsToId: true },
+          })
+          .catch(() => []);
+        const memberMap = new Map<string, any>();
+        for (const m of workspaceMembers) memberMap.set(m.id, m);
+
+        const hasConfiguredTeam = workspaceMembers.some(
+          (m: any) =>
+            m.id !== userContext.membershipId &&
+            (m.reportsToId === userContext.membershipId || Boolean(userContext.teamId && m.teamId === userContext.teamId)),
+        );
+
+        if (!isManagerOrAdmin || hasConfiguredTeam) {
+          tasks = tasks.filter((t: any) => {
+            const sla = (t.sla as any) || {};
+            const assigneeIds: string[] = Array.from(
+              new Set([
+                t.assigneeMembershipId,
+                ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
+              ].filter(Boolean)),
+            );
+            const isAssignedToMe = assigneeIds.includes(userContext.membershipId);
+            const isCreatedByMe =
+              sla.creatorMembershipId === userContext.membershipId ||
+              (Array.isArray(sla.activityLog) &&
+                sla.activityLog.some(
+                  (a: any) =>
+                    (a?.action === 'CREATED' || a?.action === 'REASSIGNED') &&
+                    a?.actorId === userContext.membershipId,
+                ));
+            const matchesTeamOrReport = assigneeIds.some((aId) => {
+              const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
+              return (
+                mem?.reportsToId === userContext.membershipId ||
+                Boolean(userContext.teamId && mem?.teamId === userContext.teamId)
+              );
+            });
+            return isAssignedToMe || isCreatedByMe || matchesTeamOrReport;
+          });
+        }
+      }
+    } else if (applyDataScopeFilter && userContext?.membershipId) {
+      const scope = userContext.dataScope || 'ASSIGNED';
+      if (scope === 'ASSIGNED' || scope === 'OWN') {
+        tasks = tasks.filter((t: any) => {
+          const sla = (t.sla as any) || {};
+          const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
+          return (
+            t.assigneeMembershipId === userContext.membershipId ||
+            assigneeIds.includes(userContext.membershipId) ||
+            sla.creatorMembershipId === userContext.membershipId
+          );
+        });
+      } else if (scope === 'TEAM') {
+        tasks = tasks.filter((t: any) => {
+          const sla = (t.sla as any) || {};
+          const assigneeIds: string[] = Array.from(
+            new Set([
+              t.assigneeMembershipId,
+              ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
+            ].filter(Boolean)),
+          );
+          if (assigneeIds.includes(userContext.membershipId) || sla.creatorMembershipId === userContext.membershipId) {
+            return true;
+          }
+          const mem = t.assignee;
+          return (
+            mem?.reportsToId === userContext.membershipId ||
+            Boolean(userContext.teamId && mem?.teamId === userContext.teamId)
+          );
+        });
+      } else if (scope === 'DEPARTMENT') {
+        tasks = tasks.filter((t: any) => {
+          const sla = (t.sla as any) || {};
+          const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
+          return (
+            t.assigneeMembershipId === userContext.membershipId ||
+            assigneeIds.includes(userContext.membershipId) ||
+            sla.creatorMembershipId === userContext.membershipId ||
+            sla.departmentId === userContext.departmentId ||
+            Boolean(userContext.departmentId && t.assignee?.departmentId === userContext.departmentId)
+          );
+        });
+      }
+    }
 
     if (filterOverdue) {
       tasks = tasks.filter((t: any) => isTaskOverdue(t));
@@ -338,14 +416,16 @@ export class TasksService implements OnModuleInit {
       },
     });
 
-    // Notify all assignees if assigned at creation
+    // Notify ONLY assigned target user(s), never self-notifying the creator
     for (const memId of assigneeIds) {
+      if (creatorMembershipId && memId === creatorMembershipId) continue;
       await this.sendNotification(
         workspaceId,
         memId,
         'New Work Item Assigned',
         `You have been assigned to: "${task.title}"`,
         `/app/projects?taskId=${task.id}`,
+        'TASK_ASSIGNED',
       );
     }
 
@@ -477,13 +557,22 @@ export class TasksService implements OnModuleInit {
       },
     });
 
-    if (isAssigneeChanging && primaryAssigneeId) {
+    const prevAssigneeIds: string[] = Array.isArray(currentMetadata.assigneeMembershipIds) && currentMetadata.assigneeMembershipIds.length > 0
+      ? currentMetadata.assigneeMembershipIds
+      : (existing.assigneeMembershipId ? [existing.assigneeMembershipId] : []);
+
+    const addedAssigneeIds = newAssigneeIds
+      ? newAssigneeIds.filter((memId) => !prevAssigneeIds.includes(memId) && memId !== actorMembershipId)
+      : (isAssigneeChanging && primaryAssigneeId && primaryAssigneeId !== actorMembershipId ? [primaryAssigneeId] : []);
+
+    for (const memId of addedAssigneeIds) {
       await this.sendNotification(
         workspaceId,
-        primaryAssigneeId,
+        memId,
         'Work Item Reassigned to You',
         `You are now assigned to: "${updated.title}"`,
         `/app/projects?taskId=${updated.id}`,
+        'TASK_ASSIGNED',
       );
     }
 
@@ -543,35 +632,49 @@ export class TasksService implements OnModuleInit {
       include: { project: true, assignee: { include: { user: true } } },
     });
 
-    const managersToAlert = await this.prisma.membership.findMany({
-      where: {
-        workspaceId,
-        status: 'ACTIVE',
-        OR: [
-          { accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] } },
-          ...(updated.assignee?.reportsToId ? [{ id: updated.assignee.reportsToId }] : []),
-        ],
-      },
-    });
-    for (const m of (managersToAlert || [])) {
-      if (m.id === actorMembershipId) continue;
+    const effectiveReviewerId = reviewerMembershipId || metadata.reviewerMembershipId || null;
+
+    if (effectiveReviewerId) {
+      if (effectiveReviewerId !== actorMembershipId) {
+        await this.sendNotification(
+          workspaceId,
+          effectiveReviewerId,
+          'Work Item Ready for Review',
+          `"${updated.title}" was submitted for your review.`,
+          `/app/projects?taskId=${updated.id}`,
+          'TASK_REVIEW',
+        );
+      }
+    } else if (updated.assignee?.reportsToId && updated.assignee.reportsToId !== actorMembershipId) {
       await this.sendNotification(
         workspaceId,
-        m.id,
+        updated.assignee.reportsToId,
         'Work Item Ready for Review',
         `"${updated.title}" was submitted for review by ${updated.assignee?.user?.firstName || 'team member'}.`,
         `/app/projects?taskId=${updated.id}`,
+        'TASK_REVIEW',
       );
-    }
-
-    if (reviewerMembershipId) {
-      await this.sendNotification(
-        workspaceId,
-        reviewerMembershipId,
-        'Work Item Ready for Review',
-        `"${updated.title}" was submitted for your review.`,
-        `/app/projects?taskId=${updated.id}`,
-      );
+    } else {
+      const teamId = updated.assignee?.teamId;
+      const managersToAlert = await this.prisma.membership.findMany({
+        where: {
+          workspaceId,
+          status: 'ACTIVE',
+          ...(teamId ? { teamId } : {}),
+          accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] },
+        },
+      });
+      for (const m of (managersToAlert || [])) {
+        if (m.id === actorMembershipId) continue;
+        await this.sendNotification(
+          workspaceId,
+          m.id,
+          'Work Item Ready for Review',
+          `"${updated.title}" was submitted for review by ${updated.assignee?.user?.firstName || 'team member'}.`,
+          `/app/projects?taskId=${updated.id}`,
+          'TASK_REVIEW',
+        );
+      }
     }
 
     await this.evaluateWorkflows(workspaceId, 'ON_STATUS_CHANGE', updated);
@@ -1494,16 +1597,29 @@ export class TasksService implements OnModuleInit {
           continue;
         }
 
-        const higherOfficials = await this.prisma.membership.findMany({
-          where: {
-            workspaceId: task.workspaceId,
-            status: 'ACTIVE',
-            OR: [
-              { accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] } },
-              ...(task.assignee?.reportsToId ? [{ id: task.assignee.reportsToId }] : []),
-            ],
-          },
-        });
+        let higherOfficials: Array<{ id: string }> = [];
+        if (task.assignee?.reportsToId) {
+          higherOfficials = [{ id: task.assignee.reportsToId }];
+        } else {
+          const teamId = task.assignee?.teamId;
+          higherOfficials = await this.prisma.membership.findMany({
+            where: {
+              workspaceId: task.workspaceId,
+              status: 'ACTIVE',
+              ...(teamId ? { teamId } : {}),
+              accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] },
+            },
+          });
+          if (teamId && (!higherOfficials || higherOfficials.length === 0)) {
+            higherOfficials = await this.prisma.membership.findMany({
+              where: {
+                workspaceId: task.workspaceId,
+                status: 'ACTIVE',
+                accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] },
+              },
+            });
+          }
+        }
 
         const assigneeName = task.assignee?.user
           ? `${task.assignee.user.firstName || ''} ${task.assignee.user.lastName || ''}`.trim()
@@ -1554,6 +1670,7 @@ export class TasksService implements OnModuleInit {
     title: string,
     message: string,
     link?: string,
+    type?: string,
   ) {
     try {
       await this.prisma.notification.create({
@@ -1562,6 +1679,7 @@ export class TasksService implements OnModuleInit {
           recipientMembershipId,
           title,
           message,
+          ...(type ? { type } : {}),
           link: link || '/app/projects',
         },
       });

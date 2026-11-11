@@ -1,13 +1,12 @@
 'use client';
 
-import React, { useEffect, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { usePathname, useRouter } from 'next/navigation';
 import { BRANDING } from '@/config/branding';
 import {
   Bell,
   Check,
   CheckCheck,
-  Clock,
   ExternalLink,
   Trash2,
   X,
@@ -15,8 +14,10 @@ import {
   Calendar,
   CheckSquare,
   Briefcase,
-  Layers,
   ChevronRight,
+  Volume2,
+  VolumeX,
+  SlidersHorizontal,
 } from 'lucide-react';
 import {
   getNotificationPermission,
@@ -24,6 +25,11 @@ import {
   syncPushSubscription,
   showWorkNotification,
   NotificationStatus,
+  NotificationPrefs,
+  NotificationSoundType,
+  getNotificationPrefs,
+  saveNotificationPrefs,
+  testNotificationSound,
 } from '@/lib/notifications';
 import { toast } from 'sonner';
 
@@ -37,9 +43,23 @@ interface NotificationItem {
   createdAt: string;
 }
 
+function getActiveUserId(): string {
+  if (typeof window === 'undefined') return 'default';
+  try {
+    const raw = localStorage.getItem('user') || localStorage.getItem('orvexa_cached_profile');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed?.id) return String(parsed.id);
+    }
+  } catch {}
+  return 'default';
+}
+
 export function NotificationCenter() {
   const router = useRouter();
+  const pathname = usePathname();
   const [isOpen, setIsOpen] = useState(false);
+  const [showSoundSettings, setShowSoundSettings] = useState(false);
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'unread'>('all');
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -47,10 +67,13 @@ export function NotificationCenter() {
   const [loading, setLoading] = useState(false);
   const [permission, setPermission] = useState<NotificationStatus>('default');
   const [showPermissionBanner, setShowPermissionBanner] = useState(false);
+  const [userId, setUserId] = useState<string>(() => getActiveUserId());
+  const [prefs, setPrefs] = useState<NotificationPrefs>(() => getNotificationPrefs(getActiveUserId()));
 
   const popoverRef = useRef<HTMLDivElement>(null);
   const lastFetchedIdsRef = useRef<Set<string>>(new Set());
   const isInitialLoadRef = useRef(true);
+  const lastContextKeyRef = useRef<string>('');
 
   const getHeaders = () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -62,57 +85,174 @@ export function NotificationCenter() {
     };
   };
 
+  const emitNotificationEvent = useCallback(
+    (counts: { unreadCount: number; calendarUnreadCount?: number; chatUnreadCount?: number }) => {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('notifications-updated', { detail: counts }));
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
+    const uid = getActiveUserId();
+    setUserId(uid);
+    setPrefs(getNotificationPrefs(uid));
     const perm = getNotificationPermission();
     setPermission(perm);
-    const dismissed = localStorage.getItem('orvexa_chrome_notif_dismissed');
+    const dismissed = localStorage.getItem(`orvexa_chrome_notif_dismissed_${uid}`);
     if (perm === 'default' && !dismissed) {
       setShowPermissionBanner(true);
     }
+
+    const onPrefsUpdated = (e: any) => {
+      const nextUid = getActiveUserId();
+      if (!e?.detail?.userId || e.detail.userId === nextUid) {
+        setPrefs(getNotificationPrefs(nextUid));
+      }
+    };
+    window.addEventListener('notification-prefs-updated', onPrefsUpdated as EventListener);
+    return () => {
+      window.removeEventListener('notification-prefs-updated', onPrefsUpdated as EventListener);
+    };
   }, []);
 
-  const fetchNotifications = async (quiet = true) => {
+  // Load server preferences for the active user + workspace
+  const fetchServerPreferences = useCallback(async () => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+    if (!token || !wsId) return;
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/notifications/preferences`, {
+        headers: getHeaders(),
+      });
+      if (!res.ok) return;
+      const raw = await res.json();
+      const data = raw?.data !== undefined ? raw.data : raw;
+      if (data && typeof data === 'object') {
+        const uid = getActiveUserId();
+        const synced = saveNotificationPrefs(
+          {
+            desktopNotificationsEnabled:
+              data.browserPushNotifications !== undefined
+                ? Boolean(data.browserPushNotifications)
+                : getNotificationPrefs(uid).desktopNotificationsEnabled,
+            soundEnabled:
+              data.soundEnabled !== undefined ? Boolean(data.soundEnabled) : true,
+            soundType: data.soundType || 'chime',
+            soundVolume:
+              typeof data.soundVolume === 'number' ? data.soundVolume : 0.7,
+            taskSoundEnabled:
+              data.taskSoundEnabled !== undefined ? Boolean(data.taskSoundEnabled) : true,
+            chatSoundEnabled:
+              data.chatSoundEnabled !== undefined ? Boolean(data.chatSoundEnabled) : true,
+          },
+          uid,
+        );
+        setPrefs(synced);
+      }
+    } catch {}
+  }, []);
+
+  const updateUserPrefs = async (patch: Partial<NotificationPrefs>) => {
+    const uid = getActiveUserId();
+    const next = saveNotificationPrefs(patch, uid);
+    setPrefs(next);
+
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
     if (!token || !wsId) return;
 
-    if (!quiet) setLoading(true);
     try {
-      const res = await fetch(`${BRANDING.apiUrl}/notifications?limit=40`, {
+      await fetch(`${BRANDING.apiUrl}/notifications/preferences`, {
+        method: 'POST',
         headers: getHeaders(),
+        body: JSON.stringify({
+          browserPushNotifications: next.desktopNotificationsEnabled,
+          soundEnabled: next.soundEnabled,
+          soundType: next.soundType,
+          soundVolume: next.soundVolume,
+          taskSoundEnabled: next.taskSoundEnabled,
+          chatSoundEnabled: next.chatSoundEnabled,
+        }),
       });
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data && Array.isArray(data.notifications)) {
-        const newItems: NotificationItem[] = data.notifications;
-        setNotifications(newItems);
-        setUnreadCount(data.unreadCount || 0);
-
-        // Check for new incoming notifications to trigger Chrome notification
-        if (!isInitialLoadRef.current) {
-          for (const item of newItems) {
-            if (!item.isRead && !lastFetchedIdsRef.current.has(item.id)) {
-              showWorkNotification({
-                title: item.title,
-                message: item.message,
-                link: item.link,
-                onOpen: () => handleNotificationClick(item),
-              });
-            }
-          }
-        }
-
-        lastFetchedIdsRef.current = new Set(newItems.map((n) => n.id));
-        isInitialLoadRef.current = false;
-      }
-    } catch (err) {
-      // quiet poll failure
-    } finally {
-      if (!quiet) setLoading(false);
-    }
+    } catch {}
   };
 
+  const fetchNotifications = useCallback(
+    async (quiet = true) => {
+      const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+      const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
+      if (!token || !wsId) return;
+
+      const uid = getActiveUserId();
+      const contextKey = `${uid}:${wsId}`;
+      if (lastContextKeyRef.current !== contextKey) {
+        lastContextKeyRef.current = contextKey;
+        lastFetchedIdsRef.current = new Set();
+        isInitialLoadRef.current = true;
+        setUserId(uid);
+        setPrefs(getNotificationPrefs(uid));
+      }
+
+      if (!quiet) setLoading(true);
+      try {
+        const res = await fetch(`${BRANDING.apiUrl}/notifications?limit=40`, {
+          headers: getHeaders(),
+        });
+        if (!res.ok) return;
+        const raw = await res.json();
+        const data = raw?.data !== undefined ? raw.data : raw;
+
+        if (data && Array.isArray(data.notifications)) {
+          const newItems: NotificationItem[] = data.notifications;
+          const nextUnread = Number(data.unreadCount || 0);
+          const nextCalendarUnread = Number(data.calendarUnreadCount || 0);
+          const nextChatUnread = Number(data.chatUnreadCount || 0);
+
+          setNotifications(newItems);
+          setUnreadCount(nextUnread);
+          emitNotificationEvent({
+            unreadCount: nextUnread,
+            calendarUnreadCount: nextCalendarUnread,
+            chatUnreadCount: nextChatUnread,
+          });
+
+          // Trigger Chrome notification + sound ONLY for newly arrived unread items for THIS user
+          if (!isInitialLoadRef.current) {
+            for (const item of newItems) {
+              if (!item.isRead && !lastFetchedIdsRef.current.has(item.id)) {
+                const isChat =
+                  (item.type || '').toUpperCase().includes('CHAT') ||
+                  (item.link || '').startsWith('/app/communication');
+                if (!isChat) {
+                  showWorkNotification({
+                    title: item.title,
+                    message: item.message,
+                    type: (item.type as any) || 'TASK',
+                    link: item.link,
+                    userId: uid,
+                    onOpen: () => handleNotificationClick(item),
+                  });
+                }
+              }
+            }
+          }
+
+          lastFetchedIdsRef.current = new Set(newItems.map((n) => n.id));
+          isInitialLoadRef.current = false;
+        }
+      } catch {
+        // quiet poll failure
+      } finally {
+        if (!quiet) setLoading(false);
+      }
+    },
+    [emitNotificationEvent],
+  );
+
   useEffect(() => {
+    fetchServerPreferences();
     fetchNotifications(false);
 
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -126,13 +266,18 @@ export function NotificationCenter() {
     }, 15000);
 
     const handleFocus = () => fetchNotifications(true);
+    const handleRefreshTrigger = () => fetchNotifications(true);
     window.addEventListener('focus', handleFocus);
+    window.addEventListener('workspace-updated', handleRefreshTrigger);
+    window.addEventListener('notifications-refresh', handleRefreshTrigger);
 
     return () => {
       clearInterval(interval);
       window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('workspace-updated', handleRefreshTrigger);
+      window.removeEventListener('notifications-refresh', handleRefreshTrigger);
     };
-  }, [permission]);
+  }, [permission, pathname, fetchNotifications, fetchServerPreferences]);
 
   // Handle clicking outside of dropdown
   useEffect(() => {
@@ -167,8 +312,16 @@ export function NotificationCenter() {
 
   const handleDismissBanner = () => {
     setShowPermissionBanner(false);
-    localStorage.setItem('orvexa_chrome_notif_dismissed', 'true');
+    localStorage.setItem(`orvexa_chrome_notif_dismissed_${userId}`, 'true');
   };
+
+  const recomputeCalendarUnread = (items: NotificationItem[]) =>
+    items.filter(
+      (n) =>
+        !n.isRead &&
+        ((n.link && n.link.startsWith('/app/calendar')) ||
+          (n.type && (n.type.includes('CALENDAR') || n.type.includes('MEETING')))),
+    ).length;
 
   const handleMarkAsRead = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
@@ -177,11 +330,17 @@ export function NotificationCenter() {
         method: 'PATCH',
         headers: getHeaders(),
       });
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
-      );
-      setUnreadCount((prev) => Math.max(0, prev - 1));
-    } catch (err) {}
+      setNotifications((prev) => {
+        const nextList = prev.map((n) => (n.id === id ? { ...n, isRead: true } : n));
+        const nextUnread = nextList.filter((n) => !n.isRead).length;
+        emitNotificationEvent({
+          unreadCount: nextUnread,
+          calendarUnreadCount: recomputeCalendarUnread(nextList),
+        });
+        setUnreadCount(nextUnread);
+        return nextList;
+      });
+    } catch {}
   };
 
   const handleMarkAllRead = async () => {
@@ -192,8 +351,13 @@ export function NotificationCenter() {
       });
       setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
       setUnreadCount(0);
+      emitNotificationEvent({
+        unreadCount: 0,
+        calendarUnreadCount: 0,
+        chatUnreadCount: 0,
+      });
       toast.success('All notifications marked as read');
-    } catch (err) {
+    } catch {
       toast.error('Failed to mark all as read');
     }
   };
@@ -206,13 +370,16 @@ export function NotificationCenter() {
         headers: getHeaders(),
       });
       setNotifications((prev) => {
-        const item = prev.find((n) => n.id === id);
-        if (item && !item.isRead) {
-          setUnreadCount((c) => Math.max(0, c - 1));
-        }
-        return prev.filter((n) => n.id !== id);
+        const nextList = prev.filter((n) => n.id !== id);
+        const nextUnread = nextList.filter((n) => !n.isRead).length;
+        setUnreadCount(nextUnread);
+        emitNotificationEvent({
+          unreadCount: nextUnread,
+          calendarUnreadCount: recomputeCalendarUnread(nextList),
+        });
+        return nextList;
       });
-    } catch (err) {}
+    } catch {}
   };
 
   const handleNotificationClick = (item: NotificationItem) => {
@@ -311,8 +478,142 @@ export function NotificationCenter() {
                   Mark all read
                 </button>
               )}
+              <button
+                type="button"
+                onClick={() => updateUserPrefs({ soundEnabled: !prefs.soundEnabled })}
+                className="p-1 rounded-md text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-slate-800 cursor-pointer"
+                title={prefs.soundEnabled ? 'Mute notification sounds' : 'Unmute notification sounds'}
+              >
+                {prefs.soundEnabled ? <Volume2 className="h-3.5 w-3.5 text-blue-600" /> : <VolumeX className="h-3.5 w-3.5" />}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSoundSettings((s) => !s)}
+                className={`p-1 rounded-md cursor-pointer transition-colors ${
+                  showSoundSettings
+                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                    : 'text-slate-500 hover:text-slate-900 dark:hover:text-slate-100 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+                }`}
+                title="Notification & Sound Settings"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+              </button>
             </div>
           </div>
+
+          {/* Inline Per-User Sound & Alert Configuration Panel */}
+          {showSoundSettings && (
+            <div className="p-3 bg-slate-50 dark:bg-slate-950/60 border-b border-slate-200 dark:border-slate-800 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  Your Alert & Sound Preferences
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowSoundSettings(false)}
+                  className="text-[11px] text-slate-400 hover:text-slate-600"
+                >
+                  Done
+                </button>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-600 dark:text-slate-400">Chrome Desktop Popups</span>
+                <div className="flex items-center gap-2">
+                  {permission !== 'granted' && (
+                    <button
+                      type="button"
+                      onClick={handleRequestPermission}
+                      className="text-[10px] font-semibold text-blue-600 hover:underline"
+                    >
+                      Enable Chrome
+                    </button>
+                  )}
+                  <input
+                    type="checkbox"
+                    checked={prefs.desktopNotificationsEnabled}
+                    onChange={(e) => updateUserPrefs({ desktopNotificationsEnabled: e.target.checked })}
+                    className="h-3.5 w-3.5 accent-blue-600 rounded cursor-pointer"
+                  />
+                </div>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-slate-600 dark:text-slate-400">Notification Sound</span>
+                <input
+                  type="checkbox"
+                  checked={prefs.soundEnabled}
+                  onChange={(e) => updateUserPrefs({ soundEnabled: e.target.checked })}
+                  className="h-3.5 w-3.5 accent-blue-600 rounded cursor-pointer"
+                />
+              </div>
+              {prefs.soundEnabled && (
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[10px] text-slate-500 mb-0.5">Sound Tone</label>
+                      <select
+                        value={prefs.soundType}
+                        onChange={(e) => {
+                          const tone = e.target.value as NotificationSoundType;
+                          updateUserPrefs({ soundType: tone });
+                          testNotificationSound(tone, prefs.soundVolume);
+                        }}
+                        className="w-full rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 py-1 text-[11px]"
+                      >
+                        <option value="chime">Chime (Default)</option>
+                        <option value="bell">Crystal Bell</option>
+                        <option value="pop">Crisp Pop</option>
+                        <option value="subtle">Subtle Tone</option>
+                      </select>
+                    </div>
+                    <div>
+                      <div className="flex items-center justify-between text-[10px] text-slate-500 mb-0.5">
+                        <span>Volume</span>
+                        <span>{Math.round(prefs.soundVolume * 100)}%</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.1}
+                        value={prefs.soundVolume}
+                        onChange={(e) => updateUserPrefs({ soundVolume: parseFloat(e.target.value) })}
+                        className="w-full accent-blue-600 cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-0.5">
+                    <div className="flex items-center gap-3 text-[11px] text-slate-600 dark:text-slate-400">
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={prefs.taskSoundEnabled}
+                          onChange={(e) => updateUserPrefs({ taskSoundEnabled: e.target.checked })}
+                          className="h-3 w-3 accent-blue-600"
+                        />
+                        Tasks
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={prefs.chatSoundEnabled}
+                          onChange={(e) => updateUserPrefs({ chatSoundEnabled: e.target.checked })}
+                          className="h-3 w-3 accent-blue-600"
+                        />
+                        Chat
+                      </label>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => testNotificationSound(prefs.soundType, prefs.soundVolume)}
+                      className="px-2 py-0.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-semibold cursor-pointer"
+                    >
+                      Test Sound
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
 
           {/* Chrome Browser Notification Banner Prompt */}
           {showPermissionBanner && permission === 'default' && (

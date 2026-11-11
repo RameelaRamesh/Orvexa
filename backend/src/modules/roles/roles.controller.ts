@@ -16,7 +16,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
-import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { RequirePermissions, RequireAnyPermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 
 @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -61,9 +61,13 @@ export class RolesController {
   @RequirePermissions('roles:manage')
   async createRole(
     @CurrentWorkspace() workspaceId: string,
-    @Body() body: { name: string; description?: string; permissionIds?: string[] },
+    @Body() body: { name: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string; copyFromRoleId?: string },
   ) {
-    return this.rolesService.createRole(workspaceId, body.name, body.description, body.permissionIds);
+    return this.rolesService.createRole(workspaceId, body.name, body.description, body.permissionIds, {
+      dataScope: body.dataScope,
+      copyFromRoleId: body.copyFromRoleId,
+      permissionCodes: body.permissionCodes,
+    });
   }
 
   @Patch(':id/deactivate')
@@ -89,7 +93,7 @@ export class RolesController {
   async updateRole(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') roleId: string,
-    @Body() body: { name?: string; description?: string; permissionIds?: string[] },
+    @Body() body: { name?: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string },
   ) {
     return this.rolesService.updateRole(workspaceId, roleId, body);
   }
@@ -99,7 +103,7 @@ export class RolesController {
   async patchRole(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') roleId: string,
-    @Body() body: { name?: string; description?: string; permissionIds?: string[] },
+    @Body() body: { name?: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string },
   ) {
     return this.rolesService.updateRole(workspaceId, roleId, body);
   }
@@ -109,9 +113,18 @@ export class RolesController {
   async updateRolePermissions(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') roleId: string,
-    @Body() body: { permissionIds: string[] },
+    @Body() body: { permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string },
   ) {
-    return this.rolesService.updateRole(workspaceId, roleId, { permissionIds: body.permissionIds });
+    return this.rolesService.updateRole(workspaceId, roleId, body);
+  }
+
+  @Post(':id/reset')
+  @RequirePermissions('roles:manage')
+  async resetRoleToDefaults(
+    @CurrentWorkspace() workspaceId: string,
+    @Param('id') roleId: string,
+  ) {
+    return this.rolesService.resetRoleToDefaults(workspaceId, roleId);
   }
 
   @Delete(':id')
@@ -125,7 +138,7 @@ export class RolesController {
   }
 
   @Get(':id/members')
-  @RequirePermissions('roles:manage')
+  @RequireAnyPermissions('roles:manage', 'people:manage', 'people:view')
   async getRoleMembers(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') roleId: string,

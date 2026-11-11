@@ -210,6 +210,54 @@ export class CalendarService {
 
     const events: CalendarEventItem[] = [];
 
+    const workspaceMemberships = await this.prisma.membership.findMany({
+      where: { workspaceId },
+      include: {
+        user: { select: { firstName: true, lastName: true, email: true } },
+        team: { select: { id: true, name: true, departmentId: true } },
+        department: { select: { id: true, name: true } },
+      },
+    });
+    const memberById = new Map<string, any>();
+    for (const m of workspaceMemberships) {
+      memberById.set(m.id, m);
+    }
+
+    const myTeamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
+    const myDeptId =
+      filters.departmentId ||
+      userCtx.departmentId ||
+      userCtx.membership?.departmentId ||
+      userCtx.membership?.team?.departmentId;
+    const hasConfiguredTeamMembers = workspaceMemberships.some(
+      (m: any) =>
+        m.id !== membershipId &&
+        (m.reportsToId === membershipId || Boolean(myTeamId && m.teamId === myTeamId)),
+    );
+    const hasConfiguredDeptMembers = Boolean(
+      myDeptId &&
+        workspaceMemberships.some(
+          (m: any) =>
+            m.id !== membershipId &&
+            (m.departmentId === myDeptId || m.team?.departmentId === myDeptId),
+        ),
+    );
+    const ownDeptId = userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
+    const hasExplicitOtherDeptFilter = Boolean(filters.departmentId && filters.departmentId !== ownDeptId);
+
+    const teamMemberIds = new Set(
+      workspaceMemberships
+        .filter((m: any) => m.id === membershipId || m.reportsToId === membershipId || (myTeamId && m.teamId === myTeamId))
+        .map((m: any) => m.id),
+    );
+    const deptMemberIds = new Set(
+      myDeptId
+        ? workspaceMemberships
+            .filter((m: any) => m.id === membershipId || m.departmentId === myDeptId || m.team?.departmentId === myDeptId)
+            .map((m: any) => m.id)
+        : [membershipId],
+    );
+
     // --- A. MEETINGS & CUSTOM COMPANY EVENTS ---
     const ws = await this.prisma.workspace.findUnique({
       where: { id: workspaceId },
@@ -283,21 +331,42 @@ export class CalendarService {
       const canBrowseWorkspace =
         userCtx.canViewAll || userCtx.isOwnerOrAdmin || userCtx.isManager || userCtx.isLead;
 
+      const isOwnEvent =
+        evt.organizerMembershipId === membershipId ||
+        (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+      const isTeamEvent =
+        isOwnEvent ||
+        Boolean(myTeamId && evt.teamId === myTeamId) ||
+        teamMemberIds.has(evt.organizerMembershipId) ||
+        Boolean(evt.participants && evt.participants.some((p: any) => teamMemberIds.has(p.membershipId)));
+      const isDeptEvent =
+        isOwnEvent ||
+        Boolean(myDeptId && evt.departmentId === myDeptId) ||
+        deptMemberIds.has(evt.organizerMembershipId) ||
+        Boolean(evt.participants && evt.participants.some((p: any) => deptMemberIds.has(p.membershipId)));
+
       if (isCompanyWide) {
         isVisible = true; // Company wide events always visible in all scopes
       } else if (scope === 'MY_SCHEDULE') {
-        isVisible = evt.organizerMembershipId === membershipId ||
-          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        isVisible = isOwnEvent;
       } else if (scope === 'MY_TEAM') {
-        const teamId = filters.teamId || userCtx.teamId || userCtx.membership?.teamId;
-        isVisible = (teamId && evt.teamId === teamId) ||
-          evt.organizerMembershipId === membershipId ||
-          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        if (hasConfiguredTeamMembers) {
+          isVisible = isTeamEvent;
+        } else if (canBrowseWorkspace) {
+          isVisible = hasConfiguredDeptMembers ? isDeptEvent : true;
+        } else {
+          isVisible = isTeamEvent;
+        }
       } else if (scope === 'MY_DEPARTMENT') {
-        const deptId = filters.departmentId || userCtx.departmentId || userCtx.membership?.departmentId || userCtx.membership?.team?.departmentId;
-        isVisible = (deptId && evt.departmentId === deptId) ||
-          evt.organizerMembershipId === membershipId ||
-          (evt.participants && evt.participants.some((p: any) => p.membershipId === membershipId));
+        if (hasExplicitOtherDeptFilter) {
+          isVisible = isDeptEvent;
+        } else if (hasConfiguredDeptMembers) {
+          isVisible = isDeptEvent;
+        } else if (canBrowseWorkspace) {
+          isVisible = true;
+        } else {
+          isVisible = isDeptEvent;
+        }
       } else if (scope === 'SELECT_PEOPLE') {
         if (filters.memberIds && filters.memberIds.length > 0) {
           isVisible = filters.memberIds.includes(evt.organizerMembershipId) ||

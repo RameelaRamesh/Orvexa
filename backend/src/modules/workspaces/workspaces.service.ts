@@ -21,8 +21,18 @@ export class WorkspacesService {
       '-' +
       Math.floor(1000 + Math.random() * 9000);
 
-    // Initial default modules for Free tier
-    const defaultModules = ['people', 'projects', 'tasks', 'time'];
+    // Initial default modules for Free tier (payroll gated additionally by payroll permissions; assets toggleable)
+    const defaultModules = [
+      'people',
+      'projects',
+      'tasks',
+      'work_queue',
+      'time',
+      'attendance',
+      'leave',
+      'approvals',
+      'payroll',
+    ];
 
     const workspace = await this.prisma.workspace.create({
       data: {
@@ -49,7 +59,7 @@ export class WorkspacesService {
           entitlements: {
             maxUsers: 5,
             maxStorageMb: 1000,
-            features: defaultModules,
+            features: ['all'],
             description: 'Essential organization and core work tracking for small teams.',
             conditions: 'Up to 5 team members. 1 GB storage. Core work management.',
           },
@@ -232,7 +242,26 @@ export class WorkspacesService {
 
     if (!workspace) throw new NotFoundException('Workspace not found');
 
+    const teams =
+      (workspace as any).teams ||
+      (await (this.prisma as any).team?.findMany?.({
+        where: { workspaceId },
+        include: { department: { select: { id: true, name: true } } },
+      })?.catch(() => [])) ||
+      [];
+    const rawDesignations =
+      (workspace as any).designations ||
+      (await (this.prisma as any).designation?.findMany?.({
+        where: { workspaceId },
+      })?.catch(() => [])) ||
+      [];
+
     const settings: any = (workspace.settings as object) || {};
+    const designationConfigs: Record<string, any> = settings.designationConfigs || {};
+    const designations = rawDesignations.map((d: any) => ({
+      ...d,
+      ...(designationConfigs[d.id] || {}),
+    }));
     const onboarding: any = settings.onboarding || {};
 
     const mandatorySteps = ['profile', 'schedule'];
@@ -312,6 +341,8 @@ export class WorkspacesService {
         holidays: settings.holidays || [],
         locations: settings.locations || [],
         departments: workspace.departments,
+        teams,
+        designations,
         membersCount: workspace.memberships.length,
         pendingInvitesCount: workspace.invitations.length,
       },
@@ -377,21 +408,162 @@ export class WorkspacesService {
       updatedSettings.locations = Array.isArray(data?.locations) ? data.locations : (Array.isArray(data) ? data : []);
     } else if (step === 'departments') {
       const depts = Array.isArray(data?.departments) ? data.departments : (Array.isArray(data) ? data : []);
+      const deptNameToId = new Map<string, string>();
       for (const d of depts) {
         if (d?.name) {
+          const cleanDeptName = d.name.trim();
           const existing = await this.prisma.department.findFirst({
-            where: { workspaceId, name: d.name.trim() },
+            where: { workspaceId, name: cleanDeptName },
           });
           if (!existing) {
-            await this.prisma.department.create({
+            const createdDept = await this.prisma.department.create({
               data: {
                 workspaceId,
-                name: d.name.trim(),
+                name: cleanDeptName,
                 code: d.code ? d.code.trim().toUpperCase() : undefined,
               },
             });
+            if (createdDept?.id) {
+              deptNameToId.set(cleanDeptName.toLowerCase(), createdDept.id);
+            }
+          } else if (existing?.id) {
+            deptNameToId.set(cleanDeptName.toLowerCase(), existing.id);
           }
         }
+      }
+
+      // Create Teams linked to departments when supplied
+      const teamsInput = !Array.isArray(data) && Array.isArray(data?.teams) ? data.teams : [];
+      const teamModel = (this.prisma as any).team;
+      if (teamsInput.length > 0 && teamModel) {
+        for (const t of teamsInput) {
+          const teamName = (t?.name || '').trim();
+          if (!teamName) continue;
+          const resolvedDeptId =
+            t.departmentId ||
+            (t.departmentName ? deptNameToId.get(t.departmentName.trim().toLowerCase()) : undefined) ||
+            null;
+          const existingTeam = await teamModel
+            .findFirst({
+              where: {
+                workspaceId,
+                name: teamName,
+                ...(resolvedDeptId ? { departmentId: resolvedDeptId } : {}),
+              },
+            })
+            .catch(() => null);
+          if (!existingTeam) {
+            await teamModel
+              .create({
+                data: {
+                  workspaceId,
+                  name: teamName,
+                  departmentId: resolvedDeptId,
+                },
+              })
+              .catch(() => null);
+          }
+        }
+      }
+
+      // Create & configure Designations (with permissions & hierarchy role/scope) when supplied
+      const desigsInput = !Array.isArray(data) && Array.isArray(data?.designations) ? data.designations : [];
+      const desigModel = (this.prisma as any).designation;
+      if (desigsInput.length > 0 && desigModel) {
+        const nextDesigConfigs = { ...(updatedSettings.designationConfigs || {}) };
+        const nextRoleDataScopes = { ...(updatedSettings.roleDataScopes || {}) };
+        const roleModel = (this.prisma as any).role;
+        const permModel = (this.prisma as any).permission;
+        const rpModel = (this.prisma as any).rolePermission;
+
+        for (const dg of desigsInput) {
+          const title = (dg?.title || dg?.name || '').trim();
+          if (!title) continue;
+          const level = Number(dg.level) || 1;
+          let existingDesig = await desigModel
+            .findFirst({ where: { workspaceId, title } })
+            .catch(() => null);
+          if (!existingDesig) {
+            existingDesig = await desigModel
+              .create({
+                data: {
+                  workspaceId,
+                  title,
+                  level,
+                  description: dg.description || null,
+                },
+              })
+              .catch(() => null);
+          }
+
+          if (existingDesig?.id) {
+            const permCodes: string[] = Array.isArray(dg.permissionCodes) ? dg.permissionCodes : [];
+            let resolvedRoleId = dg.defaultRoleId || null;
+            const resolvedDeptId =
+              dg.departmentId ||
+              (dg.departmentName ? deptNameToId.get(dg.departmentName.trim().toLowerCase()) : undefined) ||
+              null;
+
+            if (permCodes.length > 0 && roleModel && permModel && rpModel) {
+              try {
+                const desiredRoleName = `${title} Role`;
+                let customRole = await roleModel
+                  .findFirst({ where: { workspaceId, name: desiredRoleName, isSystemRole: false } })
+                  .catch(() => null);
+                if (!customRole) {
+                  customRole = await roleModel
+                    .create({
+                      data: {
+                        workspaceId,
+                        name: desiredRoleName,
+                        description: `Configured permission profile for ${title} designation`,
+                        isSystemRole: false,
+                      },
+                    })
+                    .catch(() => null);
+                }
+                if (customRole?.id) {
+                  resolvedRoleId = customRole.id;
+                  const matchingPerms = await permModel.findMany({ where: { code: { in: permCodes } } }).catch(() => []);
+                  const permIds = (matchingPerms || []).map((p: any) => p.id).filter(Boolean);
+                  await rpModel.deleteMany({ where: { roleId: customRole.id } }).catch(() => null);
+                  if (permIds.length > 0) {
+                    await rpModel
+                      .createMany({
+                        data: permIds.map((permissionId: string) => ({ roleId: customRole.id, permissionId })),
+                        skipDuplicates: true,
+                      })
+                      .catch(() => null);
+                  }
+                  if (dg.defaultDataScope) {
+                    nextRoleDataScopes[customRole.id] = dg.defaultDataScope;
+                  }
+                }
+              } catch {
+                // Keep onboarding resilient
+              }
+            }
+
+            if (
+              permCodes.length > 0 ||
+              dg.defaultAccessRole ||
+              dg.defaultDataScope ||
+              resolvedDeptId ||
+              resolvedRoleId
+            ) {
+              nextDesigConfigs[existingDesig.id] = {
+                departmentId: resolvedDeptId,
+                defaultAccessRole: dg.defaultAccessRole || (level >= 3 ? 'MANAGER' : 'MEMBER'),
+                defaultDataScope: dg.defaultDataScope || (level >= 3 ? 'TEAM' : 'ASSIGNED'),
+                defaultRoleId: resolvedRoleId,
+                permissionCodes: permCodes,
+                autoSyncRole: true,
+              };
+            }
+          }
+        }
+        updatedSettings.designationConfigs = nextDesigConfigs;
+        updatedSettings.roleDataScopes = nextRoleDataScopes;
       }
     }
 

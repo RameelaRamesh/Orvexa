@@ -14,7 +14,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
-import { RequirePermissions } from '../../common/decorators/permissions.decorator';
+import { RequirePermissions, RequireAnyPermissions } from '../../common/decorators/permissions.decorator';
 
 @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('payroll')
@@ -22,6 +22,7 @@ export class PayrollController {
   constructor(private readonly payrollService: PayrollService) {}
 
   @Get('config')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async getConfig(@CurrentWorkspace() workspaceId: string) {
     return this.payrollService.getConfig(workspaceId);
   }
@@ -36,7 +37,7 @@ export class PayrollController {
   }
 
   @Get('salary/:membershipId')
-  @RequirePermissions('payroll:view')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async getMemberSalary(
     @CurrentWorkspace() workspaceId: string,
     @Param('membershipId') membershipId: string,
@@ -55,6 +56,7 @@ export class PayrollController {
   }
 
   @Get('periods')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async listPeriods(@CurrentWorkspace() workspaceId: string) {
     return this.payrollService.listPeriods(workspaceId);
   }
@@ -69,6 +71,7 @@ export class PayrollController {
   }
 
   @Get('periods/:id')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async getPeriodById(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') id: string,
@@ -86,7 +89,7 @@ export class PayrollController {
   }
 
   @Post('periods/:id/approve')
-  @RequirePermissions('payroll:manage')
+  @RequirePermissions('payroll:approve')
   async approvePeriod(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -96,6 +99,7 @@ export class PayrollController {
   }
 
   @Get('periods/:periodId/payslips/:payslipId')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async getPayslip(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,
@@ -106,6 +110,7 @@ export class PayrollController {
   }
 
   @Get('reports')
+  @RequireAnyPermissions('payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'payroll:manage')
   async getHistoricalReports(
     @CurrentWorkspace() workspaceId: string,
     @Request() req: any,

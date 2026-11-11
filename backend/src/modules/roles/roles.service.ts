@@ -5,9 +5,34 @@ import { PrismaService } from '../../database/prisma.service';
 export class RolesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  private getDefaultDataScopeForRole(roleName?: string): string {
+    const upper = (roleName || '').toUpperCase();
+    if (upper === 'OWNER' || upper === 'ADMIN') return 'GLOBAL';
+    if (upper === 'MANAGER' || upper.includes('LEAD') || upper.includes('HEAD') || upper.includes('DIRECTOR')) return 'TEAM';
+    return 'ASSIGNED';
+  }
+
+  private async resolvePermissionIds(permissionIds?: string[], permissionCodes?: string[]): Promise<string[] | undefined> {
+    if (permissionIds !== undefined) return permissionIds;
+    if (permissionCodes !== undefined) {
+      await this.ensureSystemPermissions();
+      const allPerms = await this.prisma.permission.findMany({
+        where: { code: { in: permissionCodes } },
+      });
+      return allPerms.map((p: any) => p.id);
+    }
+    return undefined;
+  }
+
   async listWorkspaceRoles(workspaceId: string) {
     await this.ensureSystemPermissions();
     await this.ensureSystemRoles();
+
+    const ws = await this.prisma.workspace?.findUnique?.({
+      where: { id: workspaceId },
+      select: { settings: true },
+    })?.catch(() => null);
+    const roleDataScopes: Record<string, string> = ((ws?.settings as any)?.roleDataScopes) || {};
 
     const roles = await this.prisma.role.findMany({
       where: {
@@ -22,16 +47,34 @@ export class RolesService {
       orderBy: [{ isSystemRole: 'desc' }, { name: 'asc' }],
     });
 
+    // Count memberships scoped strictly to this workspace when available
+    const wsMembers = await this.prisma.membership?.findMany?.({
+      where: { workspaceId, status: { in: ['ACTIVE', 'SUSPENDED', 'INVITED'] } },
+      select: { id: true, roleId: true },
+    })?.catch(() => null);
+    const wsMemberCounts = new Map<string, number>();
+    if (Array.isArray(wsMembers)) {
+      for (const m of wsMembers) {
+        if (m.roleId) wsMemberCounts.set(m.roleId, (wsMemberCounts.get(m.roleId) || 0) + 1);
+      }
+    }
+
     return roles.map((r) => {
       const isDeactivated = Boolean(r.description && r.description.startsWith('[DEACTIVATED]'));
       const cleanDesc = isDeactivated
         ? r.description?.replace('[DEACTIVATED]', '').trim()
         : r.description;
+      const wsCount = Array.isArray(wsMembers) ? (wsMemberCounts.get(r.id) ?? 0) : (r._count?.memberships ?? 0);
 
       return {
         ...r,
         description: cleanDesc,
         isActive: !isDeactivated,
+        dataScope: roleDataScopes[r.id] || this.getDefaultDataScopeForRole(r.name),
+        _count: {
+          ...(r._count || {}),
+          memberships: wsCount,
+        },
       };
     });
   }
@@ -43,7 +86,13 @@ export class RolesService {
     });
   }
 
-  async createRole(workspaceId: string, name: string, description?: string, permissionIds?: string[]) {
+  async createRole(
+    workspaceId: string,
+    name: string,
+    description?: string,
+    permissionIds?: string[],
+    options?: { dataScope?: string; copyFromRoleId?: string; permissionCodes?: string[] },
+  ) {
     const cleanName = name.trim();
     if (!cleanName) {
       throw new BadRequestException('Role name is required');
@@ -60,6 +109,24 @@ export class RolesService {
       throw new BadRequestException(`Role with name "${cleanName}" already exists in this workspace`);
     }
 
+    let resolvedPermIds = await this.resolvePermissionIds(permissionIds, options?.permissionCodes);
+    let inheritedScope: string | undefined;
+
+    if ((!resolvedPermIds || resolvedPermIds.length === 0) && options?.copyFromRoleId) {
+      const sourceRole = await this.prisma.role.findFirst({
+        where: { id: options.copyFromRoleId, OR: [{ workspaceId }, { isSystemRole: true }] },
+        include: { permissions: true },
+      });
+      if (sourceRole) {
+        resolvedPermIds = (sourceRole.permissions || []).map((rp: any) => rp.permissionId).filter(Boolean);
+        const ws = await this.prisma.workspace?.findUnique?.({
+          where: { id: workspaceId },
+          select: { settings: true },
+        })?.catch(() => null);
+        inheritedScope = ((ws?.settings as any)?.roleDataScopes || {})[sourceRole.id] || this.getDefaultDataScopeForRole(sourceRole.name);
+      }
+    }
+
     const role = await this.prisma.role.create({
       data: {
         workspaceId,
@@ -69,13 +136,36 @@ export class RolesService {
       },
     });
 
-    if (permissionIds && permissionIds.length > 0) {
+    if (resolvedPermIds && resolvedPermIds.length > 0) {
       await this.prisma.rolePermission.createMany({
-        data: permissionIds.map((permissionId) => ({
+        data: resolvedPermIds.map((permissionId) => ({
           roleId: role.id,
           permissionId,
         })),
       });
+    }
+
+    const finalScope = options?.dataScope || inheritedScope || this.getDefaultDataScopeForRole(cleanName);
+    if (options?.dataScope || inheritedScope) {
+      const ws = await this.prisma.workspace?.findUnique?.({
+        where: { id: workspaceId },
+        select: { settings: true },
+      })?.catch(() => null);
+      if (ws && this.prisma.workspace?.update) {
+        const settings = (ws.settings as any) || {};
+        await this.prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            settings: {
+              ...settings,
+              roleDataScopes: {
+                ...(settings.roleDataScopes || {}),
+                [role.id]: finalScope,
+              },
+            },
+          },
+        }).catch(() => null);
+      }
     }
 
     const createdRole = await this.prisma.role.findUnique({
@@ -86,13 +176,14 @@ export class RolesService {
     return {
       ...createdRole,
       isActive: true,
+      dataScope: finalScope,
     };
   }
 
   async updateRole(
     workspaceId: string,
     roleId: string,
-    data: { name?: string; description?: string; permissionIds?: string[] },
+    data: { name?: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string },
   ) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, OR: [{ workspaceId }, { isSystemRole: true }] },
@@ -129,15 +220,44 @@ export class RolesService {
       });
     }
 
-    if (data.permissionIds !== undefined) {
+    const resolvedPermIds = await this.resolvePermissionIds(data.permissionIds, data.permissionCodes);
+    if (resolvedPermIds !== undefined) {
       await this.prisma.rolePermission.deleteMany({ where: { roleId } });
-      if (data.permissionIds.length > 0) {
+      if (resolvedPermIds.length > 0) {
         await this.prisma.rolePermission.createMany({
-          data: data.permissionIds.map((permissionId) => ({
+          data: resolvedPermIds.map((permissionId) => ({
             roleId,
             permissionId,
           })),
         });
+      }
+    }
+
+    if (data.dataScope !== undefined) {
+      const ws = await this.prisma.workspace?.findUnique?.({
+        where: { id: workspaceId },
+        select: { settings: true },
+      })?.catch(() => null);
+      if (ws && this.prisma.workspace?.update) {
+        const settings = (ws.settings as any) || {};
+        await this.prisma.workspace.update({
+          where: { id: workspaceId },
+          data: {
+            settings: {
+              ...settings,
+              roleDataScopes: {
+                ...(settings.roleDataScopes || {}),
+                [roleId]: data.dataScope,
+              },
+            },
+          },
+        }).catch(() => null);
+      }
+      if (this.prisma.membership?.updateMany && role.name !== 'OWNER') {
+        await this.prisma.membership.updateMany({
+          where: { workspaceId, roleId },
+          data: { dataScope: data.dataScope },
+        }).catch(() => null);
       }
     }
 
@@ -153,7 +273,60 @@ export class RolesService {
       ...updated,
       description: cleanDesc,
       isActive: !isDeactivated,
+      dataScope: data.dataScope || this.getDefaultDataScopeForRole(updated?.name),
     };
+  }
+
+  async resetRoleToDefaults(workspaceId: string, roleId: string) {
+    await this.ensureSystemPermissions();
+    const role = await this.prisma.role.findFirst({
+      where: { id: roleId, OR: [{ workspaceId }, { isSystemRole: true }] },
+    });
+    if (!role) throw new NotFoundException('Role not found');
+
+    const allPermissions = await this.prisma.permission.findMany();
+    const permMap = new Map(allPermissions.map((p) => [p.code, p.id]));
+    const upper = (role.name || '').toUpperCase();
+
+    let defaultCodes: string[] = [];
+    let defaultScope = this.getDefaultDataScopeForRole(role.name);
+
+    if (upper === 'OWNER') {
+      defaultCodes = allPermissions.map((p) => p.code);
+    } else if (upper === 'ADMIN') {
+      defaultCodes = allPermissions.map((p) => p.code).filter((c) => c !== 'billing:manage');
+    } else if (upper === 'MANAGER') {
+      defaultCodes = [
+        'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:export',
+        'work_items:view', 'work_items:process', 'work_items:assign', 'work_items:export',
+        'projects:view', 'projects:create', 'projects:edit',
+        'time:view', 'time:log', 'time:edit', 'time:approve', 'time:export',
+        'attendance:view', 'attendance:clock', 'attendance:edit', 'attendance:export',
+        'leave:view', 'leave:apply', 'leave:approve',
+        'approvals:view', 'approvals:approve',
+        'quality:view', 'quality:audit', 'quality:review',
+        'sla:view', 'reports:view', 'people:view',
+        'assets:view', 'assets:create', 'assets:edit', 'assets:assign',
+        'inventory:view', 'inventory:move',
+        'ledger:view', 'ledger:export',
+        'documents:view', 'documents:upload', 'documents:download',
+        'calendar:view:department', 'calendar:view:team', 'calendar:create',
+      ];
+    } else {
+      defaultCodes = [
+        'tasks:view', 'tasks:create', 'tasks:edit',
+        'projects:view',
+        'work_items:view', 'work_items:process',
+        'time:view', 'time:log',
+        'attendance:view', 'attendance:clock',
+        'leave:view', 'leave:apply',
+        'approvals:view',
+        'people:view',
+      ];
+    }
+
+    const permIds = defaultCodes.map((c) => permMap.get(c)).filter((id): id is string => Boolean(id));
+    return this.updateRole(workspaceId, roleId, { permissionIds: permIds, dataScope: defaultScope });
   }
 
   async deactivateRole(workspaceId: string, roleId: string) {
@@ -319,16 +492,10 @@ export class RolesService {
       effectivePermissions.forEach((code) => {
         permissionSources[code] = 'PLATFORM_OWNER_AUTHORITY (Unrestricted platform authority)';
       });
-    } else if (membership.accessRole === 'ADMIN') {
-      const allPerms = await this.prisma.permission.findMany({ select: { code: true } });
-      effectivePermissions = allPerms.map((p) => p.code);
-      effectivePermissions.forEach((code) => {
-        permissionSources[code] = 'PLATFORM_ADMIN_AUTHORITY (Full operational administration)';
-      });
     } else if (isRoleActive) {
       effectivePermissions = [...assignedPermissions];
       assignedPermissions.forEach((code) => {
-        permissionSources[code] = `ACTIVE_ROLE_ASSIGNMENT (Granted via role: ${membership.role?.name})`;
+        permissionSources[code] = `ACTIVE_ROLE_ASSIGNMENT (Granted via role: ${membership.role?.name || membership.accessRole})`;
       });
     } else {
       effectivePermissions = [];
@@ -355,26 +522,23 @@ export class RolesService {
       if (membership.accessRole === 'OWNER') {
         isAllowed = true;
         reason = 'Allowed: Organization Owner holds absolute platform authority';
-      } else if (membership.accessRole === 'ADMIN') {
-        isAllowed = true;
-        reason = 'Allowed: Workspace Administrator holds operational authority';
       } else if (!isRoleActive) {
         isAllowed = false;
         reason = `Denied: Assigned role "${membership.role?.name}" is currently deactivated. All permissions suspended.`;
       } else {
-        const [mod, action] = required.split(':');
+        const [mod] = required.split(':');
         const hasDirect = assignedPermissions.includes(required);
         const hasManage = assignedPermissions.includes(`${mod}:manage`) || assignedPermissions.includes(`${mod}:administer`);
 
         if (hasDirect) {
           isAllowed = true;
-          reason = `Allowed: Granted by assigned role "${membership.role?.name}"`;
+          reason = `Allowed: Granted by assigned role "${membership.role?.name || membership.accessRole}"`;
         } else if (hasManage) {
           isAllowed = true;
           reason = `Allowed: Granted via module administrator permission "${mod}:manage"`;
         } else {
           isAllowed = false;
-          reason = `Denied: Role "${membership.role?.name}" does not grant this permission "${required}"`;
+          reason = `Denied: Role "${membership.role?.name || membership.accessRole}" does not grant this permission "${required}"`;
         }
       }
 

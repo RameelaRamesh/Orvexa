@@ -85,7 +85,17 @@ export class AuthService {
         '-' +
         Math.floor(1000 + Math.random() * 9000);
 
-      const defaultModules = ['people', 'projects', 'tasks', 'time'];
+      const defaultModules = [
+        'people',
+        'projects',
+        'tasks',
+        'work_queue',
+        'time',
+        'attendance',
+        'leave',
+        'approvals',
+        'payroll',
+      ];
 
       workspace = await this.prisma.workspace.create({
         data: {

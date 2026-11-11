@@ -57,16 +57,100 @@ export default function OnboardingJourneyPage() {
   const [newLocCountry, setNewLocCountry] = useState('India');
   const [newLocIsPrimary, setNewLocIsPrimary] = useState(false);
 
-  // Step 5: Departments
-  const [departments, setDepartments] = useState<Array<{ name: string; code: string }>>([]);
+  // Step 5: Departments, Teams & Configurable Designations
+  const [departments, setDepartments] = useState<Array<{ id?: string; name: string; code: string }>>([]);
   const [newDeptName, setNewDeptName] = useState('');
   const [newDeptCode, setNewDeptCode] = useState('');
 
-  // Step 6: Team Invites
+  const [teams, setTeams] = useState<Array<{ id?: string; name: string; departmentId?: string; departmentName?: string }>>([]);
+  const [newTeamName, setNewTeamName] = useState('');
+  const [newTeamDeptName, setNewTeamDeptName] = useState('');
+
+  const [designations, setDesignations] = useState<
+    Array<{
+      id?: string;
+      title: string;
+      level: number;
+      departmentName?: string;
+      departmentId?: string;
+      defaultAccessRole: 'MEMBER' | 'MANAGER' | 'ADMIN';
+      defaultDataScope: 'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL';
+      permissionCodes: string[];
+    }>
+  >([]);
+  const [newDesigTitle, setNewDesigTitle] = useState('');
+  const [newDesigLevel, setNewDesigLevel] = useState(2);
+  const [newDesigDeptName, setNewDesigDeptName] = useState('');
+  const [newDesigRole, setNewDesigRole] = useState<'MEMBER' | 'MANAGER' | 'ADMIN'>('MEMBER');
+  const [newDesigScope, setNewDesigScope] = useState<'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL'>('TEAM');
+  const [newDesigPerms, setNewDesigPerms] = useState<string[]>([
+    'projects:view',
+    'tasks:view',
+    'tasks:create',
+    'tasks:edit',
+    'people:view',
+  ]);
+
+  const ONBOARDING_PERM_OPTIONS = [
+    'people:view',
+    'people:create',
+    'people:edit',
+    'invitations:manage',
+    'departments:manage',
+    'payroll:view',
+    'payroll:edit',
+    'payroll:export',
+    'projects:view',
+    'projects:create',
+    'projects:edit',
+    'tasks:view',
+    'tasks:create',
+    'tasks:assign',
+    'attendance:view',
+    'attendance:edit',
+    'leave:view',
+    'leave:approve',
+    'leave:manage',
+    'approvals:view',
+    'approvals:approve',
+    'assets:view',
+    'assets:create',
+    'calendar:view:all',
+    'calendar:create',
+    'reports:view',
+  ];
+
+  // Step 6: Team Invites (Single + Bulk with Full Dept/Team/Designation/Permission Config)
+  const [inviteMode, setInviteMode] = useState<'single' | 'bulk'>('single');
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteFirstName, setInviteFirstName] = useState('');
   const [inviteLastName, setInviteLastName] = useState('');
   const [inviteRole, setInviteRole] = useState('MEMBER');
+  const [inviteDeptId, setInviteDeptId] = useState('');
+  const [inviteTeamId, setInviteTeamId] = useState('');
+  const [inviteDesigId, setInviteDesigId] = useState('');
+  const [inviteDesigTitle, setInviteDesigTitle] = useState('');
+  const [inviteDataScope, setInviteDataScope] = useState('ASSIGNED');
+  const [invitePerms, setInvitePerms] = useState<string[]>([]);
+  const [showInvitePermEditor, setShowInvitePermEditor] = useState(false);
+
+  const [bulkRows, setBulkRows] = useState<
+    Array<{
+      email: string;
+      firstName: string;
+      lastName: string;
+      departmentId?: string;
+      teamId?: string;
+      designationId?: string;
+      designationTitle?: string;
+      accessRole?: string;
+      dataScope?: string;
+    }>
+  >([{ email: '', firstName: '', lastName: '' }]);
+  const [bulkPasteText, setBulkPasteText] = useState('');
+  const [sendingBulk, setSendingBulk] = useState(false);
+  const [bulkResults, setBulkResults] = useState<any[] | null>(null);
+
   const [sentInvites, setSentInvites] = useState<string[]>([]);
   const [sendingInvite, setSendingInvite] = useState(false);
 
@@ -218,6 +302,33 @@ export default function OnboardingJourneyPage() {
       }
       setDepartments(deptData);
 
+      // Hydrate Teams & Designations from setupData / API
+      if (Array.isArray(setup.teams)) {
+        setTeams(
+          setup.teams.map((t: any) => ({
+            id: t.id,
+            name: t.name,
+            departmentId: t.departmentId || t.department?.id || '',
+            departmentName: t.department?.name || t.departmentName || '',
+          })),
+        );
+      }
+      if (Array.isArray(setup.designations)) {
+        setDesignations(
+          setup.designations.map((dg: any) => ({
+            id: dg.id,
+            title: dg.title,
+            level: dg.level || 1,
+            departmentId: dg.departmentId || '',
+            departmentName:
+              deptData.find((dp: any) => dp.id === dg.departmentId)?.name || dg.departmentName || '',
+            defaultAccessRole: dg.defaultAccessRole || 'MEMBER',
+            defaultDataScope: dg.defaultDataScope || 'ASSIGNED',
+            permissionCodes: Array.isArray(dg.permissionCodes) ? dg.permissionCodes : [],
+          })),
+        );
+      }
+
       // Intelligently position the active step based on actual step completion
       const completedSteps: string[] = payload.completedSteps || (profileData.name || regOrgName ? ['profile'] : []);
       if (!completedSteps.includes('profile') && !regOrgName) {
@@ -300,12 +411,43 @@ export default function OnboardingJourneyPage() {
         await saveStepData('locations', { locations });
         setActiveStep('departments');
       } else if (activeStep === 'departments') {
-        await saveStepData('departments', { departments });
+        const updatedStatus = await saveStepData('departments', {
+          departments,
+          teams,
+          designations,
+        });
+        const setup = updatedStatus?.setupData || {};
+        if (Array.isArray(setup.departments)) setDepartments(setup.departments);
+        if (Array.isArray(setup.teams)) {
+          setTeams(
+            setup.teams.map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              departmentId: t.departmentId || t.department?.id || '',
+              departmentName: t.department?.name || t.departmentName || '',
+            })),
+          );
+        }
+        if (Array.isArray(setup.designations)) {
+          setDesignations(
+            setup.designations.map((dg: any) => ({
+              id: dg.id,
+              title: dg.title,
+              level: dg.level || 1,
+              departmentId: dg.departmentId || '',
+              departmentName:
+                setup.departments?.find((dp: any) => dp.id === dg.departmentId)?.name || '',
+              defaultAccessRole: dg.defaultAccessRole || 'MEMBER',
+              defaultDataScope: dg.defaultDataScope || 'ASSIGNED',
+              permissionCodes: Array.isArray(dg.permissionCodes) ? dg.permissionCodes : [],
+            })),
+          );
+        }
         setActiveStep('team_invite');
       } else if (activeStep === 'team_invite') {
         await saveStepData('team_invite', { completed: true });
         toast.success('Onboarding complete! Welcome to ORVEXA.');
-        router.push('/app/home');
+        router.push('/app/people');
       }
     } catch {
       // toast handled in saveStepData
@@ -328,6 +470,75 @@ export default function OnboardingJourneyPage() {
     }
   };
 
+  const refreshLiveOrgOptions = async () => {
+    try {
+      const hdrs = getHeaders();
+      const [dRes, tRes, dgRes] = await Promise.all([
+        fetch(`${BRANDING.apiUrl}/departments`, { headers: hdrs }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers: hdrs }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/designations`, { headers: hdrs }).catch(() => null),
+      ]);
+      if (dRes?.ok) {
+        const raw = await dRes.json();
+        const list = raw?.data !== undefined ? raw.data : raw;
+        if (Array.isArray(list) && list.length > 0) setDepartments(list);
+      }
+      if (tRes?.ok) {
+        const raw = await tRes.json();
+        const list = raw?.data !== undefined ? raw.data : raw;
+        if (Array.isArray(list)) {
+          setTeams(
+            list.map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              departmentId: t.departmentId || t.department?.id || '',
+              departmentName: t.department?.name || '',
+            })),
+          );
+        }
+      }
+      if (dgRes?.ok) {
+        const raw = await dgRes.json();
+        const list = raw?.data !== undefined ? raw.data : raw;
+        if (Array.isArray(list) && list.length > 0) {
+          setDesignations(
+            list.map((dg: any) => ({
+              id: dg.id,
+              title: dg.title,
+              level: dg.level || 1,
+              departmentId: dg.departmentId || '',
+              defaultAccessRole: dg.defaultAccessRole || 'MEMBER',
+              defaultDataScope: dg.defaultDataScope || 'ASSIGNED',
+              permissionCodes: Array.isArray(dg.permissionCodes) ? dg.permissionCodes : [],
+            })),
+          );
+        }
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (activeStep === 'team_invite') {
+      refreshLiveOrgOptions();
+    }
+  }, [activeStep]);
+
+  const handleSelectInviteDesignation = (desigId: string) => {
+    setInviteDesigId(desigId);
+    const matched = designations.find((d) => d.id === desigId || d.title === desigId);
+    if (matched) {
+      setInviteDesigTitle(matched.title);
+      if (matched.defaultAccessRole) setInviteRole(matched.defaultAccessRole);
+      if (matched.defaultDataScope) setInviteDataScope(matched.defaultDataScope);
+      if (matched.departmentId) setInviteDeptId(matched.departmentId);
+      if (Array.isArray(matched.permissionCodes) && matched.permissionCodes.length > 0) {
+        setInvitePerms(matched.permissionCodes);
+      }
+    } else {
+      setInviteDesigTitle('');
+    }
+  };
+
   const handleSendInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
@@ -341,6 +552,12 @@ export default function OnboardingJourneyPage() {
           firstName: inviteFirstName.trim() || 'Team',
           lastName: inviteLastName.trim() || 'Member',
           accessRole: inviteRole,
+          departmentId: inviteDeptId || undefined,
+          teamId: inviteTeamId || undefined,
+          designationId: designations.find((d) => d.id === inviteDesigId)?.id || undefined,
+          designationTitle: inviteDesigTitle || undefined,
+          dataScope: inviteDataScope || undefined,
+          ...(invitePerms.length > 0 ? { permissionCodes: invitePerms } : {}),
         }),
       });
       const data = await res.json();
@@ -355,6 +572,80 @@ export default function OnboardingJourneyPage() {
       toast.error(err.message || 'Failed to send invite');
     } finally {
       setSendingInvite(false);
+    }
+  };
+
+  const handleParseBulkPaste = () => {
+    if (!bulkPasteText.trim()) return;
+    const lines = bulkPasteText
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    const parsed = lines.map((line) => {
+      const parts = line.split(/[,\t;]+/).map((p) => p.trim());
+      const email = parts[0] || '';
+      const firstName = parts[1] || email.split('@')[0] || 'Team';
+      const lastName = parts[2] || '';
+      return { email, firstName, lastName };
+    }).filter((r) => r.email.includes('@'));
+
+    if (parsed.length === 0) {
+      toast.error('No valid email rows found. Format: email@company.com, FirstName, LastName');
+      return;
+    }
+    setBulkRows((prev) => {
+      const existingNonEmpty = prev.filter((r) => r.email.trim().length > 0);
+      return [...existingNonEmpty, ...parsed];
+    });
+    setBulkPasteText('');
+    toast.success(`Added ${parsed.length} row(s) to bulk invite queue`);
+  };
+
+  const handleSendBulkInvites = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const validRows = bulkRows.filter((r) => r.email.trim().includes('@'));
+    if (validRows.length === 0) {
+      toast.error('Add at least one valid email address.');
+      return;
+    }
+    setSendingBulk(true);
+    setBulkResults(null);
+    try {
+      const invitations = validRows.map((row) => {
+        const rowDesig = designations.find((d) => d.id === (row.designationId || inviteDesigId));
+        return {
+          email: row.email.trim(),
+          firstName: (row.firstName || row.email.split('@')[0] || 'Team').trim(),
+          lastName: (row.lastName || '').trim(),
+          accessRole: row.accessRole || rowDesig?.defaultAccessRole || inviteRole,
+          departmentId: row.departmentId || inviteDeptId || rowDesig?.departmentId || undefined,
+          teamId: row.teamId || inviteTeamId || undefined,
+          designationId: rowDesig?.id || undefined,
+          designationTitle: row.designationTitle || rowDesig?.title || inviteDesigTitle || undefined,
+          dataScope: row.dataScope || rowDesig?.defaultDataScope || inviteDataScope || undefined,
+          ...(invitePerms.length > 0 ? { permissionCodes: invitePerms } : {}),
+        };
+      });
+
+      const res = await fetch(`${BRANDING.apiUrl}/people/invite/bulk`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({ invitations }),
+      });
+      const raw = await res.json();
+      if (!res.ok) throw new Error(raw?.message || 'Bulk invitation failed');
+      const payload = raw?.data !== undefined ? raw.data : raw;
+      const results = payload?.results || [];
+      setBulkResults(results);
+      const sentEmails = results.filter((r: any) => r.status === 'SENT').map((r: any) => r.email);
+      if (sentEmails.length > 0) {
+        setSentInvites((prev) => Array.from(new Set([...prev, ...sentEmails])));
+      }
+      toast.success(payload?.message || `Dispatched ${sentEmails.length} invitation(s)`);
+    } catch (err: any) {
+      toast.error(err?.message || 'Bulk invitation failed');
+    } finally {
+      setSendingBulk(false);
     }
   };
 
@@ -796,133 +1087,631 @@ export default function OnboardingJourneyPage() {
               </div>
             )}
 
-            {/* STEP 5: Departments */}
+            {/* STEP 5: Departments, Teams & Configurable Designations */}
             {activeStep === 'departments' && (
-              <div className="space-y-4 max-w-xl">
-                <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                  <input
-                    type="text"
-                    placeholder="Department Name (e.g. Engineering)"
-                    value={newDeptName}
-                    onChange={(e) => setNewDeptName(e.target.value)}
-                    className="sm:col-span-6 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
-                  <input
-                    type="text"
-                    placeholder="Short Code (e.g. ENG)"
-                    value={newDeptCode}
-                    onChange={(e) => setNewDeptCode(e.target.value)}
-                    className="sm:col-span-3 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="sm:col-span-3 text-xs h-8 font-semibold"
-                    onClick={() => {
-                      if (!newDeptName.trim()) return;
-                      setDepartments([...departments, { name: newDeptName.trim(), code: newDeptCode.trim() }]);
-                      setNewDeptName('');
-                      setNewDeptCode('');
-                    }}
-                  >
-                    + Add Department
-                  </Button>
-                </div>
+              <div className="space-y-6">
+                {/* 5A. Departments */}
+                <div className="space-y-3 p-4 rounded-xl border border-border bg-card">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                      1. Departments ({departments.length})
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground">
+                      Created departments appear in Team and Invitation dropdowns.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Department Name (e.g. Human Resources)"
+                      value={newDeptName}
+                      onChange={(e) => setNewDeptName(e.target.value)}
+                      className="sm:col-span-6 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      placeholder="Code (e.g. HR)"
+                      value={newDeptCode}
+                      onChange={(e) => setNewDeptCode(e.target.value)}
+                      className="sm:col-span-3 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="sm:col-span-3 text-xs h-8 font-semibold"
+                      onClick={() => {
+                        if (!newDeptName.trim()) return;
+                        setDepartments([...departments, { name: newDeptName.trim(), code: newDeptCode.trim().toUpperCase() }]);
+                        setNewDeptName('');
+                        setNewDeptCode('');
+                      }}
+                    >
+                      + Add Department
+                    </Button>
+                  </div>
 
-                <div className="space-y-1.5 max-h-48 overflow-y-auto border border-border rounded-md p-2 bg-muted/20">
-                  {departments.length === 0 ? (
-                    <p className="text-xs text-muted-foreground text-center py-4">No departments created yet. Add initial units or continue.</p>
-                  ) : (
-                    departments.map((d, i) => (
-                      <div key={i} className="flex items-center justify-between p-2 rounded bg-card border border-border text-xs">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-foreground">{d.name}</span>
-                          {d.code && <span className="text-[10px] text-muted-foreground font-mono">({d.code})</span>}
-                        </div>
+                  <div className="flex flex-wrap gap-2">
+                    {departments.map((d, i) => (
+                      <div key={i} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-muted/40 border border-border text-xs">
+                        <span className="font-semibold text-foreground">{d.name}</span>
+                        {d.code && <span className="text-[10px] font-mono text-muted-foreground">({d.code})</span>}
                         <button
                           type="button"
                           onClick={() => setDepartments(departments.filter((_, idx) => idx !== i))}
-                          className="text-destructive hover:opacity-80 p-1"
-                          title="Delete"
+                          className="text-destructive hover:opacity-80"
+                          title="Delete Department"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
-                    ))
+                    ))}
+                  </div>
+                </div>
+
+                {/* 5B. Teams */}
+                <div className="space-y-3 p-4 rounded-xl border border-border bg-card">
+                  <div>
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                      2. Functional Teams ({teams.length})
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground">
+                      Map squads or sub-teams inside departments (e.g. Talent Acquisition, Frontend Squad).
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Team Name (e.g. Talent Acquisition)"
+                      value={newTeamName}
+                      onChange={(e) => setNewTeamName(e.target.value)}
+                      className="sm:col-span-5 rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    />
+                    <select
+                      value={newTeamDeptName}
+                      onChange={(e) => setNewTeamDeptName(e.target.value)}
+                      className="sm:col-span-4 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                    >
+                      <option value="">Link to Department (Optional)</option>
+                      {departments.map((d, idx) => (
+                        <option key={d.id || idx} value={d.name}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="sm:col-span-3 text-xs h-8 font-semibold"
+                      onClick={() => {
+                        if (!newTeamName.trim()) return;
+                        const matchedDept = departments.find((dp) => dp.name === newTeamDeptName);
+                        setTeams([
+                          ...teams,
+                          {
+                            name: newTeamName.trim(),
+                            departmentName: newTeamDeptName || undefined,
+                            departmentId: matchedDept?.id || undefined,
+                          },
+                        ]);
+                        setNewTeamName('');
+                      }}
+                    >
+                      + Add Team
+                    </Button>
+                  </div>
+
+                  {teams.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {teams.map((t, i) => (
+                        <div key={i} className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-muted/40 border border-border text-xs">
+                          <span className="font-semibold text-foreground">{t.name}</span>
+                          {t.departmentName && (
+                            <span className="text-[10px] text-muted-foreground">({t.departmentName})</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setTeams(teams.filter((_, idx) => idx !== i))}
+                            className="text-destructive hover:opacity-80"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* 5C. Designations & Per-Designation Permission Configuration */}
+                <div className="space-y-3 p-4 rounded-xl border border-border bg-card">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-foreground">
+                        3. Designations & Permissions ({designations.length})
+                      </h4>
+                      <p className="text-[11px] text-muted-foreground">
+                        Configure distinct permission sets per designation (e.g. HR - Recruitment vs. HR Generalist).
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewDesigTitle('HR - Recruitment');
+                          setNewDesigRole('MANAGER');
+                          setNewDesigScope('DEPARTMENT');
+                          setNewDesigDeptName(departments.find((d) => d.name.toLowerCase().includes('hr') || d.name.toLowerCase().includes('human'))?.name || '');
+                          setNewDesigPerms(['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:view:all', 'calendar:create']);
+                        }}
+                        className="text-[10px] px-2 py-1 rounded border border-blue-500/30 bg-blue-500/10 text-blue-600 font-semibold"
+                      >
+                        + Preset: HR Recruitment
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewDesigTitle('HR Generalist');
+                          setNewDesigRole('MANAGER');
+                          setNewDesigScope('GLOBAL');
+                          setNewDesigDeptName(departments.find((d) => d.name.toLowerCase().includes('hr') || d.name.toLowerCase().includes('human'))?.name || '');
+                          setNewDesigPerms(['people:view', 'people:create', 'people:edit', 'leave:view', 'leave:approve', 'leave:manage', 'attendance:view', 'attendance:edit', 'approvals:view', 'approvals:approve']);
+                        }}
+                        className="text-[10px] px-2 py-1 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 font-semibold"
+                      >
+                        + Preset: HR Generalist
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <input
+                      type="text"
+                      placeholder="Designation Title (e.g. HR - Recruitment)"
+                      value={newDesigTitle}
+                      onChange={(e) => setNewDesigTitle(e.target.value)}
+                      className="sm:col-span-4 rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                    />
+                    <select
+                      value={newDesigDeptName}
+                      onChange={(e) => setNewDesigDeptName(e.target.value)}
+                      className="sm:col-span-3 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                    >
+                      <option value="">All Departments</option>
+                      {departments.map((d, idx) => (
+                        <option key={d.id || idx} value={d.name}>
+                          {d.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      value={newDesigRole}
+                      onChange={(e) => setNewDesigRole(e.target.value as any)}
+                      className="sm:col-span-2 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                    >
+                      <option value="MEMBER">MEMBER</option>
+                      <option value="MANAGER">MANAGER</option>
+                      <option value="ADMIN">ADMIN</option>
+                    </select>
+                    <select
+                      value={newDesigScope}
+                      onChange={(e) => setNewDesigScope(e.target.value as any)}
+                      className="sm:col-span-3 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                    >
+                      <option value="OWN">Scope: OWN</option>
+                      <option value="ASSIGNED">Scope: ASSIGNED</option>
+                      <option value="TEAM">Scope: TEAM</option>
+                      <option value="DEPARTMENT">Scope: DEPARTMENT</option>
+                      <option value="GLOBAL">Scope: GLOBAL</option>
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span className="font-semibold text-foreground">
+                        Configured Permissions ({newDesigPerms.length} selected)
+                      </span>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setNewDesigPerms(ONBOARDING_PERM_OPTIONS)}
+                          className="text-primary hover:underline"
+                        >
+                          Select All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewDesigPerms([])}
+                          className="text-muted-foreground hover:underline"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 p-2.5 rounded-lg border border-border bg-muted/15 max-h-32 overflow-y-auto">
+                      {ONBOARDING_PERM_OPTIONS.map((code) => {
+                        const checked = newDesigPerms.includes(code);
+                        return (
+                          <button
+                            key={code}
+                            type="button"
+                            onClick={() =>
+                              setNewDesigPerms((prev) =>
+                                checked ? prev.filter((c) => c !== code) : [...prev, code],
+                              )
+                            }
+                            className={`px-2 py-0.5 rounded text-[10px] font-mono border transition-all ${
+                              checked
+                                ? 'bg-blue-600 text-white border-blue-600'
+                                : 'bg-background text-muted-foreground border-border hover:border-foreground'
+                            }`}
+                          >
+                            {code}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end">
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="text-xs h-8 font-semibold"
+                      onClick={() => {
+                        if (!newDesigTitle.trim()) {
+                          toast.error('Enter a designation title');
+                          return;
+                        }
+                        const matchedDept = departments.find((dp) => dp.name === newDesigDeptName);
+                        setDesignations((prev) => [
+                          ...prev.filter((d) => d.title.toLowerCase() !== newDesigTitle.trim().toLowerCase()),
+                          {
+                            title: newDesigTitle.trim(),
+                            level: Number(newDesigLevel) || 2,
+                            departmentName: newDesigDeptName || undefined,
+                            departmentId: matchedDept?.id || undefined,
+                            defaultAccessRole: newDesigRole,
+                            defaultDataScope: newDesigScope,
+                            permissionCodes: [...newDesigPerms],
+                          },
+                        ]);
+                        setNewDesigTitle('');
+                        toast.success('Designation added to setup profile');
+                      }}
+                    >
+                      + Save Designation Profile
+                    </Button>
+                  </div>
+
+                  {designations.length > 0 && (
+                    <div className="space-y-1.5 max-h-40 overflow-y-auto pt-1 border-t border-border/60">
+                      {designations.map((dg, idx) => (
+                        <div key={dg.id || idx} className="flex items-center justify-between gap-2 p-2 rounded bg-muted/30 border border-border/70 text-xs">
+                          <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                            <span className="font-semibold text-foreground">{dg.title}</span>
+                            <Badge variant="outline" className="text-[9px] font-mono">{dg.defaultAccessRole}</Badge>
+                            <Badge variant="secondary" className="text-[9px] font-mono">{dg.defaultDataScope}</Badge>
+                            {dg.departmentName && <span className="text-[10px] text-muted-foreground">• {dg.departmentName}</span>}
+                            <span className="text-[10px] text-emerald-600 font-semibold">
+                              • {dg.permissionCodes?.length || 0} perms
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setDesignations(designations.filter((_, i) => i !== idx))}
+                            className="text-destructive hover:opacity-80 shrink-0"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* STEP 6: Team Invites */}
+            {/* STEP 6: Team Invites (Single + Bulk with Dept, Team, Designation & Permission Overrides) */}
             {activeStep === 'team_invite' && (
-              <div className="space-y-4 max-w-xl">
-                <form onSubmit={handleSendInvite} className="space-y-3 border-b border-border pb-4">
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-foreground">First Name</label>
-                      <input
-                        type="text"
-                        placeholder="Invitee's first name"
-                        value={inviteFirstName}
-                        onChange={(e) => setInviteFirstName(e.target.value)}
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-foreground">Last Name</label>
-                      <input
-                        type="text"
-                        placeholder="Invitee's last name"
-                        value={inviteLastName}
-                        onChange={(e) => setInviteLastName(e.target.value)}
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
-                    </div>
+              <div className="space-y-5">
+                {/* Mode Selector */}
+                <div className="flex items-center justify-between gap-3 border-b border-border/60 pb-3">
+                  <div className="inline-flex rounded-lg border border-border bg-muted/30 p-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setInviteMode('single')}
+                      className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                        inviteMode === 'single' ? 'bg-background text-primary shadow-xs' : 'text-muted-foreground'
+                      }`}
+                    >
+                      Single Invitation
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setInviteMode('bulk')}
+                      className={`px-3 py-1 rounded-md font-semibold transition-all ${
+                        inviteMode === 'bulk' ? 'bg-background text-primary shadow-xs' : 'text-muted-foreground'
+                      }`}
+                    >
+                      Bulk Invitations
+                    </button>
                   </div>
+                  <span className="text-[11px] text-muted-foreground">
+                    {departments.length} Dept(s) • {teams.length} Team(s) • {designations.length} Designation(s) available
+                  </span>
+                </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                    <div className="sm:col-span-6 space-y-1">
-                      <label className="text-xs font-semibold text-foreground">Email *</label>
-                      <input
-                        type="email"
-                        required
-                        placeholder="Invitee's email address"
-                        value={inviteEmail}
-                        onChange={(e) => setInviteEmail(e.target.value)}
-                        className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
-                      />
-                    </div>
-                    <div className="sm:col-span-3 space-y-1">
-                      <label className="text-xs font-semibold text-foreground">Role *</label>
+                {/* Shared / Active Org Configurator for Invites */}
+                <div className="p-3.5 rounded-xl border border-border bg-muted/15 space-y-3 text-xs">
+                  <div className="font-bold text-foreground">
+                    {inviteMode === 'bulk' ? 'Default Hierarchy & Role Template for Bulk Batch' : 'Configure Invitee Placement & Role'}
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Designation</label>
                       <select
-                        value={inviteRole}
-                        onChange={(e) => setInviteRole(e.target.value)}
-                        className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
+                        value={inviteDesigId}
+                        onChange={(e) => handleSelectInviteDesignation(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs"
                       >
-                        <option value="MEMBER">MEMBER</option>
-                        <option value="MANAGER">MANAGER</option>
-                        <option value="ADMIN">ADMIN</option>
-                        <option value="OWNER">OWNER</option>
+                        <option value="">-- Select Designation --</option>
+                        {designations.map((d, idx) => (
+                          <option key={d.id || idx} value={d.id || d.title}>
+                            {d.title} ({d.defaultAccessRole})
+                          </option>
+                        ))}
                       </select>
                     </div>
-                    <div className="sm:col-span-3 flex items-end">
-                      <Button type="submit" size="sm" disabled={sendingInvite} className="w-full text-xs h-8 font-semibold">
-                        {sendingInvite ? 'Sending...' : 'Send Invite'}
-                      </Button>
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Department</label>
+                      <select
+                        value={inviteDeptId}
+                        onChange={(e) => setInviteDeptId(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs"
+                      >
+                        <option value="">-- Select Department --</option>
+                        {departments.filter((d) => d.id).map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Team</label>
+                      <select
+                        value={inviteTeamId}
+                        onChange={(e) => setInviteTeamId(e.target.value)}
+                        className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs"
+                      >
+                        <option value="">-- Select Team --</option>
+                        {teams
+                          .filter((t) => t.id && (!inviteDeptId || !t.departmentId || t.departmentId === inviteDeptId))
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.name}{t.departmentName ? ` (${t.departmentName})` : ''}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="font-semibold text-foreground">Base Role & Scope</label>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <select
+                          value={inviteRole}
+                          onChange={(e) => setInviteRole(e.target.value)}
+                          className="rounded-md border border-input bg-background px-1.5 py-1.5 text-xs"
+                        >
+                          <option value="MEMBER">MEMBER</option>
+                          <option value="MANAGER">MANAGER</option>
+                          <option value="ADMIN">ADMIN</option>
+                        </select>
+                        <select
+                          value={inviteDataScope}
+                          onChange={(e) => setInviteDataScope(e.target.value)}
+                          className="rounded-md border border-input bg-background px-1.5 py-1.5 text-xs"
+                        >
+                          <option value="ASSIGNED">ASSIGNED</option>
+                          <option value="OWN">OWN</option>
+                          <option value="TEAM">TEAM</option>
+                          <option value="DEPARTMENT">DEPT</option>
+                          <option value="GLOBAL">GLOBAL</option>
+                        </select>
+                      </div>
                     </div>
                   </div>
-                </form>
+
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowInvitePermEditor(!showInvitePermEditor)}
+                      className="text-[11px] font-semibold text-primary hover:underline"
+                    >
+                      {showInvitePermEditor ? 'Hide' : 'Configure'} Fine-Grained Permission Overrides ({invitePerms.length} selected)
+                    </button>
+                    {showInvitePermEditor && (
+                      <div className="mt-2 flex flex-wrap gap-1.5 p-2.5 rounded-lg border border-border bg-background max-h-32 overflow-y-auto">
+                        {ONBOARDING_PERM_OPTIONS.map((code) => {
+                          const active = invitePerms.includes(code);
+                          return (
+                            <button
+                              key={code}
+                              type="button"
+                              onClick={() =>
+                                setInvitePerms((prev) =>
+                                  active ? prev.filter((c) => c !== code) : [...prev, code],
+                                )
+                              }
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono border ${
+                                active
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : 'bg-muted/20 text-muted-foreground border-border'
+                              }`}
+                            >
+                              {code}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {inviteMode === 'single' ? (
+                  <form onSubmit={handleSendInvite} className="space-y-3 border-b border-border pb-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-foreground">First Name</label>
+                        <input
+                          type="text"
+                          placeholder="First name"
+                          value={inviteFirstName}
+                          onChange={(e) => setInviteFirstName(e.target.value)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-foreground">Last Name</label>
+                        <input
+                          type="text"
+                          placeholder="Last name"
+                          value={inviteLastName}
+                          onChange={(e) => setInviteLastName(e.target.value)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-foreground">Work Email *</label>
+                        <input
+                          type="email"
+                          required
+                          placeholder="teammate@company.com"
+                          value={inviteEmail}
+                          onChange={(e) => setInviteEmail(e.target.value)}
+                          className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button type="submit" size="sm" disabled={sendingInvite} className="text-xs h-8 font-semibold">
+                        {sendingInvite ? 'Sending...' : 'Send Configured Invitation'}
+                      </Button>
+                    </div>
+                  </form>
+                ) : (
+                  <form onSubmit={handleSendBulkInvites} className="space-y-3 border-b border-border pb-4 text-xs">
+                    {/* Quick CSV/Line Paste */}
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <textarea
+                        rows={2}
+                        value={bulkPasteText}
+                        onChange={(e) => setBulkPasteText(e.target.value)}
+                        placeholder="Quick paste one per line: email@company.com, FirstName, LastName"
+                        className="flex-1 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-mono"
+                      />
+                      <Button type="button" variant="outline" size="sm" onClick={handleParseBulkPaste} className="shrink-0 text-xs">
+                        Add Lines
+                      </Button>
+                    </div>
+
+                    {/* Editable Bulk Rows */}
+                    <div className="space-y-2 max-h-56 overflow-y-auto">
+                      {bulkRows.map((row, idx) => (
+                        <div key={idx} className="grid grid-cols-1 sm:grid-cols-12 gap-1.5 items-center">
+                          <input
+                            type="email"
+                            placeholder="email@company.com *"
+                            value={row.email}
+                            onChange={(e) =>
+                              setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, email: e.target.value } : r)))
+                            }
+                            className="sm:col-span-4 rounded border border-input bg-background px-2.5 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            placeholder="First Name"
+                            value={row.firstName}
+                            onChange={(e) =>
+                              setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, firstName: e.target.value } : r)))
+                            }
+                            className="sm:col-span-2 rounded border border-input bg-background px-2 py-1.5 text-xs"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Last Name"
+                            value={row.lastName}
+                            onChange={(e) =>
+                              setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, lastName: e.target.value } : r)))
+                            }
+                            className="sm:col-span-2 rounded border border-input bg-background px-2 py-1.5 text-xs"
+                          />
+                          <select
+                            value={row.designationId || ''}
+                            onChange={(e) =>
+                              setBulkRows((prev) => prev.map((r, i) => (i === idx ? { ...r, designationId: e.target.value } : r)))
+                            }
+                            className="sm:col-span-3 rounded border border-input bg-background px-2 py-1.5 text-[11px]"
+                          >
+                            <option value="">Use Default ({designations.find((d) => d.id === inviteDesigId)?.title || inviteRole})</option>
+                            {designations.map((d, dIdx) => (
+                              <option key={d.id || dIdx} value={d.id}>
+                                {d.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setBulkRows((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev))
+                            }
+                            className="sm:col-span-1 text-destructive p-1 flex justify-center"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setBulkRows((prev) => [...prev, { email: '', firstName: '', lastName: '' }])}
+                        className="text-xs h-8 gap-1"
+                      >
+                        <Plus className="h-3.5 w-3.5" /> Add Another Row
+                      </Button>
+                      <Button type="submit" size="sm" disabled={sendingBulk} className="text-xs h-8 font-semibold">
+                        {sendingBulk ? 'Dispatching Bulk Batch...' : `Send ${bulkRows.filter((r) => r.email.trim()).length} Bulk Invitations`}
+                      </Button>
+                    </div>
+
+                    {bulkResults && (
+                      <div className="p-2.5 rounded-lg border border-border bg-muted/20 space-y-1 max-h-32 overflow-y-auto">
+                        {bulkResults.map((res: any, i: number) => (
+                          <div key={i} className="flex items-center justify-between text-[11px]">
+                            <span className="font-mono">{res.email}</span>
+                            <span className={res.status === 'SENT' ? 'text-emerald-600 font-semibold' : 'text-destructive'}>
+                              {res.status === 'SENT' ? 'Sent' : res.error || 'Failed'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </form>
+                )}
 
                 <div className="space-y-1.5">
-                  <div className="text-xs font-semibold text-foreground">✓ Sent invite list:</div>
+                  <div className="text-xs font-semibold text-foreground">✓ Sent invite list ({sentInvites.length}):</div>
                   {sentInvites.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No team invites sent yet. You can invite colleagues now or click Finish Setup.</p>
+                    <p className="text-xs text-muted-foreground py-1">
+                      No team invites sent yet. You can invite teammates above or manage invitations anytime in People Directory.
+                    </p>
                   ) : (
                     sentInvites.map((em, idx) => (
-                      <div key={idx} className="flex items-center gap-2 text-xs text-emerald-500 bg-emerald-500/10 p-2 rounded">
+                      <div key={idx} className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-500/10 p-2 rounded">
                         <CheckCircle2 className="h-3.5 w-3.5" />
-                        <span>Invitation sent to {em}</span>
+                        <span>Invitation dispatched to {em}</span>
                       </div>
                     ))
                   )}
