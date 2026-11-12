@@ -99,9 +99,19 @@ function AcceptInvitationContent() {
       if (payload.workspace?.id) {
         localStorage.setItem('activeWorkspaceId', payload.workspace.id);
       }
+      if (payload.membership) {
+        try {
+          localStorage.setItem('orvexa_cached_workspace', JSON.stringify(payload.membership));
+        } catch {}
+      }
+      if (payload.user) {
+        try {
+          localStorage.setItem('orvexa_cached_profile', JSON.stringify(payload.user));
+        } catch {}
+      }
 
-      toast.success('Invitation accepted! Welcome to ' + (payload.workspace?.name || 'the workspace'));
-      router.push('/app/home');
+      toast.success('Invitation accepted! Complete your profile setup.');
+      router.push('/app/profile-setup');
     } catch (err: any) {
       toast.error(err.message || 'Error accepting invitation');
     } finally {
@@ -166,8 +176,30 @@ function AcceptInvitationContent() {
           </div>
           <CardTitle className="text-2xl font-bold">Join {invitation.workspace?.name}</CardTitle>
           <CardDescription className="text-xs">
-            You've been invited by <span className="font-semibold text-foreground">{invitation.invitedBy?.firstName} {invitation.invitedBy?.lastName}</span> to join as <Badge variant="secondary" className="ml-1 text-[10px]">{invitation.accessRole}</Badge>
+            You&apos;ve been invited by <span className="font-semibold text-foreground">{invitation.invitedBy?.firstName} {invitation.invitedBy?.lastName}</span> to join as{' '}
+            {/* LEGACY_ROLE_COMMENTED_OUT: hide internal MEMBER/MANAGER carrier in UI; display resolved Organization Role or Designation */}
+            <Badge variant="secondary" className="ml-1 text-[10px]">
+              {invitation.roleDisplayName ||
+                invitation.designation?.title ||
+                (['OWNER', 'ADMIN'].includes((invitation.accessRole || '').toUpperCase())
+                  ? invitation.accessRole
+                  : 'Team Member')}
+            </Badge>
           </CardDescription>
+          {(invitation.department?.name || invitation.team?.name) && (
+            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+              {invitation.department?.name && (
+                <Badge variant="outline" className="text-[10px]">
+                  Dept: {invitation.department.name}
+                </Badge>
+              )}
+              {invitation.team?.name && (
+                <Badge variant="outline" className="text-[10px]">
+                  Team: {invitation.team.name}
+                </Badge>
+              )}
+            </div>
+          )}
         </CardHeader>
 
         <form onSubmit={handleAccept}>

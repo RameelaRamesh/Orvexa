@@ -11,6 +11,12 @@ import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../../infrastructure/mail/mail.service';
+import {
+  resolveMemberScopeContext,
+  resolveMemberEffectivePermissions,
+  satisfiesPermissionCode,
+  getScopeRank,
+} from '../../common/utils/scope.util';
 
 @Injectable()
 export class PeopleService {
@@ -29,7 +35,14 @@ export class PeopleService {
       status?: string;
       search?: string;
     },
-    userContext?: { membershipId?: string; dataScope?: string; accessRole?: string; departmentId?: string; teamId?: string },
+    userContext?: {
+      membershipId?: string;
+      dataScope?: string;
+      accessRole?: string;
+      departmentId?: string;
+      teamId?: string;
+      scopedTeamIds?: string[];
+    },
   ) {
     const where: any = { workspaceId };
 
@@ -69,17 +82,31 @@ export class PeopleService {
           where.id = userContext.membershipId;
         }
       } else if (scope === 'TEAM') {
-        // Manager / Team Lead access: can view own record, assigned team members, and direct reports
+        // Manager / Team Lead access: can view own record, assigned/permitted team members, and direct reports
+        const allowedTeamIds = Array.from(
+          new Set(
+            [
+              ...(Array.isArray(userContext.scopedTeamIds) ? userContext.scopedTeamIds : []),
+              ...(userContext.teamId ? [userContext.teamId] : []),
+            ].filter(Boolean),
+          ),
+        );
+        const teamClause =
+          allowedTeamIds.length === 1
+            ? [{ teamId: allowedTeamIds[0] }]
+            : allowedTeamIds.length > 1
+            ? [{ teamId: { in: allowedTeamIds } }]
+            : [];
         where.OR = [
           { id: userContext.membershipId },
-          ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
+          ...teamClause,
           { reportsToId: userContext.membershipId },
         ];
       }
       // If scope === 'GLOBAL' or 'ALL', global access across all departments is preserved
     }
 
-    return this.prisma.membership.findMany({
+    const members = await this.prisma.membership.findMany({
       where,
       include: {
         user: {
@@ -109,6 +136,34 @@ export class PeopleService {
       },
       orderBy: { createdAt: 'desc' },
     });
+
+    const wsRec = await (this.prisma as any).workspace
+      ?.findUnique?.({ where: { id: workspaceId }, select: { settings: true } })
+      ?.catch?.(() => null);
+    if (!wsRec?.settings) {
+      return members;
+    }
+
+    const wsSettings = (wsRec.settings as Record<string, any>) || {};
+    const memberCustomTeamsMap: Record<string, string[]> = wsSettings.memberScopedTeams || {};
+    return Promise.all(
+      members.map(async (m: any) => {
+        const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, m, wsSettings);
+        const roleCodes = Array.isArray(m.role?.permissions)
+          ? m.role.permissions.map((rp: any) => rp?.permission?.code || rp?.code).filter(Boolean)
+          : [];
+        const effectivePermissions = resolveMemberEffectivePermissions(roleCodes, m.id, wsSettings);
+        return {
+          ...m,
+          dataScope: resolved.effectiveDataScope,
+          scopedTeamIds: resolved.scopedTeamIds,
+          customScopedTeamIds: Array.isArray(memberCustomTeamsMap[m.id]) ? memberCustomTeamsMap[m.id] : [],
+          ledTeamIds: resolved.ledTeamIds,
+          memberPermissionOverrides: wsSettings.memberPermissionOverrides?.[m.id] || null,
+          effectivePermissions,
+        };
+      }),
+    );
   }
 
   async getMemberById(workspaceId: string, membershipId: string) {
@@ -149,6 +204,30 @@ export class PeopleService {
 
     if (!membership) {
       throw new NotFoundException('Member not found in workspace');
+    }
+
+    const wsRec = await (this.prisma as any).workspace
+      ?.findUnique?.({ where: { id: workspaceId }, select: { settings: true } })
+      ?.catch?.(() => null);
+    if (wsRec?.settings) {
+      const wsSettings = wsRec.settings as Record<string, any>;
+      const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, membership, wsSettings);
+      const customTeams = Array.isArray(wsSettings.memberScopedTeams?.[membership.id])
+        ? wsSettings.memberScopedTeams[membership.id]
+        : [];
+      const roleCodes = Array.isArray(membership.role?.permissions)
+        ? membership.role.permissions.map((rp: any) => rp?.permission?.code || rp?.code).filter(Boolean)
+        : [];
+      const effectivePermissions = resolveMemberEffectivePermissions(roleCodes, membership.id, wsSettings);
+      return {
+        ...membership,
+        dataScope: resolved.effectiveDataScope,
+        scopedTeamIds: resolved.scopedTeamIds,
+        customScopedTeamIds: customTeams,
+        ledTeamIds: resolved.ledTeamIds,
+        memberPermissionOverrides: wsSettings.memberPermissionOverrides?.[membership.id] || null,
+        effectivePermissions,
+      };
     }
 
     return membership;
@@ -252,7 +331,10 @@ export class PeopleService {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      scopedTeamIds?: string[];
+      permissionOverrides?: { added?: string[]; revoked?: string[] };
     },
+    actorContext?: any,
   ) {
     const cleanId = (id?: string) => (id && id.trim().length > 0 ? id.trim() : null);
 
@@ -262,6 +344,37 @@ export class PeopleService {
 
     if (!membership) {
       throw new NotFoundException('Member not found');
+    }
+
+    // Delegated admin ceiling when actor is not OWNER/ADMIN
+    if (actorContext && actorContext.accessRole !== 'OWNER' && actorContext.accessRole !== 'ADMIN') {
+      const targetSysUpper = (membership.accessRole || '').toUpperCase();
+      if (targetSysUpper === 'OWNER' || targetSysUpper === 'ADMIN') {
+        throw new ForbiddenException('You cannot modify Owner or Admin accounts.');
+      }
+      if (data.accessRole && ['OWNER', 'ADMIN'].includes(String(data.accessRole).toUpperCase())) {
+        throw new ForbiddenException('Only Organization Owners and Admins can grant Owner or Admin system roles.');
+      }
+      const actorPerms: string[] = Array.isArray(actorContext.permissions) ? actorContext.permissions : [];
+      if (data.permissionOverrides?.added) {
+        for (const code of data.permissionOverrides.added) {
+          if (!satisfiesPermissionCode(actorPerms, code)) {
+            throw new ForbiddenException(`Cannot grant permission "${code}" beyond your own authority.`);
+          }
+        }
+      }
+      if (data.dataScope && getScopeRank(data.dataScope) > getScopeRank(actorContext.dataScope)) {
+        throw new ForbiddenException('Cannot assign a data scope broader than your own.');
+      }
+      if (data.departmentId && actorContext.dataScope === 'DEPARTMENT' && actorContext.departmentId && data.departmentId !== actorContext.departmentId) {
+        throw new ForbiddenException('You can only place members inside your own department.');
+      }
+      const allowedTeams = Array.from(
+        new Set([...(actorContext.scopedTeamIds || []), ...(actorContext.ledTeamIds || []), ...(actorContext.teamId ? [actorContext.teamId] : [])]),
+      );
+      if (data.teamId && actorContext.dataScope === 'TEAM' && allowedTeams.length > 0 && !allowedTeams.includes(data.teamId)) {
+        throw new ForbiddenException('You can only place members inside your own permitted team(s).');
+      }
     }
 
     // Protect sole Owner demotion
@@ -333,7 +446,7 @@ export class PeopleService {
       }
     }
 
-    return this.prisma.membership.update({
+    const updated = await this.prisma.membership.update({
       where: { id: membershipId },
       data: {
         ...(data.accessRole ? { accessRole: data.accessRole } : {}),
@@ -352,6 +465,76 @@ export class PeopleService {
         designation: true,
       },
     });
+
+    if (
+      (data.dataScope !== undefined || data.scopedTeamIds !== undefined || data.permissionOverrides !== undefined) &&
+      (this.prisma as any).workspace?.findUnique &&
+      (this.prisma as any).workspace?.update
+    ) {
+      const wsRec = await (this.prisma as any).workspace
+        .findUnique({ where: { id: workspaceId }, select: { settings: true } })
+        .catch(() => null);
+      if (wsRec) {
+        const wsSettings: any = (wsRec.settings as any) || {};
+        const nextMemberDataScopes = { ...(wsSettings.memberDataScopes || {}) };
+        if (data.dataScope) {
+          nextMemberDataScopes[membershipId] = data.dataScope;
+        }
+        const nextMemberScopedTeams = { ...(wsSettings.memberScopedTeams || {}) };
+        if (Array.isArray(data.scopedTeamIds)) {
+          const finalScopeCheck = data.dataScope || resolvedDataScope || updated.dataScope;
+          nextMemberScopedTeams[membershipId] =
+            finalScopeCheck === 'TEAM'
+              ? Array.from(new Set(data.scopedTeamIds.filter(Boolean)))
+              : [];
+        } else if (data.dataScope && data.dataScope !== 'TEAM') {
+          nextMemberScopedTeams[membershipId] = [];
+        }
+        const nextMemberPermOverrides = { ...(wsSettings.memberPermissionOverrides || {}) };
+        if (data.permissionOverrides !== undefined) {
+          const added = Array.isArray(data.permissionOverrides?.added)
+            ? Array.from(new Set(data.permissionOverrides.added.filter(Boolean)))
+            : [];
+          const revoked = Array.isArray(data.permissionOverrides?.revoked)
+            ? Array.from(new Set(data.permissionOverrides.revoked.filter(Boolean)))
+            : [];
+          if (added.length > 0 || revoked.length > 0) {
+            nextMemberPermOverrides[membershipId] = { added, revoked };
+          } else {
+            delete nextMemberPermOverrides[membershipId];
+          }
+        }
+        await (this.prisma as any).workspace
+          .update({
+            where: { id: workspaceId },
+            data: {
+              settings: {
+                ...wsSettings,
+                memberDataScopes: nextMemberDataScopes,
+                memberScopedTeams: nextMemberScopedTeams,
+                memberPermissionOverrides: nextMemberPermOverrides,
+              },
+            },
+          })
+          .catch(() => null);
+
+        const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, updated, {
+          ...wsSettings,
+          memberDataScopes: nextMemberDataScopes,
+          memberScopedTeams: nextMemberScopedTeams,
+        });
+        return {
+          ...updated,
+          dataScope: resolved.effectiveDataScope,
+          scopedTeamIds: resolved.scopedTeamIds,
+          customScopedTeamIds: nextMemberScopedTeams[membershipId] || [],
+          ledTeamIds: resolved.ledTeamIds,
+          memberPermissionOverrides: nextMemberPermOverrides[membershipId] || null,
+        };
+      }
+    }
+
+    return updated;
   }
 
   // INVITATIONS WORKFLOW
@@ -371,10 +554,61 @@ export class PeopleService {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      scopedTeamIds?: string[];
       permissionCodes?: string[];
+      permissionOverrides?: { added?: string[]; revoked?: string[] };
     },
+    actorContext?: any,
   ) {
     const emailLower = data.email.toLowerCase().trim();
+
+    if (actorContext && actorContext.accessRole !== 'OWNER' && actorContext.accessRole !== 'ADMIN') {
+      if (data.accessRole && ['OWNER', 'ADMIN'].includes(String(data.accessRole).toUpperCase())) {
+        throw new ForbiddenException('Only Organization Owners and Admins can invite Owners or Admins.');
+      }
+      if (data.roleId) {
+        const targetRole = await (this.prisma as any).role
+          ?.findFirst?.({ where: { id: data.roleId } })
+          ?.catch?.(() => null);
+        if (targetRole?.isSystemRole && ['OWNER', 'ADMIN'].includes((targetRole.name || '').toUpperCase())) {
+          throw new ForbiddenException('Only Organization Owners and Admins can invite members with Admin or Owner system roles.');
+        }
+      }
+      if (data.dataScope && getScopeRank(data.dataScope) > getScopeRank(actorContext.dataScope)) {
+        throw new ForbiddenException(
+          `Delegated invite ceiling: you cannot invite with data scope "${data.dataScope}" broader than your own (${actorContext.dataScope || 'ASSIGNED'}).`,
+        );
+      }
+      const actorPerms: string[] = Array.isArray(actorContext.permissions) ? actorContext.permissions : [];
+      const checkPerms = [
+        ...(Array.isArray(data.permissionCodes) ? data.permissionCodes : []),
+        ...(Array.isArray(data.permissionOverrides?.added) ? data.permissionOverrides!.added : []),
+      ];
+      for (const code of checkPerms) {
+        if (!satisfiesPermissionCode(actorPerms, code)) {
+          throw new ForbiddenException(`Delegated invite ceiling: you cannot grant permission "${code}" that you do not hold.`);
+        }
+      }
+      if (
+        data.departmentId &&
+        actorContext.dataScope === 'DEPARTMENT' &&
+        actorContext.departmentId &&
+        data.departmentId !== actorContext.departmentId
+      ) {
+        throw new ForbiddenException('You can only invite members into your own department.');
+      }
+      const allowedTeams = Array.from(
+        new Set([...(actorContext.scopedTeamIds || []), ...(actorContext.ledTeamIds || []), ...(actorContext.teamId ? [actorContext.teamId] : [])]),
+      );
+      if (
+        data.teamId &&
+        actorContext.dataScope === 'TEAM' &&
+        allowedTeams.length > 0 &&
+        !allowedTeams.includes(data.teamId)
+      ) {
+        throw new ForbiddenException('You can only invite members into your own permitted team(s).');
+      }
+    }
 
     // Check seat count limit against active subscription
     const activeSub = await this.prisma.subscription.findFirst({
@@ -445,61 +679,14 @@ export class PeopleService {
     const effectiveDepartmentId = cleanId(data.departmentId) || desigConfig?.departmentId || null;
     const effectiveDataScope = data.dataScope || desigConfig?.defaultDataScope || undefined;
 
-    // Resolve Role ID (supports per-invite custom permissionCodes, designation defaultRoleId, explicit roleId, or system role)
+    // Resolve Role ID (prefers explicit Organization Role -> designation defaultRoleId -> internal fallback DB carrier)
     let roleId = cleanId(data.roleId) || undefined;
-    const permModel = (this.prisma as any).permission;
-    const rpModel = (this.prisma as any).rolePermission;
-
-    if (Array.isArray(data.permissionCodes) && permModel && rpModel) {
-      const normalizedRequested = [...data.permissionCodes].sort();
-      const desigPerms = Array.isArray(desigConfig?.permissionCodes) ? [...desigConfig.permissionCodes].sort() : [];
-      const matchesDesig =
-        desigConfig?.defaultRoleId &&
-        desigPerms.length === normalizedRequested.length &&
-        desigPerms.every((p, i) => p === normalizedRequested[i]);
-
-      if (matchesDesig) {
-        roleId = desigConfig.defaultRoleId;
-      } else if (normalizedRequested.length > 0) {
-        try {
-          const rolePrefix = resolvedDesignationTitle || `${data.firstName} ${data.lastName}`.trim() || 'Invited Member';
-          const customRoleName = `${rolePrefix} (${emailLower.split('@')[0]})`.slice(0, 80);
-          let customRole = await this.prisma.role.findFirst({
-            where: { workspaceId, name: { equals: customRoleName, mode: 'insensitive' }, isSystemRole: false },
-          }).catch(() => null);
-          if (!customRole) {
-            customRole = await this.prisma.role.create({
-              data: {
-                workspaceId,
-                name: customRoleName,
-                description: `Custom invitation access profile for ${emailLower}`,
-                isSystemRole: false,
-              },
-            });
-          }
-          if (customRole?.id) {
-            const matchingPerms = await permModel.findMany({ where: { code: { in: normalizedRequested } } }).catch(() => []);
-            const permIds = (matchingPerms || []).map((p: any) => p.id).filter(Boolean);
-            await rpModel.deleteMany({ where: { roleId: customRole.id } }).catch(() => null);
-            if (permIds.length > 0) {
-              await rpModel.createMany({
-                data: permIds.map((permissionId: string) => ({ roleId: customRole!.id, permissionId })),
-                skipDuplicates: true,
-              }).catch(() => null);
-            }
-            roleId = customRole.id;
-          }
-        } catch {
-          // Fallback to existing roleId or system role if custom role creation isn't supported in mock
-        }
-      }
-    }
-
     if (!roleId && desigConfig?.defaultRoleId) {
       roleId = desigConfig.defaultRoleId;
     }
 
     if (!roleId) {
+      // LEGACY_ROLE_COMMENTED_OUT: MEMBER is used solely as internal DB carrier when no Organization Role is chosen
       const targetRoleName = effectiveAccessRole || 'MEMBER';
       let role = await this.prisma.role.findFirst({
         where: { name: targetRoleName, isSystemRole: true },
@@ -514,6 +701,37 @@ export class PeopleService {
         });
       }
       roleId = role.id;
+    }
+
+    // Compute per-member permissionOverrides relative to selected Role instead of spawning noisy "Title (email)" roles
+    let computedOverrides: { added?: string[]; revoked?: string[] } | undefined = data.permissionOverrides;
+    let resolvedRoleDisplayName = resolvedDesignationTitle || 'Team Member';
+    if (roleId) {
+      const assignedRoleRec: any = await (this.prisma as any).role
+        ?.findFirst?.({
+          where: { id: roleId },
+          include: { permissions: { include: { permission: true } } },
+        })
+        ?.catch?.(() => null);
+      if (assignedRoleRec?.name && !['MEMBER', 'MANAGER'].includes(String(assignedRoleRec.name).toUpperCase())) {
+        resolvedRoleDisplayName = assignedRoleRec.name;
+      } else if (effectiveAccessRole === 'ADMIN' || effectiveAccessRole === 'OWNER') {
+        resolvedRoleDisplayName = effectiveAccessRole === 'OWNER' ? 'Owner' : 'Admin';
+      }
+      if (!computedOverrides && Array.isArray(data.permissionCodes)) {
+        const baseCodes: string[] = Array.isArray(assignedRoleRec?.permissions)
+          ? assignedRoleRec.permissions
+              .map((rp: any) => rp?.permission?.code || rp?.code)
+              .filter(Boolean)
+          : [];
+        const baseSet = new Set(baseCodes);
+        const requestedSet = new Set(data.permissionCodes.filter(Boolean));
+        const added = Array.from(requestedSet).filter((c) => !baseSet.has(c));
+        const revoked = Array.from(baseSet).filter((c) => !requestedSet.has(c));
+        if (added.length > 0 || revoked.length > 0) {
+          computedOverrides = { added, revoked };
+        }
+      }
     }
 
     const token = crypto.randomBytes(32).toString('hex');
@@ -548,21 +766,30 @@ export class PeopleService {
       },
     });
 
-    // Store optional invitation metadata (dataScope, custom permissionCodes, custom role scope) safely
+    // Store optional invitation metadata (dataScope, scopedTeamIds, custom permissionOverrides, designationTitle) safely
     if (
       (this.prisma as any).workspace?.update &&
       wsRecord &&
-      (effectiveDataScope || Array.isArray(data.permissionCodes) || resolvedDesignationTitle)
+      (effectiveDataScope ||
+        Array.isArray(data.scopedTeamIds) ||
+        Array.isArray(data.permissionCodes) ||
+        computedOverrides ||
+        resolvedDesignationTitle)
     ) {
       const nextRoleDataScopes = { ...(wsSettings.roleDataScopes || {}) };
       if (effectiveDataScope && roleId && !nextRoleDataScopes[roleId]) {
         nextRoleDataScopes[roleId] = effectiveDataScope;
       }
+      const normalizedScopedTeams = Array.isArray(data.scopedTeamIds)
+        ? Array.from(new Set(data.scopedTeamIds.filter(Boolean)))
+        : undefined;
       const nextInvitationMeta = {
         ...(wsSettings.invitationMeta || {}),
         [invitation.id]: {
           ...(effectiveDataScope ? { dataScope: effectiveDataScope } : {}),
+          ...(normalizedScopedTeams ? { scopedTeamIds: normalizedScopedTeams } : {}),
           ...(Array.isArray(data.permissionCodes) ? { permissionCodes: data.permissionCodes } : {}),
+          ...(computedOverrides ? { permissionOverrides: computedOverrides } : {}),
           ...(resolvedDesignationTitle ? { designationTitle: resolvedDesignationTitle } : {}),
         },
       };
@@ -590,7 +817,7 @@ export class PeopleService {
       invitedByName: inviterName,
       senderName: inviterName,
       senderEmail: inviterEmail,
-      roleName: effectiveAccessRole || 'MEMBER',
+      roleName: resolvedRoleDisplayName,
     });
 
     return {
@@ -599,7 +826,10 @@ export class PeopleService {
         : 'Invitation created. Email dispatch recorded (SMTP credentials can be added to backend/.env)',
       invitation: {
         ...invitation,
+        roleDisplayName: resolvedRoleDisplayName,
         dataScope: effectiveDataScope,
+        scopedTeamIds: Array.isArray(data.scopedTeamIds) ? data.scopedTeamIds : undefined,
+        permissionOverrides: computedOverrides,
         designationTitle: resolvedDesignationTitle,
         inviteLink,
       },
@@ -627,9 +857,12 @@ export class PeopleService {
         designationTitle?: string;
         reportsToId?: string;
         dataScope?: string;
+        scopedTeamIds?: string[];
         permissionCodes?: string[];
+        permissionOverrides?: { added?: string[]; revoked?: string[] };
       }>;
     },
+    actorContext?: any,
   ) {
     const entries = Array.isArray(data?.invitations) ? data.invitations : [];
     const results: Array<{
@@ -644,12 +877,17 @@ export class PeopleService {
       const email = (entry?.email || '').trim().toLowerCase();
       if (!email) continue;
       try {
-        const res = await this.inviteMember(workspaceId, invitedByUserId, {
-          ...entry,
-          email,
-          firstName: (entry.firstName || email.split('@')[0] || 'Member').trim(),
-          lastName: (entry.lastName || '').trim(),
-        });
+        const res = await this.inviteMember(
+          workspaceId,
+          invitedByUserId,
+          {
+            ...entry,
+            email,
+            firstName: (entry.firstName || email.split('@')[0] || 'Member').trim(),
+            lastName: (entry.lastName || '').trim(),
+          },
+          actorContext,
+        );
         results.push({
           email,
           status: 'SENT',
@@ -707,8 +945,38 @@ export class PeopleService {
       select: { id: true, email: true, firstName: true, lastName: true },
     });
 
+    const [dept, team, desig, roleRec, wsRec] = await Promise.all([
+      invitation.departmentId
+        ? (this.prisma as any).department?.findFirst?.({ where: { id: invitation.departmentId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      invitation.teamId
+        ? (this.prisma as any).team?.findFirst?.({ where: { id: invitation.teamId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      invitation.designationId
+        ? (this.prisma as any).designation?.findFirst?.({ where: { id: invitation.designationId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      invitation.roleId
+        ? (this.prisma as any).role?.findFirst?.({ where: { id: invitation.roleId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      (this.prisma as any).workspace?.findUnique?.({ where: { id: invitation.workspaceId }, select: { settings: true } })?.catch?.(() => null),
+    ]);
+
+    const invMeta = (wsRec?.settings as any)?.invitationMeta?.[invitation.id] || {};
+    const roleName =
+      roleRec?.name && !['MEMBER', 'MANAGER'].includes(String(roleRec.name).toUpperCase())
+        ? roleRec.name
+        : desig?.title || invMeta?.designationTitle || (invitation.accessRole === 'OWNER' || invitation.accessRole === 'ADMIN' ? invitation.accessRole : 'Team Member');
+
     return {
-      invitation,
+      invitation: {
+        ...invitation,
+        department: dept ? { id: dept.id, name: dept.name } : undefined,
+        team: team ? { id: team.id, name: team.name } : undefined,
+        designation: desig ? { id: desig.id, title: desig.title } : invMeta?.designationTitle ? { title: invMeta.designationTitle } : undefined,
+        role: roleRec ? { id: roleRec.id, name: roleRec.name } : undefined,
+        roleDisplayName: roleName,
+        dataScope: invMeta?.dataScope || undefined,
+      },
       userExists: !!existingUser,
       user: existingUser,
     };
@@ -783,13 +1051,19 @@ export class PeopleService {
     const roleNameUpper = (assignedRoleRecord?.name || '').toUpperCase();
     let wsSettings: any = (invitation.workspace as any)?.settings || {};
     if (!wsSettings?.invitationMeta && (this.prisma as any).workspace?.findUnique) {
-      const wsRec = await (this.prisma as any).workspace
-        .findUnique({ where: { id: invitation.workspaceId }, select: { settings: true } })
-        .catch(() => null);
-      if (wsRec?.settings) wsSettings = wsRec.settings;
+      try {
+        const wsRec = await (this.prisma as any).workspace.findUnique({
+          where: { id: invitation.workspaceId },
+          select: { settings: true },
+        });
+        if (wsRec?.settings) wsSettings = wsRec.settings;
+      } catch {
+        // ignore in mock contexts
+      }
     }
     const invitationMeta = wsSettings?.invitationMeta?.[invitation.id];
     const roleDataScope = roleId ? wsSettings?.roleDataScopes?.[roleId] : undefined;
+    // LEGACY_ROLE_COMMENTED_OUT: Keep explicit invitation.accessRole === 'MANAGER' compatibility for legacy tests; new invites resolve via Organization Role or dataScope
     const defaultDataScope =
       invitationMeta?.dataScope ||
       roleDataScope ||
@@ -835,6 +1109,42 @@ export class PeopleService {
       },
     });
 
+    // Persist custom member scope / team / permission overrides & mark first-time profile setup pending
+    if (membership?.id && (this.prisma as any).workspace?.update) {
+      const nextMemberScopedTeams = { ...(wsSettings.memberScopedTeams || {}) };
+      if (Array.isArray(invitationMeta?.scopedTeamIds) && invitationMeta.scopedTeamIds.length > 0) {
+        nextMemberScopedTeams[membership.id] = invitationMeta.scopedTeamIds;
+      }
+      const nextMemberDataScopes = { ...(wsSettings.memberDataScopes || {}) };
+      if (invitationMeta?.dataScope) {
+        nextMemberDataScopes[membership.id] = invitationMeta.dataScope;
+      }
+      const nextMemberPermOverrides = { ...(wsSettings.memberPermissionOverrides || {}) };
+      if (invitationMeta?.permissionOverrides) {
+        nextMemberPermOverrides[membership.id] = invitationMeta.permissionOverrides;
+      }
+      const nextProfileSetupMap = {
+        ...(wsSettings.profileSetupCompletedByUser || {}),
+        [user.id]: false,
+      };
+      try {
+        await (this.prisma as any).workspace.update({
+          where: { id: invitation.workspaceId },
+          data: {
+            settings: {
+              ...wsSettings,
+              memberScopedTeams: nextMemberScopedTeams,
+              memberDataScopes: nextMemberDataScopes,
+              memberPermissionOverrides: nextMemberPermOverrides,
+              profileSetupCompletedByUser: nextProfileSetupMap,
+            },
+          },
+        });
+      } catch {
+        // ignore in mock contexts
+      }
+    }
+
     // Mark invitation ACCEPTED
     await this.prisma.invitation.update({
       where: { id: invitation.id },
@@ -854,10 +1164,214 @@ export class PeopleService {
         email: user.email,
         firstName: user.firstName,
         lastName: user.lastName,
+        profileSetupCompleted: false,
       },
       membership,
       workspace: invitation.workspace,
       accessToken,
+      profileSetupCompleted: false,
+    };
+  }
+
+  async verifyJoinLink(code: string) {
+    const cleanCode = (code || '').trim();
+    if (!cleanCode) {
+      throw new BadRequestException('Invalid invite code');
+    }
+
+    const workspaces = await this.prisma.workspace.findMany({
+      select: { id: true, name: true, slug: true, logoUrl: true, settings: true },
+    });
+
+    const ws = workspaces.find((w: any) => (w?.settings as any)?.shareInviteLink?.code === cleanCode);
+    if (!ws) {
+      throw new NotFoundException('Shareable workspace invite link is invalid or has been reset');
+    }
+
+    const shareConfig: any = (ws.settings as any)?.shareInviteLink || {};
+    if (shareConfig.enabled === false) {
+      throw new BadRequestException('Shareable invite link is currently disabled for this workspace');
+    }
+
+    const [defaultRole, defaultDepartment, defaultTeam] = await Promise.all([
+      shareConfig.defaultRoleId
+        ? (this.prisma as any).role?.findFirst?.({ where: { id: shareConfig.defaultRoleId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      shareConfig.defaultDepartmentId
+        ? (this.prisma as any).department?.findFirst?.({ where: { id: shareConfig.defaultDepartmentId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+      shareConfig.defaultTeamId
+        ? (this.prisma as any).team?.findFirst?.({ where: { id: shareConfig.defaultTeamId } })?.catch?.(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    return {
+      valid: true,
+      workspace: { id: ws.id, name: ws.name, slug: ws.slug, logoUrl: ws.logoUrl },
+      defaultRole: defaultRole ? { id: defaultRole.id, name: defaultRole.name } : undefined,
+      defaultDepartment: defaultDepartment ? { id: defaultDepartment.id, name: defaultDepartment.name } : undefined,
+      defaultTeam: defaultTeam ? { id: defaultTeam.id, name: defaultTeam.name } : undefined,
+      defaultDataScope: shareConfig.defaultDataScope || 'ASSIGNED',
+    };
+  }
+
+  async acceptJoinLink(dto: {
+    code: string;
+    email: string;
+    password?: string;
+    firstName: string;
+    lastName?: string;
+  }) {
+    const verified = await this.verifyJoinLink(dto.code);
+    const emailLower = (dto.email || '').trim().toLowerCase();
+    if (!emailLower) {
+      throw new BadRequestException('Work email is required');
+    }
+
+    const workspaceId = verified.workspace.id;
+
+    // Seat limit check
+    const activeSub = await this.prisma.subscription.findFirst({
+      where: { workspaceId, status: { in: ['ACTIVE', 'TRIALING', 'PAST_DUE'] } },
+    });
+    const activeMembersCount = await this.prisma.membership.count({
+      where: { workspaceId, status: 'ACTIVE' },
+    });
+    const maxSeats = activeSub?.seatCount || 5;
+
+    let user = await this.prisma.user.findUnique({ where: { email: emailLower } });
+    if (user) {
+      const existingMembership = await this.prisma.membership.findUnique({
+        where: { userId_workspaceId: { userId: user.id, workspaceId } },
+      });
+      if (existingMembership && existingMembership.status === 'ACTIVE') {
+        throw new ConflictException('You are already an active member of this workspace. Please sign in instead.');
+      }
+      if (activeMembersCount >= maxSeats) {
+        throw new BadRequestException(`Workspace has reached its maximum seat limit (${maxSeats}).`);
+      }
+    } else {
+      if (activeMembersCount >= maxSeats) {
+        throw new BadRequestException(`Workspace has reached its maximum seat limit (${maxSeats}).`);
+      }
+      if (!dto.password || dto.password.length < 8) {
+        throw new BadRequestException('Password must be at least 8 characters long');
+      }
+      const passwordHash = await bcrypt.hash(dto.password, 10);
+      user = await this.prisma.user.create({
+        data: {
+          email: emailLower,
+          passwordHash,
+          firstName: (dto.firstName || emailLower.split('@')[0]).trim(),
+          lastName: (dto.lastName || '').trim(),
+          isEmailVerified: true,
+          status: 'ACTIVE',
+        },
+      });
+    }
+
+    const wsFull = await this.prisma.workspace.findUnique({ where: { id: workspaceId } });
+    const wsSettings: any = (wsFull?.settings as any) || {};
+    const shareConfig: any = wsSettings.shareInviteLink || {};
+
+    // Never elevate public link signups to Owner/Admin
+    let roleId: string | undefined = shareConfig.defaultRoleId || undefined;
+    if (roleId) {
+      let rCheck: any = null;
+      try {
+        rCheck = await this.prisma.role.findFirst({ where: { id: roleId } });
+      } catch {
+        rCheck = null;
+      }
+      if (!rCheck || (rCheck.isSystemRole && ['OWNER', 'ADMIN'].includes((rCheck.name || '').toUpperCase()))) {
+        roleId = undefined;
+      }
+    }
+    if (!roleId) {
+      const fallbackStaffRole = await this.prisma.role.findFirst({
+        where: { workspaceId, isSystemRole: false },
+      });
+      if (fallbackStaffRole) {
+        roleId = fallbackStaffRole.id;
+      } else {
+        let memberCarrier = await this.prisma.role.findFirst({
+          where: { name: 'MEMBER', isSystemRole: true },
+        });
+        if (!memberCarrier) {
+          memberCarrier = await this.prisma.role.create({
+            data: { name: 'MEMBER', description: 'Internal default carrier', isSystemRole: true },
+          });
+        }
+        roleId = memberCarrier.id;
+      }
+    }
+
+    const safeDefaultScope =
+      shareConfig.defaultDataScope && ['OWN', 'ASSIGNED', 'TEAM', 'DEPARTMENT'].includes(shareConfig.defaultDataScope)
+        ? shareConfig.defaultDataScope
+        : 'ASSIGNED';
+
+    const membership = await this.prisma.membership.upsert({
+      where: { userId_workspaceId: { userId: user.id, workspaceId } },
+      update: {
+        roleId,
+        accessRole: 'MEMBER' as SystemAccessRole,
+        departmentId: shareConfig.defaultDepartmentId || null,
+        teamId: shareConfig.defaultTeamId || null,
+        dataScope: safeDefaultScope,
+        status: 'ACTIVE',
+      },
+      create: {
+        userId: user.id,
+        workspaceId,
+        roleId,
+        accessRole: 'MEMBER' as SystemAccessRole,
+        departmentId: shareConfig.defaultDepartmentId || null,
+        teamId: shareConfig.defaultTeamId || null,
+        dataScope: safeDefaultScope,
+        status: 'ACTIVE',
+      },
+      include: { workspace: true, role: true },
+    });
+
+    if ((this.prisma as any).workspace?.update) {
+      try {
+        await (this.prisma as any).workspace.update({
+          where: { id: workspaceId },
+          data: {
+            settings: {
+              ...wsSettings,
+              profileSetupCompletedByUser: {
+                ...(wsSettings.profileSetupCompletedByUser || {}),
+                [user.id]: false,
+              },
+            },
+          },
+        });
+      } catch {
+        // ignore in mock contexts
+      }
+    }
+
+    const accessToken = this.jwtService.sign({
+      sub: user.id,
+      email: user.email,
+      tokenVersion: user.tokenVersion,
+    });
+
+    return {
+      message: 'Joined workspace successfully!',
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        profileSetupCompleted: false,
+      },
+      membership,
+      workspace: wsFull,
+      accessToken,
+      profileSetupCompleted: false,
     };
   }
 
@@ -912,7 +1426,9 @@ export class PeopleService {
         designation: desig ? { id: desig.id, title: desig.title } : meta.designationTitle ? { title: meta.designationTitle } : undefined,
         role: role ? { id: role.id, name: role.name } : undefined,
         dataScope: meta.dataScope || undefined,
+        scopedTeamIds: meta.scopedTeamIds || undefined,
         permissionCodes: meta.permissionCodes || undefined,
+        permissionOverrides: meta.permissionOverrides || undefined,
         inviteLink: `${frontendUrl}/accept-invitation?token=${inv.token}`,
       };
     });
@@ -960,6 +1476,16 @@ export class PeopleService {
       },
     });
 
+    const roleRec = updated.roleId
+      ? await (this.prisma as any).role?.findFirst?.({ where: { id: updated.roleId } })?.catch?.(() => null)
+      : null;
+    const resolvedRoleDisplayName =
+      roleRec?.name && !['MEMBER', 'MANAGER'].includes(String(roleRec.name).toUpperCase())
+        ? roleRec.name
+        : updated.accessRole === 'OWNER' || updated.accessRole === 'ADMIN'
+        ? updated.accessRole
+        : 'Team Member';
+
     const inviteLink = `${process.env.FRONTEND_URL || 'https://orvexa-lemon.vercel.app'}/accept-invitation?token=${newToken}`;
     const senderName = senderUser
       ? `${senderUser.firstName} ${senderUser.lastName}`.trim()
@@ -974,7 +1500,7 @@ export class PeopleService {
       invitedByName: senderName,
       senderName,
       senderEmail,
-      roleName: updated.accessRole || 'MEMBER',
+      roleName: resolvedRoleDisplayName,
     });
 
     return {
@@ -1346,11 +1872,19 @@ export class PeopleService {
           'Restricted payroll data: Member is outside your department boundary.',
         );
       }
+      const allowedTeams = Array.from(
+        new Set(
+          [
+            ...(Array.isArray(userContext.scopedTeamIds) ? userContext.scopedTeamIds : []),
+            ...(userContext.teamId ? [userContext.teamId] : []),
+          ].filter(Boolean),
+        ),
+      );
       if (
         scope === 'TEAM' &&
         userContext.membershipId !== membershipId &&
         membership.reportsToId !== userContext.membershipId &&
-        userContext.teamId !== membership.teamId
+        !(membership.teamId && allowedTeams.includes(membership.teamId))
       ) {
         throw new ForbiddenException(
           'Restricted payroll data: Member is outside your assigned team or direct reports.',

@@ -13,10 +13,11 @@ import {
 import { ProjectsService } from './projects.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
 import { ProjectStatus, PriorityLevel } from '@prisma/client';
 
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('projects')
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
@@ -24,9 +25,10 @@ export class ProjectsController {
   @Get()
   async list(
     @CurrentWorkspace() workspaceId: string,
+    @Request() req: any,
     @Query('status') status?: ProjectStatus,
   ) {
-    return this.projectsService.list(workspaceId, status);
+    return this.projectsService.list(workspaceId, status, req.userContext);
   }
 
   @Get(':id')

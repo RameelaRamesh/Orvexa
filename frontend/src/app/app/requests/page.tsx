@@ -79,84 +79,14 @@ const DEFAULT_CATEGORIES: RequestCategory[] = [
 ];
 
 const DEFAULT_ROLE_GROUPS = {
-  OWNER: [
-    {
-      id: 'mem_owner',
-      userId: 'u_owner',
-      name: 'John Daniel (Owner)',
-      firstName: 'John',
-      lastName: 'Daniel (Owner)',
-      email: 'vattaraofficial@gmail.com',
-      role: 'OWNER',
-      designation: 'Founder & Owner',
-    },
-  ],
-  ADMIN: [
-    {
-      id: 'mem_head',
-      userId: 'u_head',
-      name: 'Elena Rostova (Operations Head)',
-      firstName: 'Elena',
-      lastName: 'Rostova (Operations Head)',
-      email: 'head@orvexa.local',
-      role: 'ADMIN',
-      designation: 'Operations Head',
-    },
-    {
-      id: 'mem_hr',
-      userId: 'u_hr',
-      name: 'Hannah Reed (HR)',
-      firstName: 'Hannah',
-      lastName: 'Reed (HR)',
-      email: 'hr@orvexa.local',
-      role: 'ADMIN',
-      designation: 'HR Manager',
-    },
-  ],
-  MANAGER: [
-    {
-      id: 'mem_techlead',
-      userId: 'u_techlead',
-      name: 'Marcus Vance (Tech TL)',
-      firstName: 'Marcus',
-      lastName: 'Vance (Tech TL)',
-      email: 'techlead@orvexa.local',
-      role: 'MANAGER',
-      designation: 'Tech Team Leader',
-    },
-    {
-      id: 'mem_mktglead',
-      userId: 'u_mktglead',
-      name: 'Sophia Chen (Marketing TL)',
-      firstName: 'Sophia',
-      lastName: 'Chen (Marketing TL)',
-      email: 'marketinglead@orvexa.local',
-      role: 'MANAGER',
-      designation: 'Marketing Team Leader',
-    },
-  ],
-  MEMBER: [
-    {
-      id: 'mem_alex',
-      userId: 'u_alex',
-      name: 'Alex Mercer (Junior Dev)',
-      firstName: 'Alex',
-      lastName: 'Mercer (Junior Dev)',
-      email: 'alex.dev@orvexa.local',
-      role: 'MEMBER',
-      designation: 'Junior Developer',
-    },
-    {
-      id: 'mem_jordan',
-      userId: 'u_jordan',
-      name: 'Jordan Blake (Junior Dev)',
-      firstName: 'Jordan',
-      lastName: 'Blake (Junior Dev)',
-      email: 'jordan.dev@orvexa.local',
-      role: 'MEMBER',
-      designation: 'Junior Developer',
-    },
-  ],
+  OWNER: [] as any[],
+  ADMIN: [] as any[],
+  /* LEGACY_ROLE_COMMENTED_OUT: Static Manager and Member fallback groups removed from active request routing
+  MANAGER: [ ... ],
+  MEMBER: [ ... ],
+  */
+  MANAGER: [] as any[],
+  MEMBER: [] as any[],
 };
 
 interface InventoryItem {
@@ -185,6 +115,9 @@ interface ServiceRequest {
 
   // Role Routing Fields (Requirement 2)
   targetRole: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
+  targetRoleId?: string | null;
+  targetRoleName?: string | null;
+  responsibleTeamName?: string;
   targetUserId?: string | null;
   targetUserName?: string | null;
   assignedTo?: string | null;
@@ -233,9 +166,13 @@ export default function RequestsPage() {
     MANAGER: DEFAULT_ROLE_GROUPS.MANAGER,
     MEMBER: DEFAULT_ROLE_GROUPS.MEMBER,
   });
+  const [customRoleGroups, setCustomRoleGroups] = useState<Array<{ id: string; name: string; members: any[] }>>([]);
+  const [teamGroups, setTeamGroups] = useState<Array<{ id: string; name: string; members: any[] }>>([]);
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [currentUserId, setCurrentUserId] = useState<string>('');
   const [currentRole, setCurrentRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER'>('MEMBER');
+  const [currentRoleId, setCurrentRoleId] = useState<string>('');
+  const [currentTeamId, setCurrentTeamId] = useState<string>('');
   const [selectedRequest, setSelectedRequest] = useState<ServiceRequest | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -250,8 +187,8 @@ export default function RequestsPage() {
   const [showCategoryModal, setShowCategoryModal] = useState(false);
   const [showReplenishPresetModal, setShowReplenishPresetModal] = useState(false);
 
-  // Redesigned Modal Form State (Requirement 1)
-  const [selectedRole, setSelectedRole] = useState<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | ''>('ADMIN');
+  // Redesigned Modal Form State: supports OWNER, ADMIN, dynamic Custom Staff Roles, and Teams
+  const [selectedTargetKey, setSelectedTargetKey] = useState<string>('ADMIN');
   const [targetUserId, setTargetUserId] = useState<string>('');
   const [requestTitle, setRequestTitle] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('cat_general');
@@ -338,13 +275,17 @@ export default function RequestsPage() {
 
       if (roleGroupsRes && roleGroupsRes.ok) {
         const rgData = await roleGroupsRes.json();
-        if (rgData.success && rgData.data) {
+        const rgPayload = rgData?.data !== undefined ? rgData.data : rgData;
+        if (rgPayload) {
           setRoleGroups({
-            OWNER: Array.isArray(rgData.data.OWNER) && rgData.data.OWNER.length > 0 ? rgData.data.OWNER : DEFAULT_ROLE_GROUPS.OWNER,
-            ADMIN: Array.isArray(rgData.data.ADMIN) && rgData.data.ADMIN.length > 0 ? rgData.data.ADMIN : DEFAULT_ROLE_GROUPS.ADMIN,
-            MANAGER: Array.isArray(rgData.data.MANAGER) && rgData.data.MANAGER.length > 0 ? rgData.data.MANAGER : DEFAULT_ROLE_GROUPS.MANAGER,
-            MEMBER: Array.isArray(rgData.data.MEMBER) && rgData.data.MEMBER.length > 0 ? rgData.data.MEMBER : DEFAULT_ROLE_GROUPS.MEMBER,
+            OWNER: Array.isArray(rgPayload.OWNER) ? rgPayload.OWNER : [],
+            ADMIN: Array.isArray(rgPayload.ADMIN) ? rgPayload.ADMIN : [],
+            /* LEGACY_ROLE_COMMENTED_OUT: kept as empty fallback arrays for internal compatibility */
+            MANAGER: Array.isArray(rgPayload.MANAGER) ? rgPayload.MANAGER : [],
+            MEMBER: Array.isArray(rgPayload.MEMBER) ? rgPayload.MEMBER : [],
           });
+          setCustomRoleGroups(Array.isArray(rgPayload.customRoles) ? rgPayload.customRoles : []);
+          setTeamGroups(Array.isArray(rgPayload.teams) ? rgPayload.teams : []);
         }
       }
 
@@ -368,6 +309,8 @@ export default function RequestsPage() {
             if (mem.accessRole) {
               setCurrentRole(mem.accessRole.toUpperCase() as any);
             }
+            setCurrentRoleId(mem.roleId || mem.role?.id || '');
+            setCurrentTeamId(mem.teamId || mem.team?.id || '');
           }
         }
       }
@@ -395,15 +338,82 @@ export default function RequestsPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showCreateModal]);
 
-  // Group members by role (Requirement 1 & 2)
+  // Group members by role, custom staff roles, and teams
   const roleMembers = useMemo(() => {
     return {
-      OWNER: roleGroups.OWNER.length > 0 ? roleGroups.OWNER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER') : DEFAULT_ROLE_GROUPS.OWNER),
-      ADMIN: roleGroups.ADMIN.length > 0 ? roleGroups.ADMIN : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN') : DEFAULT_ROLE_GROUPS.ADMIN),
-      MANAGER: roleGroups.MANAGER.length > 0 ? roleGroups.MANAGER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'MANAGER') : DEFAULT_ROLE_GROUPS.MANAGER),
-      MEMBER: roleGroups.MEMBER.length > 0 ? roleGroups.MEMBER : (people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER').length > 0 ? people.filter((p) => (p.accessRole || '').toUpperCase() === 'MEMBER') : DEFAULT_ROLE_GROUPS.MEMBER),
+      OWNER:
+        roleGroups.OWNER.length > 0
+          ? roleGroups.OWNER
+          : people.filter((p) => (p.accessRole || '').toUpperCase() === 'OWNER'),
+      ADMIN:
+        roleGroups.ADMIN.length > 0
+          ? roleGroups.ADMIN
+          : people.filter((p) => (p.accessRole || '').toUpperCase() === 'ADMIN'),
+      /* LEGACY_ROLE_COMMENTED_OUT: retained for internal compatibility only */
+      MANAGER: roleGroups.MANAGER,
+      MEMBER: roleGroups.MEMBER,
     };
   }, [roleGroups, people]);
+
+  const recipientCards = useMemo(() => {
+    const cards: Array<{
+      key: string;
+      kind: 'SYSTEM' | 'CUSTOM_ROLE' | 'TEAM';
+      label: string;
+      roleKey?: 'OWNER' | 'ADMIN';
+      roleId?: string;
+      teamId?: string;
+      icon: any;
+      members: any[];
+    }> = [
+      {
+        key: 'OWNER',
+        kind: 'SYSTEM',
+        roleKey: 'OWNER',
+        label: 'Owner',
+        icon: Crown,
+        members: roleMembers.OWNER,
+      },
+      {
+        key: 'ADMIN',
+        kind: 'SYSTEM',
+        roleKey: 'ADMIN',
+        label: 'Admin',
+        icon: Shield,
+        members: roleMembers.ADMIN,
+      },
+      /* LEGACY_ROLE_COMMENTED_OUT: Static Manager and Member cards retired in favor of workspace custom roles & teams */
+    ];
+
+    for (const cr of customRoleGroups) {
+      cards.push({
+        key: `role:${cr.id}`,
+        kind: 'CUSTOM_ROLE',
+        roleId: cr.id,
+        label: cr.name,
+        icon: Briefcase,
+        members: Array.isArray(cr.members) ? cr.members : [],
+      });
+    }
+
+    for (const tm of teamGroups) {
+      cards.push({
+        key: `team:${tm.id}`,
+        kind: 'TEAM',
+        teamId: tm.id,
+        label: `${tm.name} Team`,
+        icon: Users,
+        members: Array.isArray(tm.members) ? tm.members : [],
+      });
+    }
+
+    return cards;
+  }, [roleMembers, customRoleGroups, teamGroups]);
+
+  const selectedTargetCard = useMemo(
+    () => recipientCards.find((c) => c.key === selectedTargetKey) || null,
+    [recipientCards, selectedTargetKey],
+  );
 
   // Handle modal open & auto-focus
   const openCreateModal = () => {
@@ -412,9 +422,11 @@ export default function RequestsPage() {
     const gen = currentCats.find((c) => c.name.toLowerCase() === 'general request');
     setSelectedCategory(gen ? gen.id : currentCats[0]?.id || 'cat_general');
 
-    if (!selectedRole || (currentRole === 'MEMBER' && selectedRole === 'OWNER')) {
-      setSelectedRole('ADMIN');
-    }
+    const firstValid =
+      recipientCards.find((c) => c.key === 'ADMIN' && c.members.length > 0) ||
+      recipientCards.find((c) => c.members.length > 0) ||
+      recipientCards[0];
+    setSelectedTargetKey(firstValid?.key || 'ADMIN');
     setTargetUserId('');
     setShowCreateModal(true);
     setTimeout(() => {
@@ -422,21 +434,12 @@ export default function RequestsPage() {
     }, 100);
   };
 
-  // Hierarchy Level Checks (Requirement 7)
-  const roleHierarchy: Record<string, number> = {
-    MEMBER: 1,
-    MANAGER: 2,
-    ADMIN: 3,
-    OWNER: 4,
-  };
-  const myLevel = roleHierarchy[currentRole] || 1;
-
   // Handle Create Request Submit (Requirement 1 & 2)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const errors: { role?: string; title?: string } = {};
 
-    if (!selectedRole) {
+    if (!selectedTargetCard) {
       errors.role = 'Choose who should receive this request';
     }
     if (!requestTitle.trim()) {
@@ -456,9 +459,16 @@ export default function RequestsPage() {
         description: description.trim() || 'No additional details provided.',
         categoryId: selectedCategory,
         priority,
-        targetRole: selectedRole,
         targetUserId: targetUserId ? targetUserId : null,
       };
+      if (selectedTargetCard?.kind === 'SYSTEM' && selectedTargetCard.roleKey) {
+        payload.targetRole = selectedTargetCard.roleKey;
+      } else if (selectedTargetCard?.kind === 'CUSTOM_ROLE' && selectedTargetCard.roleId) {
+        payload.targetRoleId = selectedTargetCard.roleId;
+        payload.targetRoleName = selectedTargetCard.label;
+      } else if (selectedTargetCard?.kind === 'TEAM' && selectedTargetCard.teamId) {
+        payload.responsibleTeamId = selectedTargetCard.teamId;
+      }
 
       if (attachmentName) {
         payload.attachments = [{ id: 'att_1', name: attachmentName, url: '#' }];
@@ -477,7 +487,7 @@ export default function RequestsPage() {
       setShowCreateModal(false);
 
       // Reset form
-      setSelectedRole('');
+      setSelectedTargetKey('');
       setTargetUserId('');
       setRequestTitle('');
       setDescription('');
@@ -719,10 +729,15 @@ export default function RequestsPage() {
     // Scope Filter: All / Sent to me / Sent by me (Requirement 3)
     if (scopeFilter === 'SENT_TO_ME') {
       const isRequester = r.requesterMembershipId === currentMembershipId;
-      const isTargetRole = r.targetRole && r.targetRole.toUpperCase() === currentRole.toUpperCase();
+      const isTargetRoleId = Boolean(r.targetRoleId && currentRoleId && r.targetRoleId === currentRoleId);
+      const isTargetTeam = Boolean(r.responsibleTeamId && currentTeamId && r.responsibleTeamId === currentTeamId);
+      const isTargetRole =
+        !r.targetRoleId &&
+        !r.responsibleTeamId &&
+        Boolean(r.targetRole && r.targetRole.toUpperCase() === currentRole.toUpperCase());
       const isTargetUser = r.targetUserId === currentUserId || r.targetUserId === currentMembershipId;
       const isAssigned = r.assignedTo === currentMembershipId || r.assignedTo === currentUserId;
-      if (isRequester || (!isTargetRole && !isTargetUser && !isAssigned)) return false;
+      if (isRequester || (!isTargetRoleId && !isTargetTeam && !isTargetRole && !isTargetUser && !isAssigned)) return false;
     } else if (scopeFilter === 'SENT_BY_ME') {
       if (r.requesterMembershipId !== currentMembershipId) return false;
     }
@@ -855,8 +870,18 @@ export default function RequestsPage() {
                   const isSelected = selectedRequest?.id === r.id;
                   const routingLabel = r.targetUserName
                     ? r.targetUserName
+                    : r.targetRoleName
+                    ? `${r.targetRoleName} role`
+                    : r.responsibleTeamName || r.responsibleTeamId
+                    ? getTeamName(r.responsibleTeamId)
                     : r.targetRole
-                    ? `${r.targetRole.charAt(0) + r.targetRole.slice(1).toLowerCase()} group`
+                    ? `${
+                        r.targetRole === 'MANAGER'
+                          ? 'Staff Lead'
+                          : r.targetRole === 'MEMBER'
+                          ? 'Staff'
+                          : r.targetRole.charAt(0) + r.targetRole.slice(1).toLowerCase()
+                      } group`
                     : 'General Queue';
 
                   return (
@@ -931,9 +956,19 @@ export default function RequestsPage() {
                         <strong className="text-primary">
                           {selectedRequest.targetUserName
                             ? selectedRequest.targetUserName
+                            : selectedRequest.targetRoleName
+                            ? `${selectedRequest.targetRoleName} role`
+                            : selectedRequest.responsibleTeamName || selectedRequest.responsibleTeamId
+                            ? getTeamName(selectedRequest.responsibleTeamId)
                             : selectedRequest.targetRole
-                            ? `${selectedRequest.targetRole.charAt(0) + selectedRequest.targetRole.slice(1).toLowerCase()} group`
-                            : getTeamName(selectedRequest.responsibleTeamId)}
+                            ? `${
+                                selectedRequest.targetRole === 'MANAGER'
+                                  ? 'Staff Lead'
+                                  : selectedRequest.targetRole === 'MEMBER'
+                                  ? 'Staff'
+                                  : selectedRequest.targetRole.charAt(0) + selectedRequest.targetRole.slice(1).toLowerCase()
+                              } group`
+                            : 'General Queue'}
                         </strong>
                       </span>
                     </div>
@@ -1308,70 +1343,31 @@ export default function RequestsPage() {
               <div>
                 <label className="text-xs font-semibold text-foreground flex items-center justify-between">
                   <span>Send to <span className="text-destructive">*</span></span>
-                  {selectedRole && (
+                  {selectedTargetCard && (
                     <span className="text-[11px] text-muted-foreground">
-                      Selected: <strong>{selectedRole}</strong>
+                      Selected: <strong>{selectedTargetCard.label}</strong>
                     </span>
                   )}
                 </label>
 
-                {/* Four selectable role cards */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-2">
-                  {[
-                    {
-                      role: 'Owner' as const,
-                      roleKey: 'OWNER' as const,
-                      icon: Crown,
-                      count: roleMembers.OWNER.length,
-                    },
-                    {
-                      role: 'Admin' as const,
-                      roleKey: 'ADMIN' as const,
-                      icon: Shield,
-                      count: roleMembers.ADMIN.length,
-                    },
-                    {
-                      role: 'Manager' as const,
-                      roleKey: 'MANAGER' as const,
-                      icon: Briefcase,
-                      count: roleMembers.MANAGER.length,
-                    },
-                    {
-                      role: 'Member' as const,
-                      roleKey: 'MEMBER' as const,
-                      icon: User,
-                      count: roleMembers.MEMBER.length,
-                    },
-                  ].map((card) => {
-                    const isSelected = selectedRole === card.roleKey;
-                    const cardLevel = roleHierarchy[card.roleKey];
-                    const hasPeople = card.count > 0;
-
-                    // Permission Rule 7: User can send only to own role level or above.
-                    // Members cannot send directly to Owner.
-                    const isBelowUserLevel = cardLevel < myLevel;
-                    const isMemberToOwner = currentRole === 'MEMBER' && card.roleKey === 'OWNER';
-                    const isDisallowed = isBelowUserLevel || isMemberToOwner || !hasPeople;
-
-                    let disabledReason = '';
-                    if (!hasPeople) {
-                      disabledReason = `No ${card.role.toLowerCase()}s yet`;
-                    } else if (isMemberToOwner) {
-                      disabledReason = 'Members cannot send to Owner';
-                    } else if (isBelowUserLevel) {
-                      disabledReason = 'Can only send to own level or above';
-                    }
-
+                {/* Dynamic recipient cards: Owner, Admin, Custom Staff Roles, and Teams */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mt-2 max-h-48 overflow-y-auto pr-1">
+                  {/* LEGACY_ROLE_COMMENTED_OUT: Static MANAGER & MEMBER cards hidden; Staff Roles and Teams appear dynamically below */}
+                  {recipientCards.map((card) => {
+                    const isSelected = selectedTargetKey === card.key;
+                    const count = card.members.length;
+                    const hasPeople = count > 0;
+                    const isDisallowed = !hasPeople;
                     const CardIcon = card.icon;
 
                     return (
                       <button
-                        key={card.roleKey}
+                        key={card.key}
                         type="button"
                         disabled={isDisallowed}
                         onClick={() => {
-                          setSelectedRole(card.roleKey);
-                          setTargetUserId(''); // reset specific user on role switch
+                          setSelectedTargetKey(card.key);
+                          setTargetUserId('');
                           setFormErrors((prev) => ({ ...prev, role: undefined }));
                         }}
                         className={`flex flex-col items-center justify-center p-3 rounded-xl border text-center transition-all ${
@@ -1383,9 +1379,9 @@ export default function RequestsPage() {
                         }`}
                       >
                         <CardIcon className={`h-5 w-5 mb-1.5 ${isSelected ? 'text-primary' : 'text-muted-foreground'}`} />
-                        <span className="text-xs font-semibold">{card.role}</span>
+                        <span className="text-xs font-semibold line-clamp-1">{card.label}</span>
                         <span className="text-[11px] text-muted-foreground mt-0.5">
-                          {hasPeople ? `${card.count} ${card.count === 1 ? 'person' : 'people'}` : disabledReason}
+                          {hasPeople ? `${count} ${count === 1 ? 'person' : 'people'}` : 'No members yet'}
                         </span>
                       </button>
                     );
@@ -1402,24 +1398,24 @@ export default function RequestsPage() {
               </div>
 
               {/* Field 2: Recipient Preview Box (Requirement 1) */}
-              {selectedRole && (
+              {selectedTargetCard && (
                 <div className="rounded-xl border border-primary/20 bg-primary/5 p-3.5 space-y-3 animate-in fade-in-50">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
                       <Users className="h-4 w-4 text-primary" />
-                      All {selectedRole.toLowerCase()}s will be notified
+                      All {selectedTargetCard.label} recipients will be notified
                     </div>
                     <Badge variant="secondary" className="text-[10px] font-mono">
-                      {roleMembers[selectedRole]?.length || 0} recipients
+                      {selectedTargetCard.members.length} recipients
                     </Badge>
                   </div>
 
                   {/* Avatar Chips */}
                   <div className="flex flex-wrap items-center gap-1.5">
-                    {(roleMembers[selectedRole] || []).map((p: any) => {
+                    {selectedTargetCard.members.map((p: any) => {
                       const first = p.user?.firstName || p.firstName || '';
                       const last = p.user?.lastName || p.lastName || '';
-                      const fullName = `${first} ${last}`.trim() || p.name || p.user?.email || p.email || 'Member';
+                      const fullName = `${first} ${last}`.trim() || p.name || p.user?.email || p.email || 'Staff';
                       const initials = first && last ? `${first.charAt(0)}${last.charAt(0)}`.toUpperCase() : fullName.slice(0, 2).toUpperCase();
 
                       return (
@@ -1447,9 +1443,9 @@ export default function RequestsPage() {
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                     >
                       <option value="">
-                        Anyone in {selectedRole.charAt(0) + selectedRole.slice(1).toLowerCase()} group (first to accept)
+                        Anyone in {selectedTargetCard.label} (first to accept)
                       </option>
-                      {(roleMembers[selectedRole] || []).map((p: any) => {
+                      {selectedTargetCard.members.map((p: any) => {
                         const first = p.user?.firstName || p.firstName || '';
                         const last = p.user?.lastName || p.lastName || '';
                         const fullName = `${first} ${last}`.trim() || p.name || p.user?.email || p.email;

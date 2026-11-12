@@ -233,6 +233,12 @@ export default function ProjectsAndTasksPage() {
   // Auth & Context
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [userRole, setUserRole] = useState<string>('MEMBER');
+  const [teams, setTeams] = useState<any[]>([]);
+  const [userDataScope, setUserDataScope] = useState<string>('');
+  const [userDepartmentId, setUserDepartmentId] = useState<string>('');
+  const [userTeamId, setUserTeamId] = useState<string>('');
+  const [scopedTeamIds, setScopedTeamIds] = useState<string[]>([]);
+  const [ledTeamIds, setLedTeamIds] = useState<string[]>([]);
 
   const getHeaders = () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
@@ -260,6 +266,11 @@ export default function ProjectsAndTasksPage() {
           const cachedRole = wsObj?.accessRole || wsObj?.role?.name || '';
           if (cachedMemId) setCurrentMembershipId(cachedMemId);
           if (cachedRole) setUserRole(cachedRole);
+          if (wsObj?.dataScope) setUserDataScope(String(wsObj.dataScope).toUpperCase());
+          if (wsObj?.departmentId || wsObj?.department?.id) setUserDepartmentId(wsObj.departmentId || wsObj.department.id);
+          if (wsObj?.teamId || wsObj?.team?.id) setUserTeamId(wsObj.teamId || wsObj.team.id);
+          if (Array.isArray(wsObj?.scopedTeamIds)) setScopedTeamIds(wsObj.scopedTeamIds);
+          if (Array.isArray(wsObj?.ledTeamIds)) setLedTeamIds(wsObj.ledTeamIds);
         }
       }
       const p = JSON.parse(localStorage.getItem('orvexa_cached_profile') || '{}');
@@ -274,6 +285,11 @@ export default function ProjectsAndTasksPage() {
             ? mem.accessRole
             : mem.role?.name || mem.accessRole || 'MEMBER';
         setUserRole(roleLabel);
+        if (mem.dataScope) setUserDataScope(String(mem.dataScope).toUpperCase());
+        if (mem.departmentId || mem.department?.id) setUserDepartmentId(mem.departmentId || mem.department.id);
+        if (mem.teamId || mem.team?.id) setUserTeamId(mem.teamId || mem.team.id);
+        if (Array.isArray(mem.scopedTeamIds)) setScopedTeamIds(mem.scopedTeamIds);
+        if (Array.isArray(mem.ledTeamIds)) setLedTeamIds(mem.ledTeamIds);
       }
     } catch {}
 
@@ -295,6 +311,15 @@ export default function ProjectsAndTasksPage() {
                 ? activeMem.accessRole
                 : activeMem.role?.name || activeMem.accessRole || 'MEMBER';
             setUserRole(liveRole);
+            if (activeMem.dataScope) setUserDataScope(String(activeMem.dataScope).toUpperCase());
+            if (activeMem.departmentId || activeMem.department?.id) {
+              setUserDepartmentId(activeMem.departmentId || activeMem.department.id);
+            }
+            if (activeMem.teamId || activeMem.team?.id) {
+              setUserTeamId(activeMem.teamId || activeMem.team.id);
+            }
+            if (Array.isArray(activeMem.scopedTeamIds)) setScopedTeamIds(activeMem.scopedTeamIds);
+            if (Array.isArray(activeMem.ledTeamIds)) setLedTeamIds(activeMem.ledTeamIds);
           }
         })
         .catch(() => null);
@@ -309,11 +334,12 @@ export default function ProjectsAndTasksPage() {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [tasksRes, projectsRes, membersRes, deptsRes] = await Promise.all([
+      const [tasksRes, projectsRes, membersRes, deptsRes, teamsRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/tasks`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/projects`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/people?limit=100`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: getHeaders() }),
+        fetch(`${BRANDING.apiUrl}/teams`, { headers: getHeaders() }).catch(() => null),
       ]);
 
       if (tasksRes.ok) {
@@ -331,6 +357,11 @@ export default function ProjectsAndTasksPage() {
       if (deptsRes.ok) {
         const data = await deptsRes.json();
         setDepartments(Array.isArray(data) ? data : data.data || []);
+      }
+      if (teamsRes && teamsRes.ok) {
+        const data = await teamsRes.json();
+        const tList = Array.isArray(data) ? data : data.teams || data.data || [];
+        setTeams(Array.isArray(tList) ? tList : []);
       }
     } catch (err) {
       console.error('Failed to load projects & tasks data:', err);
@@ -394,6 +425,74 @@ export default function ProjectsAndTasksPage() {
     }
   };
 
+  // Check if current user has global admin role or team/dept scope
+  const isGlobalAdmin = useMemo(() => {
+    const u = (userRole || '').toUpperCase();
+    return ['OWNER', 'ADMIN'].includes(u) || u.includes('OWNER') || u.includes('ADMIN');
+  }, [userRole]);
+
+  const effectiveScope = useMemo(() => {
+    if (isGlobalAdmin) return 'GLOBAL';
+    if (userDataScope) return userDataScope.toUpperCase();
+    const u = (userRole || '').toUpperCase();
+    if (u.includes('MANAGER') || u.includes('LEAD')) return 'TEAM';
+    if (u.includes('DIRECTOR') || u.includes('HEAD')) return 'DEPARTMENT';
+    return 'ASSIGNED';
+  }, [isGlobalAdmin, userDataScope, userRole]);
+
+  const allowedTeamIds = useMemo(() => {
+    const ledFromTeams = currentMembershipId
+      ? teams.filter((t) => t.leadMembershipId === currentMembershipId).map((t) => t.id)
+      : [];
+    return Array.from(
+      new Set(
+        [
+          ...scopedTeamIds,
+          ...ledTeamIds,
+          ...ledFromTeams,
+          ...(userTeamId ? [userTeamId] : []),
+        ].filter(Boolean),
+      ),
+    );
+  }, [scopedTeamIds, ledTeamIds, teams, userTeamId, currentMembershipId]);
+
+  const permittedMemberIds = useMemo(() => {
+    if (isGlobalAdmin || effectiveScope === 'GLOBAL' || effectiveScope === 'ALL') {
+      return null;
+    }
+    const ids = new Set<string>();
+    if (currentMembershipId) ids.add(currentMembershipId);
+    for (const m of teamMembers) {
+      if (!m?.id) continue;
+      if (effectiveScope === 'DEPARTMENT') {
+        const mDept = m.departmentId || m.department?.id || m.team?.departmentId;
+        if (userDepartmentId && mDept === userDepartmentId) ids.add(m.id);
+      } else if (effectiveScope === 'TEAM') {
+        const mTeam = m.teamId || m.team?.id;
+        if (
+          (currentMembershipId && m.reportsToId === currentMembershipId) ||
+          (mTeam && allowedTeamIds.includes(mTeam))
+        ) {
+          ids.add(m.id);
+        }
+      }
+    }
+    return ids;
+  }, [isGlobalAdmin, effectiveScope, currentMembershipId, teamMembers, userDepartmentId, allowedTeamIds]);
+
+  const scopedTeamMembers = useMemo(() => {
+    if (!permittedMemberIds) return teamMembers;
+    return teamMembers.filter((m) => permittedMemberIds.has(m.id));
+  }, [teamMembers, permittedMemberIds]);
+
+  const allowedTeamNames = useMemo(() => {
+    if (allowedTeamIds.length === 0) return [];
+    return teams
+      .filter((t) => allowedTeamIds.includes(t.id))
+      .map((t) => t.name)
+      .filter(Boolean);
+  }, [teams, allowedTeamIds]);
+
   // Check if current user is manager / team lead / admin
   const isManagerOrAdmin = useMemo(() => {
     const u = userRole.toUpperCase();
@@ -404,9 +503,12 @@ export default function ProjectsAndTasksPage() {
       u.includes('MANAGER') ||
       u.includes('LEAD') ||
       u.includes('DIRECTOR') ||
-      u.includes('HEAD')
+      u.includes('HEAD') ||
+      effectiveScope === 'GLOBAL' ||
+      effectiveScope === 'DEPARTMENT' ||
+      effectiveScope === 'TEAM'
     );
-  }, [userRole]);
+  }, [userRole, effectiveScope]);
 
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
@@ -477,13 +579,42 @@ export default function ProjectsAndTasksPage() {
   // Filter Tasks for Team Work
   const teamWorkTasks = useMemo(() => {
     return tasks.filter((t) => {
+      const sla = ((t as any).sla as any) || {};
+      const multiIds: string[] = Array.isArray((t as any).assigneeMembershipIds)
+        ? (t as any).assigneeMembershipIds
+        : Array.isArray(sla.assigneeMembershipIds)
+        ? sla.assigneeMembershipIds
+        : [];
+      const allAssignees = Array.from(
+        new Set([t.assigneeMembershipId, ...multiIds].filter(Boolean) as string[]),
+      );
+
+      if (permittedMemberIds !== null) {
+        const assigneeTeamId = (t.assignee as any)?.teamId || (t.assignee as any)?.team?.id;
+        const assigneeDeptId = (t.assignee as any)?.departmentId || (t.assignee as any)?.department?.id;
+        const assigneeReportsTo = (t.assignee as any)?.reportsToId;
+
+        const matchesPermittedAssignee =
+          allAssignees.some((id) => permittedMemberIds.has(id)) ||
+          (effectiveScope === 'TEAM' &&
+            ((assigneeReportsTo && assigneeReportsTo === currentMembershipId) ||
+              Boolean(assigneeTeamId && allowedTeamIds.includes(assigneeTeamId)))) ||
+          (effectiveScope === 'DEPARTMENT' &&
+            Boolean(userDepartmentId && assigneeDeptId === userDepartmentId));
+
+        const isUnassignedTeamTask =
+          allAssignees.length === 0 &&
+          ((t as any).creatorMembershipId === currentMembershipId ||
+            sla.creatorMembershipId === currentMembershipId ||
+            Boolean((t as any).teamId && allowedTeamIds.includes((t as any).teamId)) ||
+            (effectiveScope === 'DEPARTMENT' && Boolean(userDepartmentId && sla.departmentId === userDepartmentId)));
+
+        if (!matchesPermittedAssignee && !isUnassignedTeamTask) {
+          return false;
+        }
+      }
+
       if (teamMemberFilter !== 'ALL') {
-        const sla = ((t as any).sla as any) || {};
-        const multiIds: string[] = Array.isArray((t as any).assigneeMembershipIds)
-          ? (t as any).assigneeMembershipIds
-          : Array.isArray(sla.assigneeMembershipIds)
-          ? sla.assigneeMembershipIds
-          : [];
         if (t.assigneeMembershipId !== teamMemberFilter && !multiIds.includes(teamMemberFilter)) {
           return false;
         }
@@ -511,7 +642,7 @@ export default function ProjectsAndTasksPage() {
       }
       return true;
     });
-  }, [tasks, teamMemberFilter, teamProjectFilter, teamDeptFilter, teamStatusFilter, teamPriorityFilter, teamSearch]);
+  }, [tasks, permittedMemberIds, effectiveScope, currentMembershipId, allowedTeamIds, userDepartmentId, teamMemberFilter, teamProjectFilter, teamDeptFilter, teamStatusFilter, teamPriorityFilter, teamSearch]);
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -1587,7 +1718,7 @@ export default function ProjectsAndTasksPage() {
                           {m.user?.firstName} {m.user?.lastName}
                         </span>
                         <span className="block text-[10px] text-muted-foreground truncate">
-                          {m.designation?.title || 'Team Member'}
+                          {m.designation?.title || (!m.role?.isSystemRole && m.role?.name) || 'Staff'}
                         </span>
                       </div>
                     </div>
@@ -1668,13 +1799,26 @@ export default function ProjectsAndTasksPage() {
               />
             </div>
 
+            {!isGlobalAdmin && (
+              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900 font-semibold text-[11px]">
+                Scope:{' '}
+                {effectiveScope === 'DEPARTMENT'
+                  ? 'Department'
+                  : effectiveScope === 'TEAM'
+                  ? allowedTeamNames.length > 0
+                    ? `Team (${allowedTeamNames.join(', ')})`
+                    : 'My Team'
+                  : 'Own Records'}
+              </span>
+            )}
+
             <select
               value={teamMemberFilter}
               onChange={(e) => setTeamMemberFilter(e.target.value)}
               className="py-1.5 px-2.5 rounded-lg border border-border bg-background text-xs"
             >
               <option value="ALL">All Team Members</option>
-              {teamMembers.map((m) => (
+              {scopedTeamMembers.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.user?.firstName} {m.user?.lastName}
                 </option>
@@ -2260,7 +2404,7 @@ export default function ProjectsAndTasksPage() {
                     className="w-full px-3 py-2 rounded-lg border border-border bg-background text-xs cursor-pointer"
                   >
                     <option value="">Assign Later</option>
-                    {teamMembers.map((m) => (
+                    {scopedTeamMembers.map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.user?.firstName} {m.user?.lastName}
                       </option>

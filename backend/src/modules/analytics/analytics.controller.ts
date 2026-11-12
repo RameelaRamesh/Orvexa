@@ -11,9 +11,10 @@ import {
 import { AnalyticsService } from './analytics.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
+import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { CurrentWorkspace } from '../../common/decorators/current-workspace.decorator';
 
-@UseGuards(JwtAuthGuard, TenantGuard)
+@UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
 @Controller('analytics')
 export class AnalyticsController {
   constructor(private readonly analyticsService: AnalyticsService) {}
@@ -31,19 +32,25 @@ export class AnalyticsController {
     @Query('priority') priority?: string,
     @Query('scope') scope?: string,
   ) {
-    const membershipId = req.membership?.id || req.membershipId;
-    const userRole = req.membership?.accessRole || 'MEMBER';
+    const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    const userRole = req.userContext?.accessRole || req.membership?.accessRole || 'MEMBER';
 
-    return this.analyticsService.getOverview(workspaceId, membershipId, userRole, {
-      startDate,
-      endDate,
-      departmentId,
-      teamId,
-      memberId,
-      status,
-      priority,
-      scope,
-    });
+    return this.analyticsService.getOverview(
+      workspaceId,
+      membershipId,
+      userRole,
+      {
+        startDate,
+        endDate,
+        departmentId,
+        teamId,
+        memberId,
+        status,
+        priority,
+        scope,
+      },
+      req.userContext,
+    );
   }
 
   @Get('calendar')
@@ -89,20 +96,27 @@ export class AnalyticsController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
-    const membershipId = req.membership?.id || req.membershipId;
-    const userRole = req.membership?.accessRole || 'MEMBER';
+    const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    const userRole = req.userContext?.accessRole || req.membership?.accessRole || 'MEMBER';
 
-    return this.analyticsService.getDrilldown(workspaceId, membershipId, userRole, category, {
-      startDate,
-      endDate,
-      status,
-      priority,
-      memberId,
-      search,
-      scope,
-      limit: limit ? parseInt(limit, 10) : undefined,
-      offset: offset ? parseInt(offset, 10) : undefined,
-    });
+    return this.analyticsService.getDrilldown(
+      workspaceId,
+      membershipId,
+      userRole,
+      category,
+      {
+        startDate,
+        endDate,
+        status,
+        priority,
+        memberId,
+        search,
+        scope,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        offset: offset ? parseInt(offset, 10) : undefined,
+      },
+      req.userContext,
+    );
   }
 
   @Get('export/:category')
@@ -119,8 +133,8 @@ export class AnalyticsController {
     @Query('memberId') memberId?: string,
     @Query('scope') scope?: string,
   ) {
-    const membershipId = req.membership?.id || req.membershipId;
-    const userRole = req.membership?.accessRole || 'MEMBER';
+    const membershipId = req.membership?.id || req.membershipId || req.userContext?.membershipId;
+    const userRole = req.userContext?.accessRole || req.membership?.accessRole || 'MEMBER';
 
     const result = await this.analyticsService.exportData(
       workspaceId,
@@ -129,6 +143,7 @@ export class AnalyticsController {
       category,
       format,
       { startDate, endDate, status, priority, memberId, scope },
+      req.userContext,
     );
 
     if (format === 'csv') {

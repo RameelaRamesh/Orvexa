@@ -2,6 +2,11 @@ import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@
 import { Reflector } from '@nestjs/core';
 import { PERMISSIONS_KEY, ANY_PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  resolveMemberScopeContext,
+  resolveMemberEffectivePermissions,
+  satisfiesPermissionCode,
+} from '../utils/scope.util';
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {
@@ -11,22 +16,7 @@ export class PermissionsGuard implements CanActivate {
   ) {}
 
   private satisfiesPermission(userPermissionCodes: string[], perm: string): boolean {
-    if (userPermissionCodes.includes(perm)) return true;
-
-    const [mod] = perm.split(':');
-    if (
-      userPermissionCodes.includes(`${mod}:manage`) ||
-      userPermissionCodes.includes(`${mod}:administer`)
-    ) {
-      return true;
-    }
-
-    if (perm === 'settings:manage' && (userPermissionCodes.includes('org:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-    if (perm === 'org:manage' && (userPermissionCodes.includes('settings:manage') || userPermissionCodes.includes('workspace:manage'))) return true;
-    if (perm === 'quality:manage' && userPermissionCodes.includes('quality:review')) return true;
-    if (perm === 'quality:review' && userPermissionCodes.includes('quality:manage')) return true;
-
-    return false;
+    return satisfiesPermissionCode(userPermissionCodes, perm);
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -41,10 +31,6 @@ export class PermissionsGuard implements CanActivate {
 
     const hasRequiredAll = Array.isArray(requiredPermissions) && requiredPermissions.length > 0;
     const hasRequiredAny = Array.isArray(requiredAnyPermissions) && requiredAnyPermissions.length > 0;
-
-    if (!hasRequiredAll && !hasRequiredAny) {
-      return true;
-    }
 
     const request = context.switchToHttp().getRequest();
     let membership = request.membership;
@@ -86,27 +72,67 @@ export class PermissionsGuard implements CanActivate {
       }
     }
 
+    if (membership) {
+      const basePermissionCodes =
+        membership.role?.permissions
+          ?.map((rp: { permission?: { code: string }; code?: string }) => rp.permission?.code || rp.code)
+          .filter((c): c is string => Boolean(c)) || [];
+
+      const effectiveWsId = membership.workspaceId || request.workspaceId || '';
+      let wsSettings: Record<string, any> | null = null;
+      if (effectiveWsId && (this.prisma as any)?.workspace?.findUnique) {
+        const wsRec = await (this.prisma as any).workspace
+          .findUnique({
+            where: { id: effectiveWsId },
+            select: { settings: true },
+          })
+          ?.catch?.(() => null);
+        if (wsRec?.settings && typeof wsRec.settings === 'object') {
+          wsSettings = wsRec.settings as Record<string, any>;
+        }
+      }
+
+      const userPermissionCodes = resolveMemberEffectivePermissions(
+        basePermissionCodes,
+        membership.id,
+        wsSettings,
+      );
+
+      const resolvedScope = await resolveMemberScopeContext(
+        this.prisma,
+        effectiveWsId,
+        membership,
+        wsSettings,
+      );
+      const effectiveTeamId =
+        membership.teamId || resolvedScope.ledTeamIds[0] || resolvedScope.scopedTeamIds[0] || undefined;
+
+      // Attach userContext to request for downstream services and tenant-scoped queries
+      request.userContext = {
+        membershipId: membership.id,
+        userId: membership.userId,
+        accessRole: membership.accessRole,
+        roleId: membership.roleId,
+        roleName: membership.role?.name,
+        dataScope: resolvedScope.effectiveDataScope,
+        departmentId: membership.departmentId,
+        teamId: effectiveTeamId,
+        scopedTeamIds: resolvedScope.scopedTeamIds,
+        ledTeamIds: resolvedScope.ledTeamIds,
+        permissions: userPermissionCodes,
+        memberPermissionOverrides: wsSettings?.memberPermissionOverrides?.[membership.id] || null,
+      };
+    }
+
+    if (!hasRequiredAll && !hasRequiredAny) {
+      return true;
+    }
+
     if (!membership) {
       throw new ForbiddenException('Workspace membership context required for permission check');
     }
 
-    const userPermissionCodes =
-      membership.role?.permissions
-        ?.map((rp: { permission?: { code: string }; code?: string }) => rp.permission?.code || rp.code)
-        .filter((c): c is string => Boolean(c)) || [];
-
-    // Attach userContext to request for downstream services and tenant-scoped queries
-    request.userContext = {
-      membershipId: membership.id,
-      userId: membership.userId,
-      accessRole: membership.accessRole,
-      roleId: membership.roleId,
-      roleName: membership.role?.name,
-      dataScope: membership.dataScope || 'ASSIGNED',
-      departmentId: membership.departmentId,
-      teamId: membership.teamId,
-      permissions: userPermissionCodes,
-    };
+    const userPermissionCodes: string[] = request.userContext?.permissions || [];
 
     // Platform-level security controls: OWNER holds root organization authority for recovery protection
     if (membership.accessRole === 'OWNER') {

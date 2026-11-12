@@ -4,7 +4,10 @@
  */
 
 export interface PermissionContext {
+  id?: string;
   accessRole?: string | null;
+  dataScope?: string | null;
+  effectivePermissions?: string[];
   role?: {
     id?: string;
     name?: string;
@@ -18,6 +21,8 @@ export interface PermissionContext {
     settings?: {
       enabledModules?: string[];
       roleDataScopes?: Record<string, string>;
+      memberDataScopes?: Record<string, string>;
+      memberPermissionOverrides?: Record<string, { added?: string[]; revoked?: string[] }>;
       [key: string]: any;
     };
     [key: string]: any;
@@ -58,26 +63,37 @@ export function isModuleEnabled(
 }
 
 /**
- * Extracts the data access scope configured for the active role (if any).
+ * Extracts the data access scope configured for the active membership or role.
  */
 export function getDataScope(ctx?: PermissionContext | null): string {
   const accessRole = (ctx?.accessRole || ctx?.role?.name || '').toUpperCase();
   if (accessRole === 'OWNER') return 'GLOBAL';
+  if (ctx?.id && ctx?.workspace?.settings?.memberDataScopes?.[ctx.id]) {
+    return ctx.workspace.settings.memberDataScopes[ctx.id];
+  }
+  if (ctx?.dataScope) return ctx.dataScope;
   const roleId = ctx?.role?.id;
   const roleScopes = ctx?.workspace?.settings?.roleDataScopes || {};
   if (roleId && roleScopes[roleId]) {
     return roleScopes[roleId];
   }
   if (accessRole === 'ADMIN') return 'GLOBAL';
+  // LEGACY_ROLE_COMMENTED_OUT: legacy MANAGER carrier defaults to TEAM; all other staff default to ASSIGNED unless configured on their role
   if (accessRole === 'MANAGER') return 'TEAM';
-  return 'OWN';
+  return 'ASSIGNED';
 }
 
 /**
- * Extracts granted permission codes from a user/membership context.
+ * Extracts granted permission codes from a user/membership context, merging per-member overrides.
  */
 export function extractPermissionCodes(ctx?: PermissionContext | null): string[] {
-  if (!ctx || !ctx.role) return [];
+  if (!ctx) return [];
+
+  if (Array.isArray(ctx.effectivePermissions) && ctx.effectivePermissions.length > 0) {
+    return Array.from(new Set(ctx.effectivePermissions.filter(Boolean)));
+  }
+
+  if (!ctx.role) return [];
 
   // Deactivated roles have all permissions suspended
   if (ctx.role.description?.startsWith('[DEACTIVATED]')) {
@@ -85,7 +101,7 @@ export function extractPermissionCodes(ctx?: PermissionContext | null): string[]
   }
 
   const rawPermissions = ctx.role.permissions || [];
-  return rawPermissions
+  const base = rawPermissions
     .map((p: any) => {
       if (typeof p === 'string') return p;
       if (p?.code) return p.code;
@@ -93,6 +109,20 @@ export function extractPermissionCodes(ctx?: PermissionContext | null): string[]
       return null;
     })
     .filter((code): code is string => Boolean(code));
+
+  const override = ctx.id
+    ? ctx.workspace?.settings?.memberPermissionOverrides?.[ctx.id]
+    : undefined;
+  if (!override) return base;
+
+  const set = new Set(base);
+  if (Array.isArray(override.added)) {
+    override.added.forEach((c) => { if (c) set.add(c); });
+  }
+  if (Array.isArray(override.revoked)) {
+    override.revoked.forEach((c) => { set.delete(c); });
+  }
+  return Array.from(set);
 }
 
 /**
@@ -129,6 +159,10 @@ export function checkPermission(ctx: PermissionContext | null | undefined, requi
   }
 
   if (grantedCodes.includes(requiredPerm)) {
+    return true;
+  }
+
+  if (requiredPerm === 'tasks:complete' && grantedCodes.includes('tasks:review')) {
     return true;
   }
 

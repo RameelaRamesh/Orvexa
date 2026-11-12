@@ -142,8 +142,16 @@ export default function HomePage() {
     return 'Good evening';
   };
 
-  const role = activeWorkspace?.accessRole || 'MEMBER';
+  const role = (activeWorkspace?.accessRole || 'MEMBER').toUpperCase();
+  /* LEGACY_ROLE_COMMENTED_OUT:
   const roleLabel = role === 'ADMIN' ? 'Admin' : role === 'OWNER' ? 'Owner' : role === 'MANAGER' ? 'Manager' : 'Team Member';
+  */
+  const roleLabel =
+    role === 'OWNER'
+      ? 'Owner'
+      : role === 'ADMIN'
+      ? 'Admin'
+      : activeWorkspace?.role?.name || activeWorkspace?.designation?.title || 'Staff';
   const departmentName = activeWorkspace?.department?.name || 'Engineering';
 
   // Fallback demo tasks if workspace tasks list is empty

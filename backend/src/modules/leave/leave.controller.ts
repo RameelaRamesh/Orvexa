@@ -92,13 +92,20 @@ export class LeaveController {
       status?: LeaveStatus;
     },
   ) {
-    const isOwnerOrAdmin =
+    const effPerms: string[] = Array.isArray(req.userContext?.effectivePermissions)
+      ? req.userContext.effectivePermissions
+      : Array.isArray(req.userContext?.permissions)
+      ? req.userContext.permissions
+      : [];
+    const canActForOthers =
       req.user?.role === 'ADMIN' ||
       req.user?.role === 'OWNER' ||
       req.membership?.accessRole === 'ADMIN' ||
-      req.membership?.accessRole === 'OWNER';
+      req.membership?.accessRole === 'OWNER' ||
+      effPerms.includes('leave:manage') ||
+      effPerms.includes('leave:approve');
 
-    const targetMembershipId = (isOwnerOrAdmin && body.membershipId)
+    const targetMembershipId = (canActForOthers && body.membershipId)
       ? body.membershipId
       : req.membershipId;
 

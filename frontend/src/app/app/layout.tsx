@@ -539,11 +539,38 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const getPortalRoleLabel = (r: string) => {
     if (r === 'ADMIN') return 'ADMIN';
     if (r === 'OWNER') return 'OWNER';
+    /* LEGACY_ROLE_COMMENTED_OUT: do not surface raw MANAGER / MEMBER labels in sidebar badge
     if (r === 'MANAGER') return 'MANAGER';
     if (r === 'MEMBER') return 'MEMBER';
-    return r;
+    */
+    const customRoleName = activeWorkspace?.role?.name;
+    if (
+      customRoleName &&
+      !['OWNER', 'ADMIN', 'MANAGER', 'MEMBER'].includes(customRoleName.toUpperCase())
+    ) {
+      return customRoleName;
+    }
+    if (activeWorkspace?.designation?.title) {
+      return activeWorkspace.designation.title;
+    }
+    return 'STAFF';
   };
-  const isPlatformAdmin = accessRole === 'OWNER';
+  const isPlatformAdmin = accessRole === 'OWNER' || accessRole === 'ADMIN';
+
+  // Enforce first-landing Member Profile Setup when newly invited/joined user hasn't completed or skipped it yet
+  useEffect(() => {
+    if (loading || typeof window === 'undefined') return;
+    if (!pathname) return;
+    const exemptPaths = ['/app/profile-setup', '/app/onboarding'];
+    if (exemptPaths.some((p) => pathname.startsWith(p))) return;
+
+    const needsProfileSetup =
+      profile?.profileSetupCompleted === false ||
+      activeWorkspace?.profileSetupCompleted === false;
+    if (needsProfileSetup) {
+      router.replace('/app/profile-setup');
+    }
+  }, [loading, pathname, profile?.profileSetupCompleted, activeWorkspace?.profileSetupCompleted, router]);
 
   const [calendarBadgeCount, setCalendarBadgeCount] = useState<number>(0);
   const [chatBadgeCount, setChatBadgeCount] = useState<number>(0);
@@ -726,8 +753,13 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
               <span className="truncate text-sm font-semibold text-foreground">
                 {activeWorkspace?.workspace?.name || 'Workspace'}
               </span>
-              <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                {getPortalRoleLabel(accessRole)} • {activeWorkspace?.designation?.title || 'Member'}
+              <span className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider truncate">
+                {getPortalRoleLabel(accessRole)}
+                {activeWorkspace?.designation?.title &&
+                activeWorkspace.designation.title.toLowerCase() !==
+                  getPortalRoleLabel(accessRole).toLowerCase()
+                  ? ` • ${activeWorkspace.designation.title}`
+                  : ''}
               </span>
             </div>
           </div>

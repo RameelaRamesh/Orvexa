@@ -45,8 +45,10 @@ export default function AnalyticsPage() {
   // Scope State (Permission-Based Scoping)
   const [selectedScope, setSelectedScope] = useState<'MY_DATA' | 'MY_TEAM' | 'MY_DEPARTMENT' | 'ENTIRE_WORKSPACE'>('ENTIRE_WORKSPACE');
   const [userRole, setUserRole] = useState<string>('MEMBER');
+  const [userDataScope, setUserDataScope] = useState<string>('');
   const [userDepartmentId, setUserDepartmentId] = useState<string>('');
   const [userTeamId, setUserTeamId] = useState<string>('');
+  const [scopedTeamIds, setScopedTeamIds] = useState<string[]>([]);
 
   // Date Range State
   const [dateRange, setDateRange] = useState<DateRange>(() => {
@@ -81,40 +83,132 @@ export default function AnalyticsPage() {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    let cancelled = false;
+    const activeToken = localStorage.getItem('accessToken') || localStorage.getItem('orvexa_token');
+    const activeWs = localStorage.getItem('activeWorkspaceId');
     const cachedWs = localStorage.getItem('orvexa_cached_workspace');
     const p = localStorage.getItem('orvexa_cached_profile') || localStorage.getItem('user');
+
     let role = 'MEMBER';
+    let dataScope = '';
+    let deptId = '';
+    let teamId = '';
+    let sTeams: string[] = [];
+
     if (cachedWs) {
       try {
         const wsObj = JSON.parse(cachedWs);
-        if (wsObj?.accessRole || wsObj?.role) role = wsObj.accessRole || wsObj.role;
+        const wsObjId = wsObj?.workspaceId || wsObj?.id;
+        if (!activeWs || wsObjId === activeWs) {
+          if (wsObj?.accessRole || wsObj?.role?.name || wsObj?.role) {
+            role = wsObj.accessRole || wsObj.role?.name || wsObj.role;
+          }
+          if (wsObj?.dataScope) dataScope = String(wsObj.dataScope).toUpperCase();
+          if (wsObj?.departmentId || wsObj?.department?.id) deptId = wsObj.departmentId || wsObj.department.id;
+          if (wsObj?.teamId || wsObj?.team?.id) teamId = wsObj.teamId || wsObj.team.id;
+          if (Array.isArray(wsObj?.scopedTeamIds)) sTeams = wsObj.scopedTeamIds;
+        }
       } catch {}
     }
+
     if (p) {
       try {
         const prof = JSON.parse(p);
-        if (prof?.memberships && prof.memberships[0]?.accessRole) {
-          role = prof.memberships[0].accessRole;
-        }
-        if (prof?.memberships && prof.memberships[0]?.departmentId) {
-          setUserDepartmentId(prof.memberships[0].departmentId);
-        }
-        if (prof?.memberships && prof.memberships[0]?.teamId) {
-          setUserTeamId(prof.memberships[0].teamId);
+        const membershipsList = Array.isArray(prof?.memberships) ? prof.memberships : [];
+        const matched =
+          (activeWs && membershipsList.find((m: any) => m.workspaceId === activeWs)) ||
+          (!activeWs ? membershipsList[0] : null);
+        if (matched) {
+          if (matched.accessRole || matched.role?.name) {
+            role =
+              matched.accessRole && matched.accessRole !== 'MEMBER'
+                ? matched.accessRole
+                : matched.role?.name || matched.accessRole;
+          }
+          if (matched.dataScope) dataScope = String(matched.dataScope).toUpperCase();
+          if (matched.departmentId || matched.department?.id) deptId = matched.departmentId || matched.department.id;
+          if (matched.teamId || matched.team?.id) teamId = matched.teamId || matched.team.id;
+          if (Array.isArray(matched.scopedTeamIds)) sTeams = matched.scopedTeamIds;
         }
       } catch {}
     }
+
     setUserRole(role);
-    const rUpper = role.toUpperCase();
-    if (!['OWNER', 'ADMIN', 'MANAGER'].includes(rUpper)) {
-      setSelectedScope('MY_DATA');
+    if (dataScope) setUserDataScope(dataScope);
+    if (deptId) setUserDepartmentId(deptId);
+    if (teamId) setUserTeamId(teamId);
+    if (sTeams.length > 0) setScopedTeamIds(sTeams);
+
+    if (activeToken) {
+      fetch(`${BRANDING.apiUrl}/auth/me`, {
+        headers: { Authorization: `Bearer ${activeToken}` },
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((json) => {
+          if (cancelled || !json) return;
+          const prof = json.data !== undefined ? json.data : json;
+          const membershipsList = Array.isArray(prof?.memberships) ? prof.memberships : [];
+          const activeMem =
+            (activeWs && membershipsList.find((m: any) => m.workspaceId === activeWs)) || membershipsList[0];
+          if (activeMem) {
+            const liveRole =
+              activeMem.accessRole && activeMem.accessRole !== 'MEMBER'
+                ? activeMem.accessRole
+                : activeMem.role?.name || activeMem.accessRole || 'MEMBER';
+            setUserRole(liveRole);
+            if (activeMem.dataScope) setUserDataScope(String(activeMem.dataScope).toUpperCase());
+            if (activeMem.departmentId || activeMem.department?.id) {
+              setUserDepartmentId(activeMem.departmentId || activeMem.department.id);
+            }
+            if (activeMem.teamId || activeMem.team?.id) {
+              setUserTeamId(activeMem.teamId || activeMem.team.id);
+            }
+            if (Array.isArray(activeMem.scopedTeamIds)) {
+              setScopedTeamIds(activeMem.scopedTeamIds);
+            }
+          }
+        })
+        .catch(() => null);
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const roleUpper = (userRole || 'MEMBER').toUpperCase();
-  const canViewWorkspace = ['OWNER', 'ADMIN', 'MANAGER'].includes(roleUpper);
-  const canViewDept = canViewWorkspace || Boolean(userDepartmentId);
-  const canViewTeam = canViewWorkspace || roleUpper.includes('LEAD') || Boolean(userTeamId);
+  const isGlobalAdmin =
+    ['OWNER', 'ADMIN'].includes(roleUpper) ||
+    roleUpper.includes('OWNER') ||
+    roleUpper.includes('ADMIN');
+  const effectiveDataScope = (
+    isGlobalAdmin
+      ? 'GLOBAL'
+      : userDataScope ||
+        (roleUpper.includes('MANAGER') || roleUpper.includes('LEAD')
+          ? 'TEAM'
+          : roleUpper.includes('DIRECTOR') || roleUpper.includes('HEAD')
+          ? 'DEPARTMENT'
+          : 'ASSIGNED')
+  ).toUpperCase();
+
+  const canViewWorkspace = isGlobalAdmin || effectiveDataScope === 'GLOBAL' || effectiveDataScope === 'ALL';
+  const canViewDept = canViewWorkspace || effectiveDataScope === 'DEPARTMENT';
+  const canViewTeam =
+    canViewDept ||
+    effectiveDataScope === 'TEAM' ||
+    roleUpper.includes('LEAD') ||
+    scopedTeamIds.length > 0;
+
+  useEffect(() => {
+    if (selectedScope === 'ENTIRE_WORKSPACE' && !canViewWorkspace) {
+      setSelectedScope(canViewDept ? 'MY_DEPARTMENT' : canViewTeam ? 'MY_TEAM' : 'MY_DATA');
+    } else if (selectedScope === 'MY_DEPARTMENT' && !canViewDept) {
+      setSelectedScope(canViewTeam ? 'MY_TEAM' : 'MY_DATA');
+    } else if (selectedScope === 'MY_TEAM' && !canViewTeam) {
+      setSelectedScope('MY_DATA');
+    }
+  }, [selectedScope, canViewWorkspace, canViewDept, canViewTeam]);
 
   // Load Overview Data
   const fetchOverview = async () => {
@@ -206,6 +300,7 @@ export default function AnalyticsPage() {
         format,
         startDate: dateRange.startDate,
         endDate: dateRange.endDate,
+        scope: selectedScope,
       });
       if (statusFilter !== 'ALL') params.append('status', statusFilter);
       if (priorityFilter !== 'ALL') params.append('priority', priorityFilter);

@@ -5,9 +5,13 @@ import { RolesService } from './roles.service';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { TenantGuard } from '../../common/guards/tenant.guard';
 import { PeopleService } from '../people/people.service';
+import { TasksService } from '../tasks/tasks.service';
 import { PrismaService } from '../../database/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../../infrastructure/mail/mail.service';
+import {
+  resolveMemberEffectivePermissions,
+} from '../../common/utils/scope.util';
 import { PERMISSIONS_KEY } from '../../common/decorators/permissions.decorator';
 import { IS_PUBLIC_KEY } from '../../common/decorators/public.decorator';
 
@@ -52,7 +56,11 @@ describe('PHASE 5: Configurable Roles, Permissions & Organisation Structure Acce
       update: jest.fn(),
     },
     task: {
+      findMany: jest.fn(),
       updateMany: jest.fn(),
+    },
+    team: {
+      findMany: jest.fn().mockResolvedValue([]),
     },
     workItem: {
       updateMany: jest.fn(),
@@ -625,6 +633,307 @@ describe('PHASE 5: Configurable Roles, Permissions & Organisation Structure Acce
       });
 
       expect(result.membership.status).toBe('OFFBOARDED');
+    });
+  });
+
+  // =========================================================================
+  // 10. STRICT TEAM SCOPE ISOLATION & CUSTOMIZABLE TEAM PERMISSIONS
+  // =========================================================================
+  describe('Requirement 14: Strict Team Data Scope Isolation & Customizable Team Scopes', () => {
+    it('TasksService.list isolates a TEAM-scoped MANAGER to own/team/direct-report tasks and excludes other-team or unrelated unassigned tasks', async () => {
+      const tasksService = new TasksService(mockPrisma);
+
+      mockPrisma.team.findMany.mockResolvedValue([]);
+      mockPrisma.membership.findMany.mockResolvedValue([
+        { id: 'mem_rameela', teamId: 'team_tech', departmentId: 'dept_tech', reportsToId: null },
+        { id: 'mem_indumathi', teamId: 'team_tech', departmentId: 'dept_tech', reportsToId: 'mem_rameela' },
+        { id: 'mem_sanjeev', teamId: null, departmentId: 'dept_tech', reportsToId: 'mem_rameela' },
+        { id: 'mem_harini', teamId: 'team_mkt', departmentId: 'dept_mkt', reportsToId: null },
+        { id: 'mem_priyan', teamId: 'team_mkt', departmentId: 'dept_mkt', reportsToId: 'mem_harini' },
+        { id: 'mem_qa_lead', teamId: 'team_qa', departmentId: 'dept_tech', reportsToId: null },
+      ]);
+
+      mockPrisma.task.findMany.mockResolvedValue([
+        {
+          id: 't_tech_1',
+          title: 'Tech API integration',
+          status: 'TODO',
+          priority: 'HIGH',
+          assigneeMembershipId: 'mem_indumathi',
+          sla: { creatorMembershipId: 'mem_rameela', progress: 0 },
+          createdAt: new Date(),
+        },
+        {
+          id: 't_direct_report',
+          title: 'Voice assistant module',
+          status: 'IN_PROGRESS',
+          priority: 'MEDIUM',
+          assigneeMembershipId: 'mem_sanjeev',
+          sla: { creatorMembershipId: 'mem_rameela', progress: 50 },
+          createdAt: new Date(),
+        },
+        {
+          id: 't_mkt_1',
+          title: 'Marketing campaign video',
+          status: 'COMPLETED',
+          priority: 'MEDIUM',
+          assigneeMembershipId: 'mem_priyan',
+          sla: { creatorMembershipId: 'mem_harini', progress: 100 },
+          createdAt: new Date(),
+        },
+        {
+          id: 't_qa_1',
+          title: 'Regression suite execution',
+          status: 'TODO',
+          priority: 'MEDIUM',
+          assigneeMembershipId: 'mem_qa_lead',
+          sla: { creatorMembershipId: 'mem_qa_lead', progress: 0 },
+          createdAt: new Date(),
+        },
+        {
+          id: 't_unassigned_mkt',
+          title: 'Academic (meta ad)',
+          status: 'TODO',
+          priority: 'LOW',
+          assigneeMembershipId: null,
+          sla: { creatorMembershipId: 'mem_harini', progress: 0 },
+          createdAt: new Date(),
+        },
+        {
+          id: 't_unassigned_tech',
+          title: 'Unassigned Tech Backlog',
+          status: 'TODO',
+          priority: 'LOW',
+          assigneeMembershipId: null,
+          sla: { creatorMembershipId: 'mem_rameela', teamId: 'team_tech', progress: 0 },
+          createdAt: new Date(),
+        },
+      ]);
+
+      const rameelaContext = {
+        membershipId: 'mem_rameela',
+        accessRole: 'MANAGER',
+        dataScope: 'TEAM',
+        teamId: 'team_tech',
+        departmentId: 'dept_tech',
+        scopedTeamIds: ['team_tech'],
+      };
+
+      const defaultList = await tasksService.list('ws_vattara', {}, rameelaContext);
+      const teamWorkList = await tasksService.list('ws_vattara', { scope: 'TEAM_WORK' }, rameelaContext);
+
+      expect(defaultList.map((t: any) => t.id)).toEqual(['t_tech_1', 't_direct_report', 't_unassigned_tech']);
+      expect(teamWorkList.map((t: any) => t.id)).toEqual(['t_tech_1', 't_direct_report', 't_unassigned_tech']);
+    });
+
+    it('supports customizable multi-team scopedTeamIds across RolesService, PeopleService, and TasksService', async () => {
+      const tasksService = new TasksService(mockPrisma);
+
+      mockPrisma.role.findFirst.mockResolvedValue({
+        id: 'role_tech_mgr',
+        workspaceId: 'ws_vattara',
+        name: 'Tech Manager',
+        description: 'Tech Lead profile',
+        isSystemRole: false,
+      });
+      mockPrisma.workspace.findUnique.mockResolvedValue({
+        id: 'ws_vattara',
+        settings: {},
+      });
+      mockPrisma.workspace.update.mockResolvedValue({});
+      mockPrisma.membership.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.role.findUnique.mockResolvedValue({
+        id: 'role_tech_mgr',
+        workspaceId: 'ws_vattara',
+        name: 'Tech Manager',
+        description: 'Tech Lead profile',
+        isSystemRole: false,
+        permissions: [],
+      });
+
+      const updatedRole = await rolesService.updateRole('ws_vattara', 'role_tech_mgr', {
+        dataScope: 'TEAM',
+        scopedTeamIds: ['team_tech', 'team_qa'],
+      });
+
+      expect(updatedRole.dataScope).toBe('TEAM');
+      expect(updatedRole.scopedTeamIds).toEqual(['team_tech', 'team_qa']);
+      expect(mockPrisma.workspace.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'ws_vattara' },
+          data: {
+            settings: expect.objectContaining({
+              roleDataScopes: expect.objectContaining({ role_tech_mgr: 'TEAM' }),
+              roleScopedTeams: expect.objectContaining({ role_tech_mgr: ['team_tech', 'team_qa'] }),
+            }),
+          },
+        }),
+      );
+
+      // Member-level override persistence via PeopleService.updateMemberOrgDetails
+      mockPrisma.membership.findFirst.mockResolvedValue({
+        id: 'mem_rameela',
+        workspaceId: 'ws_vattara',
+        userId: 'u_rameela',
+        accessRole: 'MANAGER',
+        roleId: 'role_tech_mgr',
+        teamId: 'team_tech',
+        dataScope: 'TEAM',
+      });
+      mockPrisma.membership.update.mockResolvedValue({
+        id: 'mem_rameela',
+        workspaceId: 'ws_vattara',
+        userId: 'u_rameela',
+        accessRole: 'MANAGER',
+        roleId: 'role_tech_mgr',
+        teamId: 'team_tech',
+        dataScope: 'TEAM',
+        user: { id: 'u_rameela', firstName: 'Rameela', lastName: 'R', email: 'rameela@example.com' },
+        role: { id: 'role_tech_mgr', name: 'Tech Manager' },
+        department: null,
+        team: { id: 'team_tech', name: 'Development' },
+        designation: null,
+      });
+
+      const updatedMember: any = await peopleService.updateMemberOrgDetails('ws_vattara', 'mem_rameela', {
+        dataScope: 'TEAM',
+        scopedTeamIds: ['team_tech', 'team_qa'],
+      });
+
+      expect(updatedMember.dataScope).toBe('TEAM');
+      expect(updatedMember.scopedTeamIds).toEqual(['team_tech', 'team_qa']);
+
+      // TasksService honors the customized multi-team list while still blocking Marketing team
+      mockPrisma.membership.findMany.mockResolvedValue([
+        { id: 'mem_rameela', teamId: 'team_tech', departmentId: 'dept_tech', reportsToId: null },
+        { id: 'mem_qa_lead', teamId: 'team_qa', departmentId: 'dept_tech', reportsToId: null },
+        { id: 'mem_priyan', teamId: 'team_mkt', departmentId: 'dept_mkt', reportsToId: 'mem_harini' },
+      ]);
+      mockPrisma.task.findMany.mockResolvedValue([
+        { id: 't_qa', title: 'QA regression', status: 'TODO', assigneeMembershipId: 'mem_qa_lead', sla: {} },
+        { id: 't_mkt', title: 'Meta Ad Video', status: 'TODO', assigneeMembershipId: 'mem_priyan', sla: {} },
+      ]);
+
+      const scopedTasks = await tasksService.list(
+        'ws_vattara',
+        { scope: 'TEAM_WORK' },
+        {
+          membershipId: 'mem_rameela',
+          accessRole: 'MANAGER',
+          dataScope: 'TEAM',
+          teamId: 'team_tech',
+          scopedTeamIds: ['team_tech', 'team_qa'],
+        },
+      );
+
+      expect(scopedTasks.map((t: any) => t.id)).toEqual(['t_qa']);
+    });
+  });
+
+  // =========================================================================
+  // 7. SIMPLIFIED ROLES, PERMISSION OVERRIDES & DELEGATED AUTHORITY CEILING
+  // =========================================================================
+  describe('Requirement 9: Simplified Roles (Owner/Admin + Custom Staff) & Delegated Setup Ceiling', () => {
+    it('hides legacy MANAGER and MEMBER system roles by default while returning Owner, Admin, and custom staff roles', async () => {
+      mockPrisma.permission.findMany.mockResolvedValue([{ id: 'p1', code: 'tasks:view' }]);
+      mockPrisma.permission.upsert.mockResolvedValue({});
+      mockPrisma.role.findFirst.mockResolvedValue({ id: 'role_sys', name: 'OWNER', isSystemRole: true });
+      mockPrisma.workspace.findUnique.mockResolvedValue({ id: 'ws_alpha', settings: {} });
+      mockPrisma.role.findMany.mockResolvedValue([
+        { id: 'r_owner', name: 'OWNER', isSystemRole: true, description: 'Owner', permissions: [], _count: { memberships: 1 } },
+        { id: 'r_admin', name: 'ADMIN', isSystemRole: true, description: 'Admin', permissions: [], _count: { memberships: 1 } },
+        { id: 'r_mgr', name: 'MANAGER', isSystemRole: true, description: 'Legacy Manager', permissions: [], _count: { memberships: 0 } },
+        { id: 'r_mem', name: 'MEMBER', isSystemRole: true, description: 'Legacy Member', permissions: [], _count: { memberships: 2 } },
+        { id: 'r_tl', name: 'Team Lead', isSystemRole: false, description: 'Custom lead', permissions: [], _count: { memberships: 1 } },
+      ]);
+      mockPrisma.membership.findMany.mockResolvedValue([]);
+
+      const visible = await rolesService.listWorkspaceRoles('ws_alpha');
+      expect(visible.map((r: any) => r.name)).toEqual(['OWNER', 'ADMIN', 'Team Lead']);
+
+      const withLegacy = await rolesService.listWorkspaceRoles('ws_alpha', { includeLegacy: true });
+      expect(withLegacy.map((r: any) => r.name)).toEqual(['OWNER', 'ADMIN', 'MANAGER', 'MEMBER', 'Team Lead']);
+    });
+
+    it('allows delegated Team Lead to create a staff role within permission & scope ceiling, and blocks exceeding it', async () => {
+      const delegatedLeadActor = {
+        membershipId: 'mem_tl',
+        accessRole: 'MEMBER',
+        dataScope: 'TEAM',
+        permissions: ['roles:manage', 'tasks:view', 'tasks:edit', 'leave:view'],
+      };
+
+      mockPrisma.role.findFirst.mockResolvedValue(null);
+      mockPrisma.permission.findMany.mockResolvedValue([
+        { id: 'p_tv', code: 'tasks:view' },
+        { id: 'p_te', code: 'tasks:edit' },
+      ]);
+      mockPrisma.role.create.mockResolvedValue({
+        id: 'role_qa_staff',
+        workspaceId: 'ws_alpha',
+        name: 'QA Reviewer',
+        isSystemRole: false,
+      });
+      mockPrisma.workspace.findUnique.mockResolvedValue({ id: 'ws_alpha', settings: {} });
+      mockPrisma.role.findUnique.mockResolvedValue({
+        id: 'role_qa_staff',
+        workspaceId: 'ws_alpha',
+        name: 'QA Reviewer',
+        isSystemRole: false,
+        permissions: [],
+      });
+
+      const created = await rolesService.createRole(
+        'ws_alpha',
+        'QA Reviewer',
+        'Team-scoped QA reviewer',
+        undefined,
+        { permissionCodes: ['tasks:view', 'tasks:edit'], dataScope: 'TEAM' },
+        delegatedLeadActor,
+      );
+      expect(created.name).toBe('QA Reviewer');
+      expect(created.dataScope).toBe('TEAM');
+
+      // Exceeding permission ceiling (billing:manage / payroll:manage not held by actor) -> Forbidden
+      await expect(
+        rolesService.createRole(
+          'ws_alpha',
+          'Unauthorized Payroll Role',
+          'Exceeds ceiling',
+          undefined,
+          { permissionCodes: ['payroll:manage'], dataScope: 'TEAM' },
+          delegatedLeadActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      // Exceeding dataScope ceiling (DEPARTMENT > TEAM) -> Forbidden
+      await expect(
+        rolesService.createRole(
+          'ws_alpha',
+          'Dept Scope Role',
+          'Exceeds scope',
+          undefined,
+          { permissionCodes: ['tasks:view'], dataScope: 'DEPARTMENT' },
+          delegatedLeadActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('resolveMemberEffectivePermissions merges role base permissions with per-member added and revoked overrides', () => {
+      const effective = resolveMemberEffectivePermissions(
+        ['tasks:view', 'tasks:create', 'leave:view'],
+        'mem_custom_1',
+        {
+          memberPermissionOverrides: {
+            mem_custom_1: {
+              added: ['leave:approve', 'invitations:manage'],
+              revoked: ['tasks:create'],
+            },
+          },
+        },
+      );
+      expect(effective).toEqual(expect.arrayContaining(['tasks:view', 'leave:view', 'leave:approve', 'invitations:manage']));
+      expect(effective).not.toContain('tasks:create');
     });
   });
 });

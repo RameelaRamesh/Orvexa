@@ -57,10 +57,17 @@ import {
   Plus,
   Sliders,
   Layers,
+  Share2,
+  RefreshCw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
-import { hasAnyPermission } from '@/lib/permissions';
+import {
+  checkPermission,
+  extractPermissionCodes,
+  getDataScope,
+  hasAnyPermission,
+} from '@/lib/permissions';
 
 function PeoplePageContent() {
   const searchParams = useSearchParams();
@@ -116,7 +123,7 @@ function PeoplePageContent() {
   });
   const [loading, setLoading] = useState(true);
 
-  // Permission helpers: Owner, Admin, and explicitly permitted custom roles (e.g. HR Recruitment / HR Generalist)
+  // Permission helpers: Owner, Admin, and explicitly permitted custom roles (e.g. HR Recruitment / HR Generalist / Team Lead)
   const isCurrentUserOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
   const canInvite =
     isCurrentUserOwnerOrAdmin ||
@@ -124,6 +131,53 @@ function PeoplePageContent() {
   const canManagePeople =
     isCurrentUserOwnerOrAdmin ||
     hasAnyPermission(activeWorkspace, ['people:manage', 'people:create', 'people:edit']);
+  const actorDataScope = getDataScope(activeWorkspace);
+  const DATA_SCOPE_ORDER: Record<string, number> = {
+    OWN: 1,
+    ASSIGNED: 1,
+    TEAM: 2,
+    DEPARTMENT: 3,
+    GLOBAL: 4,
+    WORKSPACE: 4,
+  };
+  const actorScopeRank = DATA_SCOPE_ORDER[(actorDataScope || 'ASSIGNED').toUpperCase()] ?? 2;
+  const canAssignPermCode = (code: string): boolean =>
+    isCurrentUserOwnerOrAdmin || checkPermission(activeWorkspace, code);
+  const canAssignScope = (scopeKey: string): boolean =>
+    isCurrentUserOwnerOrAdmin || (DATA_SCOPE_ORDER[(scopeKey || 'ASSIGNED').toUpperCase()] ?? 1) <= actorScopeRank;
+
+  const getRolePermCodesByRoleId = (roleId?: string, fallbackAccessRole?: string): string[] => {
+    const matchedRole =
+      (roleId && roles.find((r) => r.id === roleId)) ||
+      (fallbackAccessRole && roles.find((r) => r.name?.toUpperCase() === fallbackAccessRole.toUpperCase()));
+    if (!matchedRole) return [];
+    return (matchedRole.permissions || [])
+      .map((p: any) => p?.permission?.code || p?.code || (typeof p === 'string' ? p : null))
+      .filter(Boolean);
+  };
+
+  const computePermissionOverrides = (selectedCodes: string[], baseCodes: string[]) => {
+    const baseSet = new Set(baseCodes);
+    const selSet = new Set(selectedCodes);
+    return {
+      added: selectedCodes.filter((c) => !baseSet.has(c)),
+      revoked: baseCodes.filter((c) => !selSet.has(c)),
+    };
+  };
+
+  const getDisplayRoleLabel = (m: any): string => {
+    const accessUpper = (m?.accessRole || '').toUpperCase();
+    if (accessUpper === 'OWNER') return 'Owner';
+    if (accessUpper === 'ADMIN') return 'Admin';
+    if (m?.role?.name && !m?.role?.isSystemRole) return m.role.name;
+    if (m?.designation?.title) return m.designation.title;
+    /* LEGACY_ROLE_COMMENTED_OUT:
+    if (accessUpper === 'MANAGER') return 'Manager';
+    if (accessUpper === 'MEMBER') return 'Member';
+    */
+    if (accessUpper === 'MANAGER') return 'Staff Lead';
+    return 'Staff';
+  };
 
   const isSelfMember = (m: any): boolean => {
     if (!m) return false;
@@ -288,6 +342,18 @@ function PeoplePageContent() {
     return extra;
   };
 
+  const [editPermCodes, setEditPermCodes] = useState<string[]>([]);
+  const [showEditPermEditor, setShowEditPermEditor] = useState(false);
+
+  // Shareable workspace invite link state
+  const [shareInviteLink, setShareInviteLink] = useState<{
+    code?: string;
+    enabled?: boolean;
+    joinUrl?: string;
+    workspaceName?: string;
+  } | null>(null);
+  const [regeneratingShareLink, setRegeneratingShareLink] = useState(false);
+
   const [editForm, setEditForm] = useState({
     firstName: '',
     lastName: '',
@@ -301,6 +367,7 @@ function PeoplePageContent() {
     designationTitle: '',
     reportsToId: '',
     dataScope: 'ASSIGNED',
+    scopedTeamIds: [] as string[],
     // Personal Details
     dateOfBirth: '',
     gender: 'male',
@@ -337,6 +404,7 @@ function PeoplePageContent() {
     designationTitle: '',
     reportsToId: '',
     dataScope: 'ASSIGNED',
+    scopedTeamIds: [] as string[],
   });
   const [invitePermCodes, setInvitePermCodes] = useState<string[]>([]);
   const [showInvitePermEditor, setShowInvitePermEditor] = useState(false);
@@ -351,6 +419,7 @@ function PeoplePageContent() {
     designationTitle: '',
     reportsToId: '',
     dataScope: 'ASSIGNED',
+    scopedTeamIds: [] as string[],
   });
   const [bulkPermCodes, setBulkPermCodes] = useState<string[]>([]);
   const [showBulkPermEditor, setShowBulkPermEditor] = useState(false);
@@ -381,13 +450,14 @@ function PeoplePageContent() {
 
   const INVITE_PERMISSION_GROUPS = [
     {
-      module: 'People & HR Invites',
+      module: 'People & Delegated Setup',
       perms: [
         { code: 'people:view', label: 'View People' },
         { code: 'people:create', label: 'Add Employees' },
         { code: 'people:edit', label: 'Edit Records' },
         { code: 'people:manage', label: 'Full People Admin' },
-        { code: 'invitations:manage', label: 'Send Invites' },
+        { code: 'invitations:manage', label: 'Invite Team Members' },
+        { code: 'roles:manage', label: 'Setup Roles & Permissions' },
         { code: 'departments:manage', label: 'Depts & Teams' },
       ],
     },
@@ -410,6 +480,8 @@ function PeoplePageContent() {
         { code: 'tasks:create', label: 'Create Tasks' },
         { code: 'tasks:edit', label: 'Edit Tasks' },
         { code: 'tasks:assign', label: 'Assign Tasks' },
+        { code: 'tasks:review', label: 'Review Tasks' },
+        { code: 'tasks:complete', label: 'Complete Tasks' },
         { code: 'work_items:view', label: 'View Queue' },
         { code: 'work_items:process', label: 'Process Queue' },
       ],
@@ -450,18 +522,19 @@ function PeoplePageContent() {
   }> = [
     {
       label: 'HR - Recruitment',
-      accessRole: 'MANAGER',
+      accessRole: 'MEMBER',
       dataScope: 'DEPARTMENT',
       perms: ['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:create', 'calendar:view:team'],
     },
     {
-      label: 'HR Generalist',
-      accessRole: 'MANAGER',
+      label: 'HR Specialist',
+      accessRole: 'MEMBER',
       dataScope: 'GLOBAL',
       perms: [
         'people:view',
         'people:edit',
         'people:manage',
+        'invitations:manage',
         'attendance:view',
         'attendance:edit',
         'leave:view',
@@ -473,16 +546,18 @@ function PeoplePageContent() {
     },
     {
       label: 'Payroll Specialist',
-      accessRole: 'MANAGER',
+      accessRole: 'MEMBER',
       dataScope: 'GLOBAL',
       perms: ['people:view', 'payroll:view', 'payroll:edit', 'payroll:approve', 'payroll:export', 'reports:view'],
     },
     {
-      label: 'Team Lead / Manager',
-      accessRole: 'MANAGER',
+      label: 'Team Lead',
+      accessRole: 'MEMBER',
       dataScope: 'TEAM',
       perms: [
         'people:view',
+        'invitations:manage',
+        'roles:manage',
         'projects:view',
         'projects:create',
         'projects:edit',
@@ -490,6 +565,7 @@ function PeoplePageContent() {
         'tasks:create',
         'tasks:edit',
         'tasks:assign',
+        'tasks:review',
         'leave:approve',
         'approvals:view',
         'approvals:approve',
@@ -514,39 +590,39 @@ function PeoplePageContent() {
     },
     {
       keywords: ['director', 'vp', 'vice president', 'head of', 'general manager', 'coo', 'cto', 'cfo', 'cpo'],
-      role: 'MANAGER',
+      role: 'MEMBER',
       scope: 'WORKSPACE',
       deptKeywords: ['management', 'executive', 'operations'],
       teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
-      label: 'Senior Leadership',
+      label: 'Department Head / Senior Leadership',
       description: 'Cross-functional leadership with enterprise-wide data access and operations management.',
     },
     {
-      keywords: ['operations manager', 'department manager', 'branch manager', 'delivery manager', 'program manager'],
-      role: 'MANAGER',
+      keywords: ['operations manager', 'department manager', 'branch manager', 'delivery manager', 'program manager', 'department head'],
+      role: 'MEMBER',
       scope: 'DEPARTMENT',
       deptKeywords: ['operations', 'general'],
       teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
-      label: 'Department Management',
+      label: 'Department Operations',
       description: 'Departmental oversight, approvals, and cross-team workflow orchestration.',
     },
     {
       keywords: ['hr', 'human resources', 'recruiter', 'people ops', 'talent', 'talent acquisition'],
-      role: 'ADMIN',
+      role: 'MEMBER',
       scope: 'DEPARTMENT',
       deptKeywords: ['hr', 'human', 'people'],
       teamKeywords: [] as ('personal' | 'employment' | 'access' | 'assets' | 'history' | 'offboarding')[],
-      label: 'HR & People Operations',
-      description: 'Organization administration, employee records, onboarding, and leave approvals.',
+      label: 'HR Specialist & People Ops',
+      description: 'Employee records, onboarding, leave approvals, and department-wide people operations.',
     },
     {
       keywords: ['tech lead', 'team lead', 'lead engineer', 'engineering lead', 'scrum master', 'lead developer', 'principal engineer', 'architect'],
-      role: 'MANAGER',
+      role: 'MEMBER',
       scope: 'TEAM',
       deptKeywords: ['tech', 'engineering', 'development', 'software', 'it'],
       teamKeywords: ['lead', 'core', 'engineering'],
-      label: 'Technical Team Lead',
-      description: 'Supervises squad work items, sprint tracking, and task delegation.',
+      label: 'Team Lead',
+      description: 'Supervises squad work items, sprint tracking, team invitations, and task delegation.',
     },
     {
       keywords: ['software engineer', 'developer', 'frontend', 'backend', 'fullstack', 'ios', 'android', 'mobile engineer', 'web developer', 'programmer'],
@@ -809,6 +885,53 @@ function PeoplePageContent() {
     );
   };
 
+  const buildGmailInviteUrl = (link: string, recipientEmail?: string, firstName?: string) => {
+    const fullUrl = normalizeInviteLink(link);
+    const orgName = activeWorkspace?.workspace?.name || 'our Orvexa workspace';
+    const subject = encodeURIComponent(`Invitation to join ${orgName} on Orvexa`);
+    const greeting = firstName ? `Hi ${firstName},` : 'Hi,';
+    const body = encodeURIComponent(
+      `${greeting}\n\nYou've been invited to join ${orgName} on Orvexa.\n\nClick the link below to accept your invitation and complete your profile setup:\n${fullUrl}\n\nBest regards`,
+    );
+    const toParam = recipientEmail ? `&to=${encodeURIComponent(recipientEmail)}` : '';
+    return `https://mail.google.com/mail/?view=cm&fs=1${toParam}&su=${subject}&body=${body}`;
+  };
+
+  const resolvePublicJoinUrl = () => {
+    const code = shareInviteLink?.code;
+    if (!code) return shareInviteLink?.joinUrl || '';
+    if (typeof window !== 'undefined') return `${window.location.origin}/join?code=${code}`;
+    return shareInviteLink?.joinUrl || '';
+  };
+
+  const copyShareJoinUrl = () => {
+    const url = resolvePublicJoinUrl();
+    if (!url) return;
+    navigator.clipboard.writeText(url).then(
+      () => toast.success('Shareable workspace join link copied!'),
+      () => toast.info(url),
+    );
+  };
+
+  const handleRegenerateShareLink = async () => {
+    setRegeneratingShareLink(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/workspaces/invite-link`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify({ regenerate: true }),
+      });
+      const raw = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(raw?.message || 'Failed to regenerate link');
+      setShareInviteLink(raw?.data !== undefined ? raw.data : raw);
+      toast.success('Fresh shareable workspace link generated!');
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to regenerate link');
+    } finally {
+      setRegeneratingShareLink(false);
+    }
+  };
+
   const refreshOrgOptions = async () => {
     const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
     const wsId = typeof window !== 'undefined' ? localStorage.getItem('activeWorkspaceId') : null;
@@ -844,7 +967,7 @@ function PeoplePageContent() {
     if (!token || !wsId) return;
     try {
       const activeHeaders = getHeaders();
-      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, meRes] = await Promise.all([
+      const [memRes, invRes, deptRes, desigRes, teamRes, roleRes, meRes, linkRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/people/invitations`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: activeHeaders }),
@@ -852,6 +975,7 @@ function PeoplePageContent() {
         fetch(`${BRANDING.apiUrl}/teams`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
+        fetch(`${BRANDING.apiUrl}/workspaces/invite-link`, { headers: activeHeaders }).catch(() => null),
       ]);
 
       const rawMem = await memRes.json();
@@ -861,6 +985,12 @@ function PeoplePageContent() {
       const rawTeam = await teamRes.json();
       const rawRole = await roleRes.json();
       const rawMe = await meRes.json();
+
+      if (linkRes && linkRes.ok) {
+        const rawLink = await linkRes.json().catch(() => null);
+        const linkPayload = rawLink?.data !== undefined ? rawLink.data : rawLink;
+        if (linkPayload?.code) setShareInviteLink(linkPayload);
+      }
 
       const memData = rawMem.data !== undefined ? rawMem.data : rawMem;
       const invData = rawInv.data !== undefined ? rawInv.data : rawInv;
@@ -1020,9 +1150,16 @@ function PeoplePageContent() {
   const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const baseCodes = getRolePermCodesByRoleId(inviteForm.roleId, inviteForm.accessRole);
+      const overrides =
+        invitePermCodes.length > 0 && baseCodes.length > 0
+          ? computePermissionOverrides(invitePermCodes, baseCodes)
+          : undefined;
       const payloadBody: any = {
         ...inviteForm,
+        scopedTeamIds: inviteForm.dataScope === 'TEAM' ? inviteForm.scopedTeamIds : [],
         ...(invitePermCodes.length > 0 ? { permissionCodes: invitePermCodes } : {}),
+        ...(overrides ? { permissionOverrides: overrides } : {}),
       };
       const res = await fetch(`${BRANDING.apiUrl}/people/invite`, {
         method: 'POST',
@@ -1074,6 +1211,7 @@ function PeoplePageContent() {
         designationTitle: '',
         reportsToId: '',
         dataScope: 'ASSIGNED',
+        scopedTeamIds: [],
       });
       loadData();
     } catch (err: any) {
@@ -1146,6 +1284,10 @@ function PeoplePageContent() {
           designationTitle: row.designationTitle || rowDesig?.title || bulkDefaults.designationTitle || undefined,
           reportsToId: bulkDefaults.reportsToId || undefined,
           dataScope: row.dataScope || rowDesig?.defaultDataScope || bulkDefaults.dataScope || 'ASSIGNED',
+          scopedTeamIds:
+            (row.dataScope || rowDesig?.defaultDataScope || bulkDefaults.dataScope || 'ASSIGNED') === 'TEAM'
+              ? bulkDefaults.scopedTeamIds
+              : [],
           ...(rowPerms && rowPerms.length > 0 ? { permissionCodes: rowPerms } : {}),
         };
       });
@@ -1344,7 +1486,8 @@ function PeoplePageContent() {
       designationId: m.designationId || m.designation?.id || '',
       designationTitle: m.designation?.title || '',
       reportsToId: m.reportsToId || m.reportsTo?.id || '',
-      dataScope: normalizeDataScopeValue(m.dataScope || 'ASSIGNED'),
+      dataScope: normalizeDataScopeValue(m.effectiveDataScope || m.dataScope || 'ASSIGNED'),
+      scopedTeamIds: Array.isArray(m.customScopedTeamIds) ? m.customScopedTeamIds : [],
 
       // Personal Details
       dateOfBirth: personal.dateOfBirth || extra.dateOfBirth || '',
@@ -1370,6 +1513,12 @@ function PeoplePageContent() {
       docPanCard: Boolean(idDocs.docPanCard ?? extra.docPanCard),
       docPassportPhoto: Boolean(idDocs.docPassportPhoto ?? extra.docPassportPhoto),
     });
+    const effectiveList = extractPermissionCodes({
+      ...m,
+      workspace: activeWorkspace?.workspace,
+    });
+    setEditPermCodes(effectiveList);
+    setShowEditPermEditor(false);
     setShowEditModal(true);
   };
 
@@ -1418,9 +1567,11 @@ function PeoplePageContent() {
     }
 
     try {
-      // 2. Save org & role details via API (only authorized for Owner, Admin, or permitted HR)
+      // 2. Save org & role details via API (only authorized for Owner, Admin, or permitted HR/Team Lead)
       if (canManagePeople) {
-        await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
+        const baseRoleCodes = getRolePermCodesByRoleId(editForm.roleId, editForm.accessRole);
+        const permOverrides = computePermissionOverrides(editPermCodes, baseRoleCodes);
+        const orgRes = await fetch(`${BRANDING.apiUrl}/people/${editingMember.id}/org-details`, {
           method: 'PATCH',
           headers: getHeaders(),
           body: JSON.stringify({
@@ -1435,8 +1586,18 @@ function PeoplePageContent() {
             designationTitle: editForm.designationTitle || undefined,
             reportsToId: editForm.reportsToId || null,
             dataScope: normalizeDataScopeValue(editForm.dataScope),
+            scopedTeamIds:
+              normalizeDataScopeValue(editForm.dataScope) === 'TEAM' ? editForm.scopedTeamIds : [],
+            permissionOverrides: permOverrides,
+            permissionCodes: editPermCodes,
           }),
         }).catch(() => null);
+        if (orgRes && !orgRes.ok) {
+          const errJson = await orgRes.json().catch(() => ({}));
+          if (errJson?.message) {
+            throw new Error(errJson.message);
+          }
+        }
       }
 
       // 3. Save profile & personal details via API
@@ -1471,6 +1632,13 @@ function PeoplePageContent() {
             },
             accessRole: editForm.accessRole,
             dataScope: normalizeDataScopeValue(editForm.dataScope),
+            effectiveDataScope: normalizeDataScopeValue(editForm.dataScope),
+            customScopedTeamIds:
+              normalizeDataScopeValue(editForm.dataScope) === 'TEAM' ? editForm.scopedTeamIds : [],
+            scopedTeamIds:
+              normalizeDataScopeValue(editForm.dataScope) === 'TEAM'
+                ? Array.from(new Set([editForm.teamId, ...editForm.scopedTeamIds].filter(Boolean)))
+                : [],
             reportsToId: editForm.reportsToId || null,
             reportsTo: members.find((rm: any) => rm.id === editForm.reportsToId) || null,
             designation: designations.find((d: any) => d.id === editForm.designationId) || { title: editForm.designationTitle || m.designation?.title || 'Unassigned' },
@@ -1546,7 +1714,13 @@ function PeoplePageContent() {
     const matchesDept = filterDept ? (m.departmentId === filterDept || m.department?.name === filterDept) : true;
     const matchesDesignation = filterDesignation ? (m.designationId === filterDesignation || m.designation?.title === filterDesignation) : true;
     const matchesTeam = filterTeam ? (m.teamId === filterTeam || m.team?.name === filterTeam) : true;
-    const matchesRole = filterRole ? m.accessRole === filterRole : true;
+    const matchesRole = filterRole
+      ? filterRole.startsWith('role:')
+        ? (m.roleId || m.role?.id) === filterRole.replace('role:', '')
+        : filterRole === 'STAFF'
+        ? m.accessRole !== 'OWNER' && m.accessRole !== 'ADMIN'
+        : m.accessRole === filterRole
+      : true;
 
     return matchesSearch && matchesDept && matchesDesignation && matchesTeam && matchesRole;
   }).sort((a, b) => {
@@ -1973,7 +2147,20 @@ function PeoplePageContent() {
                     </div>
                     <div>
                       <span className="text-muted-foreground block">Data Access Scope:</span>
-                      <span className="font-semibold text-foreground">{member.dataScope || 'ASSIGNED'}</span>
+                      <span className="font-semibold text-foreground">{member.effectiveDataScope || member.dataScope || 'ASSIGNED'}</span>
+                      {Array.isArray(member.scopedTeamIds) && member.scopedTeamIds.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {member.scopedTeamIds.map((tId: string) => {
+                            const matchedTeam = teams.find((rawT: any) => (rawT.id || rawT.data?.id) === tId);
+                            const tObj = matchedTeam?.data || matchedTeam;
+                            return (
+                              <Badge key={tId} variant="outline" className="text-[10px]">
+                                {tObj?.name || tId}
+                              </Badge>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <span className="text-muted-foreground block">Last Login:</span>
@@ -2238,10 +2425,19 @@ function PeoplePageContent() {
                   className="py-1.5 px-2.5 rounded-xl border border-input bg-background text-xs font-medium focus:ring-1 focus:ring-primary focus:outline-none cursor-pointer"
                 >
                   <option value="">All Roles</option>
-                  <option value="OWNER">Owner</option>
                   <option value="ADMIN">Admin</option>
+                  {/* LEGACY_ROLE_COMMENTED_OUT:
                   <option value="MANAGER">Manager</option>
                   <option value="MEMBER">Member</option>
+                  */}
+                  <option value="STAFF">Staff (All Roles)</option>
+                  {roles
+                    .filter((r: any) => !r.isSystemRole)
+                    .map((r: any) => (
+                      <option key={r.id} value={`role:${r.id}`}>
+                        {r.name}
+                      </option>
+                    ))}
                 </select>
               )}
               <Button
@@ -2418,10 +2614,12 @@ function PeoplePageContent() {
                           ) : (
                             <div className="flex flex-col items-start gap-1">
                               <Badge variant={m.accessRole === 'ADMIN' ? 'warning' : 'secondary'}>
-                                {m.accessRole}
+                                {getDisplayRoleLabel(m)}
                               </Badge>
-                              {m.role?.name && !m.role?.isSystemRole && (
-                                <span className="text-[10px] text-primary font-medium">{m.role.name}</span>
+                              {m.effectiveDataScope && m.effectiveDataScope !== 'ASSIGNED' && (
+                                <span className="text-[10px] text-muted-foreground font-mono">
+                                  Scope: {m.effectiveDataScope}
+                                </span>
                               )}
                             </div>
                           )}
@@ -2466,7 +2664,55 @@ function PeoplePageContent() {
 
       {/* TAB 2: Invitations */}
       {activeTab === 'invitations' && (
-        <Card className="border-border">
+        <div className="space-y-4">
+          {canInvite && (
+            <Card className="border-border bg-gradient-to-r from-primary/5 via-card to-blue-500/5">
+              <CardContent className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                    <Share2 className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-foreground">Shareable Workspace Invite Link</div>
+                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                      Share via Slack, WhatsApp, or Gmail. Joined members land on Profile Setup first before entering the workspace.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 flex-1 lg:max-w-xl justify-end">
+                  <input
+                    readOnly
+                    value={resolvePublicJoinUrl() || 'Loading invite link...'}
+                    onClick={(e) => (e.target as HTMLInputElement).select()}
+                    className="flex-1 min-w-[200px] rounded-md border border-input bg-background px-2.5 py-1.5 text-[11px] font-mono text-foreground"
+                  />
+                  <Button type="button" size="sm" variant="outline" className="h-8 text-xs gap-1" onClick={copyShareJoinUrl}>
+                    <Copy className="h-3.5 w-3.5" /> Copy
+                  </Button>
+                  <a
+                    href={buildGmailInviteUrl(resolvePublicJoinUrl())}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-md text-xs font-semibold border border-blue-500/30 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 h-8 px-3 gap-1.5"
+                  >
+                    <Mail className="h-3.5 w-3.5" /> Compose in Gmail
+                  </a>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 text-xs gap-1"
+                    disabled={regeneratingShareLink}
+                    onClick={handleRegenerateShareLink}
+                    title="Reset Shareable Link Code"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${regeneratingShareLink ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+          <Card className="border-border">
           <CardContent className="p-0">
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm border-collapse">
@@ -2496,12 +2742,9 @@ function PeoplePageContent() {
                         </td>
                         <td className="py-3 px-4">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <Badge variant="secondary" className="text-[10px]">{inv.accessRole}</Badge>
-                            {inv.role?.name && !inv.role?.isSystemRole && (
-                              <Badge variant="outline" className="text-[10px] border-primary/30 text-primary">
-                                {inv.role.name}
-                              </Badge>
-                            )}
+                            <Badge variant={inv.accessRole === 'ADMIN' ? 'warning' : 'secondary'} className="text-[10px]">
+                              {getDisplayRoleLabel(inv)}
+                            </Badge>
                             {inv.dataScope && (
                               <Badge variant="outline" className="text-[10px]">{inv.dataScope}</Badge>
                             )}
@@ -2611,6 +2854,7 @@ function PeoplePageContent() {
             </div>
           </CardContent>
         </Card>
+        </div>
       )}
         </>
       )}
@@ -2947,37 +3191,64 @@ function PeoplePageContent() {
                     </select>
                   </div>
                   <div>
-                    <label className="font-semibold text-foreground">Core Access Role *</label>
+                    <label className="font-semibold text-foreground">Organization Role *</label>
                     <select
-                      value={inviteForm.accessRole}
-                      onChange={(e) => setInviteForm({ ...inviteForm, accessRole: e.target.value })}
+                      value={
+                        inviteForm.roleId
+                          ? `custom:${inviteForm.roleId}`
+                          : inviteForm.accessRole === 'OWNER'
+                          ? 'OWNER'
+                          : inviteForm.accessRole === 'ADMIN'
+                          ? 'ADMIN'
+                          : 'STAFF'
+                      }
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === 'OWNER') {
+                          setInviteForm((prev) => ({ ...prev, accessRole: 'OWNER', roleId: '', dataScope: 'GLOBAL' }));
+                        } else if (val === 'ADMIN') {
+                          setInviteForm((prev) => ({ ...prev, accessRole: 'ADMIN', roleId: '', dataScope: 'GLOBAL' }));
+                          setInvitePermCodes(getRolePermCodesByRoleId(undefined, 'ADMIN'));
+                        } else if (val.startsWith('custom:')) {
+                          const rid = val.replace('custom:', '');
+                          const chosen = roles.find((r: any) => r.id === rid);
+                          const roleScope = normalizeDataScopeValue(chosen?.dataScope || 'ASSIGNED');
+                          const clampedScope = canAssignScope(roleScope) ? roleScope : actorDataScope;
+                          setInviteForm((prev) => ({
+                            ...prev,
+                            accessRole: 'MEMBER',
+                            roleId: rid,
+                            dataScope: clampedScope,
+                            scopedTeamIds: Array.isArray(chosen?.scopedTeamIds) ? chosen.scopedTeamIds : [],
+                          }));
+                          setInvitePermCodes(getRolePermCodesByRoleId(rid));
+                        } else {
+                          setInviteForm((prev) => ({ ...prev, accessRole: 'MEMBER', roleId: '' }));
+                          setInvitePermCodes([]);
+                        }
+                      }}
                       className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
                     >
+                      <option value="STAFF">Staff (Standard / Role-Based)</option>
+                      {/* LEGACY_ROLE_COMMENTED_OUT:
                       <option value="MEMBER">Member (Individual contributor)</option>
-                      <option value="MANAGER">Manager (Team &amp; operations management)</option>
-                      <option value="ADMIN">Admin (Organization administration)</option>
-                      <option value="OWNER">Owner (Organization ownership)</option>
+                      <option value="MANAGER">Manager (Team & operations management)</option>
+                      */}
+                      {roles
+                        .filter((r: any) => !r.isSystemRole && r.isActive !== false)
+                        .map((r: any) => (
+                          <option key={r.id} value={`custom:${r.id}`}>
+                            Staff Role: {r.name}
+                          </option>
+                        ))}
+                      {isCurrentUserOwnerOrAdmin && <option value="ADMIN">Admin (Organization administration)</option>}
+                      {currentUserRole === 'OWNER' && <option value="OWNER">Owner (Organization ownership)</option>}
                     </select>
                   </div>
                 </div>
 
-                {/* 6. Custom Role & Data Access Scope */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-semibold text-foreground">Custom Role Profile</label>
-                    <select
-                      value={inviteForm.roleId}
-                      onChange={(e) => setInviteForm({ ...inviteForm, roleId: e.target.value })}
-                      className="w-full rounded-md border border-input bg-background px-3 py-1.5 text-xs focus:ring-1 focus:ring-primary focus:outline-none mt-1"
-                    >
-                      <option value="">Auto from Designation / Base Role</option>
-                      {roles.map((r: any) => (
-                        <option key={r.id} value={r.id}>
-                          {r.name} {r.isSystemRole ? '(System)' : '(Custom)'}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                {/* 6. Data Access Scope */}
+                <div className="grid grid-cols-1 gap-3">
                   <div>
                     <label className="font-semibold text-foreground">Data Access Scope *</label>
                     <select
@@ -2987,9 +3258,9 @@ function PeoplePageContent() {
                     >
                       <option value="ASSIGNED">Assigned Records Only</option>
                       <option value="OWN">Own Records Only</option>
-                      <option value="TEAM">Assigned Team Records</option>
-                      <option value="DEPARTMENT">Assigned Department Records</option>
-                      <option value="GLOBAL">Entire Workspace Records</option>
+                      {canAssignScope('TEAM') && <option value="TEAM">Assigned Team Records</option>}
+                      {canAssignScope('DEPARTMENT') && <option value="DEPARTMENT">Assigned Department Records</option>}
+                      {canAssignScope('GLOBAL') && <option value="GLOBAL">Entire Workspace Records</option>}
                     </select>
                   </div>
                 </div>
@@ -3021,6 +3292,58 @@ function PeoplePageContent() {
                     </div>
                   </div>
                 </div>
+
+                {inviteForm.dataScope === 'TEAM' && teams.length > 0 && (
+                  <div className="p-2.5 rounded-lg border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-foreground">
+                        Customize Permitted Teams (Optional)
+                      </span>
+                      {inviteForm.scopedTeamIds.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setInviteForm({ ...inviteForm, scopedTeamIds: [] })}
+                          className="text-[10px] font-semibold text-primary hover:underline"
+                        >
+                          Assigned Team Only ({inviteForm.scopedTeamIds.length})
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      By default, Team scope includes their assigned Team above. Select extra teams below if they also oversee or collaborate with other teams.
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {teams.map((rawT) => {
+                        const t = rawT.data !== undefined ? rawT.data : rawT;
+                        const isPrimary = inviteForm.teamId === t.id;
+                        const isChecked = isPrimary || inviteForm.scopedTeamIds.includes(t.id);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            onClick={() => {
+                              if (isPrimary) return;
+                              setInviteForm((prev) => ({
+                                ...prev,
+                                scopedTeamIds: prev.scopedTeamIds.includes(t.id)
+                                  ? prev.scopedTeamIds.filter((id) => id !== t.id)
+                                  : [...prev.scopedTeamIds, t.id],
+                              }));
+                            }}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium transition-colors ${
+                              isChecked
+                                ? 'border-blue-600 bg-blue-600 text-white'
+                                : 'border-border bg-background text-foreground hover:border-blue-400'
+                            }`}
+                          >
+                            {isChecked && <Check className="h-3 w-3" />}
+                            <span>{t.name}{isPrimary ? ' (Primary)' : ''}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* 7. Granular Permissions Override inside Invitation */}
                 <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2.5">
@@ -3084,10 +3407,16 @@ function PeoplePageContent() {
                             <div className="space-y-1">
                               {grp.perms.map((p) => {
                                 const checked = invitePermCodes.includes(p.code);
+                                const allowedToAssign = canAssignPermCode(p.code);
                                 return (
-                                  <label key={p.code} className="flex items-center gap-2 cursor-pointer text-[11px]">
+                                  <label
+                                    key={p.code}
+                                    title={allowedToAssign ? p.label : 'Exceeds your own permission ceiling'}
+                                    className={`flex items-center gap-2 text-[11px] ${allowedToAssign ? 'cursor-pointer' : 'opacity-55 cursor-not-allowed'}`}
+                                  >
                                     <input
                                       type="checkbox"
+                                      disabled={!allowedToAssign}
                                       checked={checked}
                                       onChange={() =>
                                         setInvitePermCodes((prev) =>
@@ -3224,15 +3553,49 @@ function PeoplePageContent() {
                       </select>
                     </div>
                     <div>
-                      <label className="font-semibold text-foreground">Default Access Role</label>
+                      <label className="font-semibold text-foreground">Default Organization Role</label>
                       <select
-                        value={bulkDefaults.accessRole}
-                        onChange={(e) => setBulkDefaults({ ...bulkDefaults, accessRole: e.target.value })}
+                        value={
+                          bulkDefaults.roleId
+                            ? `custom:${bulkDefaults.roleId}`
+                            : bulkDefaults.accessRole === 'ADMIN'
+                            ? 'ADMIN'
+                            : 'STAFF'
+                        }
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          if (val === 'ADMIN') {
+                            setBulkDefaults((prev) => ({ ...prev, accessRole: 'ADMIN', roleId: '', dataScope: 'GLOBAL' }));
+                          } else if (val.startsWith('custom:')) {
+                            const rid = val.replace('custom:', '');
+                            const chosen = roles.find((r: any) => r.id === rid);
+                            const roleScope = normalizeDataScopeValue(chosen?.dataScope || 'ASSIGNED');
+                            setBulkDefaults((prev) => ({
+                              ...prev,
+                              accessRole: 'MEMBER',
+                              roleId: rid,
+                              dataScope: canAssignScope(roleScope) ? roleScope : actorDataScope,
+                            }));
+                            setBulkPermCodes(getRolePermCodesByRoleId(rid));
+                          } else {
+                            setBulkDefaults((prev) => ({ ...prev, accessRole: 'MEMBER', roleId: '' }));
+                          }
+                        }}
                         className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-xs mt-1"
                       >
+                        <option value="STAFF">Staff (Standard)</option>
+                        {/* LEGACY_ROLE_COMMENTED_OUT:
                         <option value="MEMBER">Member</option>
                         <option value="MANAGER">Manager</option>
-                        <option value="ADMIN">Admin</option>
+                        */}
+                        {roles
+                          .filter((r: any) => !r.isSystemRole && r.isActive !== false)
+                          .map((r: any) => (
+                            <option key={r.id} value={`custom:${r.id}`}>
+                              Staff Role: {r.name}
+                            </option>
+                          ))}
+                        {isCurrentUserOwnerOrAdmin && <option value="ADMIN">Admin</option>}
                       </select>
                     </div>
                     <div>
@@ -3244,9 +3607,9 @@ function PeoplePageContent() {
                       >
                         <option value="ASSIGNED">Assigned Records</option>
                         <option value="OWN">Own Records</option>
-                        <option value="TEAM">Team Records</option>
-                        <option value="DEPARTMENT">Department Records</option>
-                        <option value="GLOBAL">Entire Workspace</option>
+                        {canAssignScope('TEAM') && <option value="TEAM">Team Records</option>}
+                        {canAssignScope('DEPARTMENT') && <option value="DEPARTMENT">Department Records</option>}
+                        {canAssignScope('GLOBAL') && <option value="GLOBAL">Entire Workspace</option>}
                       </select>
                     </div>
                     <div>
@@ -3266,6 +3629,55 @@ function PeoplePageContent() {
                     </div>
                   </div>
 
+                  {bulkDefaults.dataScope === 'TEAM' && teams.length > 0 && (
+                    <div className="p-2.5 rounded-lg border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-foreground">
+                          Default Permitted Teams (Optional)
+                        </span>
+                        {bulkDefaults.scopedTeamIds.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => setBulkDefaults({ ...bulkDefaults, scopedTeamIds: [] })}
+                            className="text-[10px] font-semibold text-primary hover:underline"
+                          >
+                            Reset ({bulkDefaults.scopedTeamIds.length})
+                          </button>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {teams.map((rawT) => {
+                          const t = rawT.data !== undefined ? rawT.data : rawT;
+                          const isPrimary = bulkDefaults.teamId === t.id;
+                          const isChecked = isPrimary || bulkDefaults.scopedTeamIds.includes(t.id);
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                if (isPrimary) return;
+                                setBulkDefaults((prev) => ({
+                                  ...prev,
+                                  scopedTeamIds: prev.scopedTeamIds.includes(t.id)
+                                    ? prev.scopedTeamIds.filter((id) => id !== t.id)
+                                    : [...prev.scopedTeamIds, t.id],
+                                }));
+                              }}
+                              className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium transition-colors ${
+                                isChecked
+                                  ? 'border-blue-600 bg-blue-600 text-white'
+                                  : 'border-border bg-background text-foreground hover:border-blue-400'
+                              }`}
+                            >
+                              {isChecked && <Check className="h-3 w-3" />}
+                              <span>{t.name}{isPrimary ? ' (Primary)' : ''}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Collapsible Bulk Permission Overrides */}
                   <div className="pt-2 border-t border-border/60">
                     <button
@@ -3282,23 +3694,28 @@ function PeoplePageContent() {
                     {showBulkPermEditor && (
                       <div className="mt-2.5 space-y-2.5">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {INVITE_ROLE_PRESETS.map((preset) => (
-                            <button
-                              key={preset.label}
-                              type="button"
-                              onClick={() => {
-                                setBulkPermCodes(preset.perms);
-                                setBulkDefaults((prev) => ({
-                                  ...prev,
-                                  accessRole: preset.accessRole,
-                                  dataScope: preset.dataScope,
-                                }));
-                              }}
-                              className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary hover:bg-primary/15 font-medium"
-                            >
-                              {preset.label}
-                            </button>
-                          ))}
+                          {INVITE_ROLE_PRESETS.map((preset) => {
+                            const allowedPerms = isCurrentUserOwnerOrAdmin
+                              ? preset.perms
+                              : preset.perms.filter((code) => canAssignPermCode(code));
+                            return (
+                              <button
+                                key={preset.label}
+                                type="button"
+                                onClick={() => {
+                                  setBulkPermCodes(allowedPerms);
+                                  setBulkDefaults((prev) => ({
+                                    ...prev,
+                                    accessRole: isCurrentUserOwnerOrAdmin ? preset.accessRole : 'MEMBER',
+                                    dataScope: canAssignScope(preset.dataScope) ? preset.dataScope : actorDataScope,
+                                  }));
+                                }}
+                                className="text-[10px] px-2 py-0.5 rounded-full border border-primary/30 bg-primary/5 text-primary hover:bg-primary/15 font-medium"
+                              >
+                                {preset.label}
+                              </button>
+                            );
+                          })}
                           {bulkPermCodes.length > 0 && (
                             <button
                               type="button"
@@ -3315,16 +3732,25 @@ function PeoplePageContent() {
                               <div className="text-[10px] font-bold uppercase text-muted-foreground">{grp.module}</div>
                               {grp.perms.map((p) => {
                                 const checked = bulkPermCodes.includes(p.code);
+                                const isDisabled = !canAssignPermCode(p.code);
                                 return (
-                                  <label key={p.code} className="flex items-center gap-1.5 cursor-pointer text-[11px]">
+                                  <label
+                                    key={p.code}
+                                    className={`flex items-center gap-1.5 text-[11px] ${
+                                      isDisabled ? 'opacity-45 cursor-not-allowed' : 'cursor-pointer'
+                                    }`}
+                                    title={isDisabled ? 'Outside your permission ceiling' : undefined}
+                                  >
                                     <input
                                       type="checkbox"
                                       checked={checked}
-                                      onChange={() =>
+                                      disabled={isDisabled}
+                                      onChange={() => {
+                                        if (isDisabled) return;
                                         setBulkPermCodes((prev) =>
                                           checked ? prev.filter((c) => c !== p.code) : [...prev, p.code],
-                                        )
-                                      }
+                                        );
+                                      }}
                                       className="rounded border-border text-primary h-3.5 w-3.5"
                                     />
                                     <span>{p.label}</span>
@@ -4153,43 +4579,70 @@ function PeoplePageContent() {
                       <>
                         <div className="space-y-1.5">
                           <div className="flex items-center justify-between">
-                            <label className="font-semibold text-foreground text-xs sm:text-sm">System Access Role *</label>
+                            <label className="font-semibold text-foreground text-xs sm:text-sm">Organization Role *</label>
                             <Link
                               href="/app/settings?tab=roles"
                               className="text-xs text-primary hover:underline flex items-center gap-1 font-medium"
                             >
-                              <Shield className="h-3.5 w-3.5" /> View Roles in Settings
+                              <Shield className="h-3.5 w-3.5" /> Configure Roles in Settings
                             </Link>
                           </div>
                           <select
-                            value={editForm.accessRole}
-                            onChange={(e) => setEditForm({ ...editForm, accessRole: e.target.value })}
+                            value={
+                              editForm.roleId
+                                ? `custom:${editForm.roleId}`
+                                : editForm.accessRole === 'OWNER'
+                                ? 'OWNER'
+                                : editForm.accessRole === 'ADMIN'
+                                ? 'ADMIN'
+                                : 'STAFF'
+                            }
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val === 'OWNER') {
+                                setEditForm((prev) => ({ ...prev, accessRole: 'OWNER', roleId: '', dataScope: 'GLOBAL' }));
+                              } else if (val === 'ADMIN') {
+                                setEditForm((prev) => ({ ...prev, accessRole: 'ADMIN', roleId: '', dataScope: 'GLOBAL' }));
+                                setEditPermCodes(getRolePermCodesByRoleId(undefined, 'ADMIN'));
+                              } else if (val.startsWith('custom:')) {
+                                const rid = val.replace('custom:', '');
+                                const chosen = roles.find((r: any) => r.id === rid);
+                                const roleScope = normalizeDataScopeValue(chosen?.dataScope || editForm.dataScope || 'ASSIGNED');
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  accessRole: 'MEMBER',
+                                  roleId: rid,
+                                  dataScope: canAssignScope(roleScope) ? roleScope : actorDataScope,
+                                  scopedTeamIds: Array.isArray(chosen?.scopedTeamIds) ? chosen.scopedTeamIds : prev.scopedTeamIds,
+                                }));
+                                setEditPermCodes(getRolePermCodesByRoleId(rid));
+                              } else {
+                                setEditForm((prev) => ({ ...prev, accessRole: 'MEMBER', roleId: '' }));
+                                setEditPermCodes([]);
+                              }
+                            }}
                             className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
                           >
+                            <option value="STAFF">Staff (Standard / Custom Permission Profile)</option>
+                            {/* LEGACY_ROLE_COMMENTED_OUT:
                             <option value="MEMBER">Member (Individual Contributor / Software Engineer / Intern)</option>
                             <option value="MANAGER">Manager (Team Lead / Operations Manager / Approver)</option>
-                            <option value="ADMIN">Admin (People, Leaves, Attendance, Org Settings)</option>
-                            <option value="OWNER">Owner (Full Organization Root Authority)</option>
-                          </select>
-                        </div>
-
-                        {roles && roles.length > 0 && (
-                          <div className="space-y-1.5">
-                            <label className="font-semibold text-foreground text-xs sm:text-sm">Custom Role Policy</label>
-                            <select
-                              value={editForm.roleId}
-                              onChange={(e) => setEditForm({ ...editForm, roleId: e.target.value })}
-                              className="w-full rounded-md border border-input bg-background px-3.5 py-2 text-xs sm:text-sm focus:ring-2 focus:ring-primary/20 focus:border-primary focus:outline-none transition-all"
-                            >
-                              <option value="">Default (Derived from System Access Role)</option>
-                              {roles.map((r: any) => (
-                                <option key={r.id} value={r.id}>
-                                  {r.name} {r.isSystemRole ? '(System Role)' : '(Custom)'}
+                            */}
+                            {roles
+                              .filter((r: any) => !r.isSystemRole && r.isActive !== false)
+                              .map((r: any) => (
+                                <option key={r.id} value={`custom:${r.id}`}>
+                                  Staff Role: {r.name}
                                 </option>
                               ))}
-                            </select>
-                          </div>
-                        )}
+                            {isCurrentUserOwnerOrAdmin && (
+                              <option value="ADMIN">Admin (People, Leaves, Attendance, Org Settings)</option>
+                            )}
+                            {currentUserRole === 'OWNER' && (
+                              <option value="OWNER">Owner (Full Organization Root Authority)</option>
+                            )}
+                          </select>
+                        </div>
 
                         <div className="space-y-1.5">
                           <label className="font-semibold text-foreground text-xs sm:text-sm">Designation Title</label>
@@ -4300,18 +4753,156 @@ function PeoplePageContent() {
                             >
                               <option value="ASSIGNED">Assigned Records Only</option>
                               <option value="OWN">Own Records Only</option>
-                              <option value="TEAM">Assigned Team Records</option>
-                              <option value="DEPARTMENT">Assigned Department Records</option>
-                              <option value="GLOBAL">Entire Workspace Records</option>
+                              {canAssignScope('TEAM') && <option value="TEAM">Assigned Team Records</option>}
+                              {canAssignScope('DEPARTMENT') && <option value="DEPARTMENT">Assigned Department Records</option>}
+                              {canAssignScope('GLOBAL') && <option value="GLOBAL">Entire Workspace Records</option>}
                             </select>
                           </div>
                         </div>
+
+                        {normalizeDataScopeValue(editForm.dataScope) === 'TEAM' && teams.length > 0 && (
+                          <div className="p-3 rounded-lg border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-semibold text-foreground">
+                                Custom Permitted Teams (Data Access Scope)
+                              </span>
+                              {editForm.scopedTeamIds.length > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setEditForm({ ...editForm, scopedTeamIds: [] })}
+                                  className="text-[11px] font-semibold text-primary hover:underline"
+                                >
+                                  Reset to Assigned Team Only ({editForm.scopedTeamIds.length})
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              By default, Team Records scope restricts this user to their assigned team, any team they lead, and their direct reports. Select extra teams below to grant cross-team access.
+                            </p>
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {teams.map((rawT) => {
+                                const t = rawT.data !== undefined ? rawT.data : rawT;
+                                const isPrimary = editForm.teamId === t.id;
+                                const isLed = t.leadMembershipId === editingMember.id;
+                                const isChecked = isPrimary || isLed || editForm.scopedTeamIds.includes(t.id);
+                                return (
+                                  <button
+                                    key={t.id}
+                                    type="button"
+                                    onClick={() => {
+                                      if (isPrimary || isLed) return;
+                                      setEditForm((prev) => ({
+                                        ...prev,
+                                        scopedTeamIds: prev.scopedTeamIds.includes(t.id)
+                                          ? prev.scopedTeamIds.filter((id) => id !== t.id)
+                                          : [...prev.scopedTeamIds, t.id],
+                                      }));
+                                    }}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors ${
+                                      isChecked
+                                        ? 'border-blue-600 bg-blue-600 text-white'
+                                        : 'border-border bg-background text-foreground hover:border-blue-400'
+                                    }`}
+                                  >
+                                    {isChecked && <Check className="h-3 w-3" />}
+                                    <span>
+                                      {t.name}
+                                      {isPrimary ? ' (Primary)' : isLed ? ' (Lead)' : ''}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Per-Member Custom Permission Exceptions */}
+                        {editForm.accessRole !== 'OWNER' && (() => {
+                          const baseCodes = getRolePermCodesByRoleId(editForm.roleId, editForm.accessRole);
+                          const diff = computePermissionOverrides(editPermCodes, baseCodes);
+                          return (
+                            <div className="rounded-xl border border-border bg-muted/20 p-3 space-y-2.5">
+                              <button
+                                type="button"
+                                onClick={() => setShowEditPermEditor((prev) => !prev)}
+                                className="w-full flex items-center justify-between text-left"
+                              >
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <Sliders className="h-3.5 w-3.5 text-primary" />
+                                  <span className="font-semibold text-xs text-foreground">
+                                    Custom Permission Exceptions
+                                  </span>
+                                  <Badge variant="outline" className="text-[10px]">
+                                    {editPermCodes.length} active
+                                    {(diff.added.length > 0 || diff.revoked.length > 0) &&
+                                      ` (+${diff.added.length} / -${diff.revoked.length})`}
+                                  </Badge>
+                                </div>
+                                <ChevronDown
+                                  className={`h-4 w-4 text-muted-foreground transition-transform ${showEditPermEditor ? 'rotate-180' : ''}`}
+                                />
+                              </button>
+
+                              {showEditPermEditor && (
+                                <div className="pt-2 border-t border-border/60 space-y-2.5">
+                                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    <span className="text-[11px] text-muted-foreground">
+                                      Customize permissions for this person independently of org structure.
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditPermCodes(baseCodes)}
+                                      className="text-[10px] font-semibold text-primary hover:underline"
+                                    >
+                                      Reset to Role Defaults ({baseCodes.length})
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                                    {INVITE_PERMISSION_GROUPS.map((grp) => (
+                                      <div key={grp.module} className="p-2 rounded-lg border border-border/70 bg-background space-y-1.5">
+                                        <div className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                                          {grp.module}
+                                        </div>
+                                        <div className="space-y-1">
+                                          {grp.perms.map((p) => {
+                                            const checked = editPermCodes.includes(p.code);
+                                            const allowed = canAssignPermCode(p.code);
+                                            return (
+                                              <label
+                                                key={p.code}
+                                                title={allowed ? p.label : 'Exceeds your own permission ceiling'}
+                                                className={`flex items-center gap-2 text-[11px] ${allowed ? 'cursor-pointer' : 'opacity-55 cursor-not-allowed'}`}
+                                              >
+                                                <input
+                                                  type="checkbox"
+                                                  disabled={!allowed}
+                                                  checked={checked}
+                                                  onChange={() =>
+                                                    setEditPermCodes((prev) =>
+                                                      checked ? prev.filter((c) => c !== p.code) : [...prev, p.code],
+                                                    )
+                                                  }
+                                                  className="rounded border-border text-primary h-3.5 w-3.5"
+                                                />
+                                                <span className="text-foreground">{p.label}</span>
+                                              </label>
+                                            );
+                                          })}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         <div className="rounded-lg border border-border bg-muted/30 p-3 flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <Shield className="h-4 w-4 text-primary shrink-0" />
                             <p className="text-xs text-muted-foreground">
-                              Need custom granular permissions?
+                              Manage organization-wide role profiles?
                             </p>
                           </div>
                           <Link
@@ -4398,7 +4989,7 @@ function PeoplePageContent() {
                     className="w-full rounded-md border border-input bg-surface-secondary px-3 py-1.5 text-xs text-foreground select-all font-mono"
                     onClick={(e) => (e.target as HTMLInputElement).select()}
                   />
-                  <div className="flex gap-2 shrink-0">
+                  <div className="flex flex-wrap gap-2 shrink-0">
                     <Button
                       size="sm"
                       className="gap-1.5 shrink-0"
@@ -4406,6 +4997,14 @@ function PeoplePageContent() {
                     >
                       <Copy className="h-3.5 w-3.5" /> Copy
                     </Button>
+                    <a
+                      href={buildGmailInviteUrl(createdInviteInfo.link, createdInviteInfo.email)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center rounded-md text-xs font-semibold border border-blue-500/30 bg-blue-500/10 text-blue-600 hover:bg-blue-500/20 h-8 px-3 gap-1 shrink-0"
+                    >
+                      <Mail className="h-3.5 w-3.5" /> Compose in Gmail
+                    </a>
                     <a
                       href={normalizeInviteLink(createdInviteInfo.link)}
                       target="_blank"

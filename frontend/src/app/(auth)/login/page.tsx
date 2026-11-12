@@ -86,7 +86,10 @@ export default function LoginPage() {
       }
 
       toast.success('Welcome back to ' + BRANDING.name);
-      router.push('/app/home');
+      const needsProfileSetup =
+        payload.user?.profileSetupCompleted === false ||
+        memberships?.[0]?.profileSetupCompleted === false;
+      router.push(needsProfileSetup ? '/app/profile-setup' : '/app/home');
     } catch (err: any) {
       toast.error(err.message || 'Invalid credentials');
     } finally {
@@ -139,7 +142,10 @@ export default function LoginPage() {
       }
 
       toast.success('Two-factor verification successful! Welcome back.');
-      router.push('/app/home');
+      const needsProfileSetupMfa =
+        payload.user?.profileSetupCompleted === false ||
+        memberships?.[0]?.profileSetupCompleted === false;
+      router.push(needsProfileSetupMfa ? '/app/profile-setup' : '/app/home');
     } catch (err: any) {
       toast.error(err.message || 'Invalid code');
     } finally {

@@ -598,11 +598,25 @@ export class TimeService {
           departmentId: userContext.departmentId || 'unassigned',
         };
       } else if (scope === 'TEAM') {
-        // Manager / Team Lead Access: self, team members, or direct reports
+        // Manager / Team Lead Access: self, assigned/permitted team members, and direct reports
+        const allowedTeamIds = Array.from(
+          new Set(
+            [
+              ...(Array.isArray(userContext.scopedTeamIds) ? userContext.scopedTeamIds : []),
+              ...(userContext.teamId ? [userContext.teamId] : []),
+            ].filter(Boolean),
+          ),
+        );
+        const teamClause =
+          allowedTeamIds.length === 1
+            ? [{ teamId: allowedTeamIds[0] }]
+            : allowedTeamIds.length > 1
+            ? [{ teamId: { in: allowedTeamIds } }]
+            : [];
         where.membership = {
           OR: [
             { id: userContext.membershipId },
-            ...(userContext.teamId ? [{ teamId: userContext.teamId }] : []),
+            ...teamClause,
             { reportsToId: userContext.membershipId },
           ],
         };

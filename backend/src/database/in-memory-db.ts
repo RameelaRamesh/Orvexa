@@ -204,6 +204,8 @@ export class InMemoryDatabase {
       { code: 'tasks:edit', name: 'Update Task Progress & Details', module: 'Tasks' },
       { code: 'tasks:delete', name: 'Delete Tasks', module: 'Tasks' },
       { code: 'tasks:assign', name: 'Assign Tasks to Team Members', module: 'Tasks' },
+      { code: 'tasks:review', name: 'Review & Approve Work Deliverables', module: 'Tasks' },
+      { code: 'tasks:complete', name: 'Mark Tasks as Completed', module: 'Tasks' },
       { code: 'tasks:export', name: 'Export Tasks & Backlogs', module: 'Tasks' },
       { code: 'tasks:manage', name: 'Full Task Administration', module: 'Tasks' },
 
@@ -269,6 +271,7 @@ export class InMemoryDatabase {
       { code: 'payroll:manage', name: 'Full Payroll Administration', module: 'Payroll' },
 
       // Admin & Org
+      { code: 'requests:manage', name: 'Manage Service Requests & Queues', module: 'Approvals' },
       { code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
       { code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
       { code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },

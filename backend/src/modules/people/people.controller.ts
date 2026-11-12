@@ -38,6 +38,20 @@ export class PeopleController {
     return this.peopleService.acceptInvitation(dto);
   }
 
+  @Public()
+  @Get('join-link/verify')
+  async verifyJoinLink(@Query('code') code: string) {
+    return this.peopleService.verifyJoinLink(code);
+  }
+
+  @Public()
+  @Post('join-link/accept')
+  async acceptJoinLink(
+    @Body() dto: { code: string; email: string; password?: string; firstName: string; lastName?: string },
+  ) {
+    return this.peopleService.acceptJoinLink(dto);
+  }
+
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Get()
   async listMembers(
@@ -95,6 +109,7 @@ export class PeopleController {
   async inviteMember(
     @CurrentWorkspace() workspaceId: string,
     @CurrentUser('id') invitedByUserId: string,
+    @Req() req: any,
     @Body()
     body: {
       email: string;
@@ -108,10 +123,12 @@ export class PeopleController {
       designationTitle?: string;
       reportsToId?: string;
       dataScope?: string;
+      scopedTeamIds?: string[];
       permissionCodes?: string[];
+      permissionOverrides?: { added?: string[]; revoked?: string[] };
     },
   ) {
-    return this.peopleService.inviteMember(workspaceId, invitedByUserId, body);
+    return this.peopleService.inviteMember(workspaceId, invitedByUserId, body, req?.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
@@ -120,6 +137,7 @@ export class PeopleController {
   async inviteMembersBulk(
     @CurrentWorkspace() workspaceId: string,
     @CurrentUser('id') invitedByUserId: string,
+    @Req() req: any,
     @Body()
     body: {
       invitations: Array<{
@@ -134,16 +152,18 @@ export class PeopleController {
         designationTitle?: string;
         reportsToId?: string;
         dataScope?: string;
+        scopedTeamIds?: string[];
         permissionCodes?: string[];
+        permissionOverrides?: { added?: string[]; revoked?: string[] };
       }>;
     },
   ) {
-    return this.peopleService.inviteMembersBulk(workspaceId, invitedByUserId, body);
+    return this.peopleService.inviteMembersBulk(workspaceId, invitedByUserId, body, req?.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Post('invitations/:id/resend')
-  @RequirePermissions('invitations:manage')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
   async resendInvitation(
     @CurrentWorkspace() workspaceId: string,
     @CurrentUser('id') currentUserId: string,
@@ -154,7 +174,7 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Delete('invitations/:id/revoke')
-  @RequirePermissions('invitations:manage')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
   async revokeInvitation(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') invitationId: string,
@@ -164,7 +184,7 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Post('invitations/:id/revoke')
-  @RequirePermissions('invitations:manage')
+  @RequireAnyPermissions('invitations:manage', 'people:manage')
   async revokeInvitationPost(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') invitationId: string,
@@ -244,13 +264,14 @@ export class PeopleController {
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)
   @Patch(':id/org-details')
-  @RequireAnyPermissions('people:edit', 'people:manage')
+  @RequireAnyPermissions('people:edit', 'people:manage', 'roles:manage')
   async updateMemberOrgDetails(
     @CurrentWorkspace() workspaceId: string,
     @Param('id') membershipId: string,
+    @Req() req: any,
     @Body() body: any,
   ) {
-    return this.peopleService.updateMemberOrgDetails(workspaceId, membershipId, body);
+    return this.peopleService.updateMemberOrgDetails(workspaceId, membershipId, body, req?.userContext);
   }
 
   @UseGuards(JwtAuthGuard, TenantGuard, PermissionsGuard)

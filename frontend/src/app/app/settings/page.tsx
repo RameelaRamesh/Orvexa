@@ -61,10 +61,21 @@ import {
   VolumeX,
   Package,
   Search,
+  Share2,
+  Link2,
+  ExternalLink,
+  Mail,
+  Compass,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { UserAvatar } from '@/components/ui/user-avatar';
-import { DEFAULT_ENABLED_MODULES } from '@/lib/permissions';
+import {
+  DEFAULT_ENABLED_MODULES,
+  checkPermission,
+  extractPermissionCodes,
+  getDataScope,
+  PermissionContext,
+} from '@/lib/permissions';
 import {
   getNotificationPrefs,
   saveNotificationPrefs,
@@ -117,6 +128,8 @@ const DEFAULT_PERMISSIONS_CATALOG = [
   { id: 'perm_tasks_view', code: 'tasks:view', name: 'View Tasks & Taskboards', module: 'Tasks' },
   { id: 'perm_tasks_create', code: 'tasks:create', name: 'Create Tasks', module: 'Tasks' },
   { id: 'perm_tasks_edit', code: 'tasks:edit', name: 'Update Task Progress & Details', module: 'Tasks' },
+  { id: 'perm_tasks_review', code: 'tasks:review', name: 'Review & QA Completed Tasks', module: 'Tasks' },
+  { id: 'perm_tasks_complete', code: 'tasks:complete', name: 'Mark Assigned Tasks Complete', module: 'Tasks' },
   { id: 'perm_tasks_delete', code: 'tasks:delete', name: 'Delete Tasks', module: 'Tasks' },
   { id: 'perm_tasks_assign', code: 'tasks:assign', name: 'Assign Tasks to Team Members', module: 'Tasks' },
   { id: 'perm_tasks_export', code: 'tasks:export', name: 'Export Tasks & Backlogs', module: 'Tasks' },
@@ -211,6 +224,7 @@ const DEFAULT_SYSTEM_ROLES = [
       .filter((p) => p.code !== 'billing:manage')
       .map((p) => ({ permissionId: p.id, code: p.code, permission: p })),
   },
+  /* LEGACY_ROLE_COMMENTED_OUT: MANAGER and MEMBER hidden in favor of custom staff organization roles
   {
     id: 'role_manager',
     name: 'MANAGER',
@@ -259,6 +273,7 @@ const DEFAULT_SYSTEM_ROLES = [
       return { permissionId: p?.id || code, code, permission: p };
     }),
   },
+  */
   {
     id: 'role_owner',
     name: 'OWNER',
@@ -269,6 +284,15 @@ const DEFAULT_SYSTEM_ROLES = [
     permissions: DEFAULT_PERMISSIONS_CATALOG.map((p) => ({ permissionId: p.id, code: p.code, permission: p })),
   },
 ];
+
+const DATA_SCOPE_ORDER_MAP: Record<string, number> = {
+  OWN: 1,
+  ASSIGNED: 1,
+  TEAM: 2,
+  DEPARTMENT: 3,
+  GLOBAL: 4,
+  WORKSPACE: 4,
+};
 
 const MODULE_DISPLAY_ORDER: Record<string, number> = {
   Assets: 1,
@@ -342,37 +366,37 @@ const DESIGNATION_PERMISSION_PRESETS: Array<{
   {
     label: 'HR - Recruitment',
     titleHint: 'Focused on hiring, invitations, onboarding, and directory profiles',
-    accessRole: 'MANAGER',
+    accessRole: 'MEMBER',
     dataScope: 'DEPARTMENT',
     permissionCodes: ['people:view', 'people:create', 'invitations:manage', 'departments:manage', 'calendar:view:all', 'calendar:create'],
   },
   {
     label: 'HR Generalist',
     titleHint: 'Handles employee records, leave approvals, attendance, and onboarding',
-    accessRole: 'MANAGER',
+    accessRole: 'MEMBER',
     dataScope: 'GLOBAL',
-    permissionCodes: ['people:view', 'people:create', 'people:edit', 'leave:view', 'leave:approve', 'leave:manage', 'attendance:view', 'attendance:edit', 'approvals:view', 'approvals:approve'],
+    permissionCodes: ['people:view', 'people:create', 'people:edit', 'invitations:manage', 'leave:view', 'leave:approve', 'leave:manage', 'attendance:view', 'attendance:edit', 'approvals:view', 'approvals:approve'],
   },
   {
     label: 'Payroll Specialist',
     titleHint: 'Processes salary runs, deductions, and compensation exports',
-    accessRole: 'MANAGER',
+    accessRole: 'MEMBER',
     dataScope: 'GLOBAL',
     permissionCodes: ['payroll:view', 'payroll:edit', 'payroll:export', 'attendance:view', 'leave:view', 'people:view', 'reports:view'],
   },
   {
-    label: 'Team Lead / Manager',
-    titleHint: 'Leads project delivery, task assignments, timesheet & leave approvals',
-    accessRole: 'MANAGER',
+    label: 'Team Lead',
+    titleHint: 'Leads project delivery, task assignments, timesheet & leave approvals (optionally delegated setup)',
+    accessRole: 'MEMBER',
     dataScope: 'TEAM',
-    permissionCodes: ['projects:view', 'projects:create', 'projects:edit', 'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'time:view', 'time:approve', 'leave:view', 'leave:approve', 'people:view', 'calendar:view:team', 'calendar:create'],
+    permissionCodes: ['projects:view', 'projects:create', 'projects:edit', 'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:assign', 'tasks:review', 'time:view', 'time:approve', 'leave:view', 'leave:approve', 'people:view', 'invitations:manage', 'roles:manage', 'calendar:view:team', 'calendar:create'],
   },
   {
-    label: 'Standard Member',
+    label: 'Staff / Specialist',
     titleHint: 'General employee access for tasks, timesheets, attendance & leave requests',
     accessRole: 'MEMBER',
-    dataScope: 'OWN',
-    permissionCodes: ['projects:view', 'tasks:view', 'tasks:create', 'tasks:edit', 'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply', 'people:view'],
+    dataScope: 'ASSIGNED',
+    permissionCodes: ['projects:view', 'tasks:view', 'tasks:create', 'tasks:edit', 'tasks:complete', 'time:view', 'time:log', 'attendance:view', 'attendance:clock', 'leave:view', 'leave:apply', 'people:view'],
   },
 ];
 
@@ -387,12 +411,14 @@ export default function SettingsPage() {
   const [selectedPermModule, setSelectedPermModule] = useState<string>('Assets');
   const [draftRolePermIds, setDraftRolePermIds] = useState<string[]>([]);
   const [draftRoleDataScope, setDraftRoleDataScope] = useState<string>('GLOBAL');
+  const [draftRoleScopedTeamIds, setDraftRoleScopedTeamIds] = useState<string[]>([]);
   const [rolePermsDirty, setRolePermsDirty] = useState(false);
   const [savingRolePerms, setSavingRolePerms] = useState(false);
   const [resettingRole, setResettingRole] = useState(false);
   const [showCreateRoleModal, setShowCreateRoleModal] = useState(false);
   const [newRoleCopyFromId, setNewRoleCopyFromId] = useState('');
   const [newRoleDataScope, setNewRoleDataScope] = useState<'OWN' | 'ASSIGNED' | 'TEAM' | 'DEPARTMENT' | 'GLOBAL'>('DEPARTMENT');
+  const [newRoleScopedTeamIds, setNewRoleScopedTeamIds] = useState<string[]>([]);
   const [copyFromMenuOpen, setCopyFromMenuOpen] = useState(false);
   const [roleMembers, setRoleMembers] = useState<any[]>([]);
   const [loadingRoleMembers, setLoadingRoleMembers] = useState(false);
@@ -414,7 +440,37 @@ export default function SettingsPage() {
     } catch {}
     return 'MEMBER';
   });
+  const [activeWorkspaceCtx, setActiveWorkspaceCtx] = useState<PermissionContext | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      const cached = localStorage.getItem('orvexa_cached_workspace');
+      return cached ? JSON.parse(cached) : null;
+    } catch {
+      return null;
+    }
+  });
   const isOwnerOrAdmin = currentUserRole === 'OWNER' || currentUserRole === 'ADMIN';
+  const canManageRoles = isOwnerOrAdmin || checkPermission(activeWorkspaceCtx, 'roles:manage');
+  const canManageInvites =
+    isOwnerOrAdmin ||
+    checkPermission(activeWorkspaceCtx, 'invitations:manage') ||
+    checkPermission(activeWorkspaceCtx, 'people:manage');
+  const actorDataScope = getDataScope(activeWorkspaceCtx);
+  const actorDataScopeRank = DATA_SCOPE_ORDER_MAP[(actorDataScope || 'ASSIGNED').toUpperCase()] ?? 2;
+
+  // Shareable workspace invite link state
+  const [shareInviteLink, setShareInviteLink] = useState<{
+    code?: string;
+    enabled?: boolean;
+    joinUrl?: string;
+    workspaceName?: string;
+    defaultRoleId?: string | null;
+    defaultDepartmentId?: string | null;
+    defaultTeamId?: string | null;
+    defaultDesignationTitle?: string | null;
+    defaultDataScope?: string;
+  } | null>(null);
+  const [savingShareLink, setSavingShareLink] = useState(false);
 
   // Loading states
   const [loading, setLoading] = useState(true);
@@ -691,6 +747,7 @@ export default function SettingsPage() {
   const [newDeptCode, setNewDeptCode] = useState('');
   const [newTeamName, setNewTeamName] = useState('');
   const [newTeamDeptId, setNewTeamDeptId] = useState('');
+  const [newTeamLeadId, setNewTeamLeadId] = useState('');
   const [newDesigTitle, setNewDesigTitle] = useState('');
   const [newDesigLevel, setNewDesigLevel] = useState(1);
   const [newDesigDeptId, setNewDesigDeptId] = useState('');
@@ -708,6 +765,7 @@ export default function SettingsPage() {
   const [editingTeamId, setEditingTeamId] = useState<string | null>(null);
   const [editTeamName, setEditTeamName] = useState('');
   const [editTeamDeptId, setEditTeamDeptId] = useState('');
+  const [editTeamLeadId, setEditTeamLeadId] = useState('');
   const [savingTeam, setSavingTeam] = useState(false);
 
   const [editingDesigId, setEditingDesigId] = useState<string | null>(null);
@@ -770,7 +828,7 @@ export default function SettingsPage() {
         ...(currentWsId && currentWsId !== 'undefined' ? { 'x-workspace-id': currentWsId } : {}),
       };
 
-      const [wsRes, rolesRes, permsRes, deptsRes, teamsRes, desigRes, subRes, planRes, meRes, peopleRes, notifPrefsRes] = await Promise.all([
+      const [wsRes, rolesRes, permsRes, deptsRes, teamsRes, desigRes, subRes, planRes, meRes, peopleRes, notifPrefsRes, inviteLinkRes] = await Promise.all([
         currentWsId ? fetch(`${BRANDING.apiUrl}/workspaces/${currentWsId}`, { headers: activeHeaders }) : Promise.resolve(null),
         fetch(`${BRANDING.apiUrl}/roles`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/roles/permissions`, { headers: activeHeaders }),
@@ -782,6 +840,7 @@ export default function SettingsPage() {
         fetch(`${BRANDING.apiUrl}/auth/me`, { headers: activeHeaders }),
         fetch(`${BRANDING.apiUrl}/people`, { headers: activeHeaders }).catch(() => null),
         fetch(`${BRANDING.apiUrl}/notifications/preferences`, { headers: activeHeaders }).catch(() => null),
+        fetch(`${BRANDING.apiUrl}/workspaces/invite-link`, { headers: activeHeaders }).catch(() => null),
       ]);
 
       let resolvedUid = '';
@@ -798,6 +857,13 @@ export default function SettingsPage() {
           if (meData.avatarUrl || meData.avatar) setPersonalAvatar(meData.avatarUrl || meData.avatar);
           const activeMem = meData.memberships?.find((m: any) => m.workspaceId === currentWsId) || meData.memberships?.[0];
           if (activeMem?.accessRole) setCurrentUserRole(activeMem.accessRole);
+          if (activeMem) {
+            setActiveWorkspaceCtx((prev) => ({
+              ...(prev || {}),
+              ...activeMem,
+              workspace: activeMem.workspace || prev?.workspace,
+            }));
+          }
           if (activeMem?.designation?.title) {
             setPersonalDesignation(activeMem.designation.title);
           } else if (activeMem?.role?.name) {
@@ -833,6 +899,7 @@ export default function SettingsPage() {
         const wsData = rawWs.data !== undefined ? rawWs.data : rawWs;
         if (wsData && wsData.id) {
           setWorkspace(wsData);
+          setActiveWorkspaceCtx((prev) => (prev ? { ...prev, workspace: wsData } : { workspace: wsData }));
           setName(wsData.name || '');
           setBusinessType(wsData.businessType || 'GENERAL');
           if (wsData.settings) {
@@ -849,6 +916,14 @@ export default function SettingsPage() {
         }
       }
 
+      if (inviteLinkRes && inviteLinkRes.ok) {
+        const rawLink = await inviteLinkRes.json();
+        const linkData = rawLink?.data !== undefined ? rawLink.data : rawLink;
+        if (linkData && linkData.code) {
+          setShareInviteLink(linkData);
+        }
+      }
+
       if (peopleRes && peopleRes.ok) {
         const rawPeople = await peopleRes.json();
         const peopleList = rawPeople?.data !== undefined ? rawPeople.data : rawPeople;
@@ -860,8 +935,14 @@ export default function SettingsPage() {
       const rawRoles = await rolesRes.json();
       const rolesData = rawRoles.data !== undefined ? rawRoles.data : rawRoles;
       if (Array.isArray(rolesData)) {
-        const systemOrder = ['ADMIN', 'MANAGER', 'MEMBER', 'OWNER'];
-        const sorted = [...rolesData].sort((a, b) => {
+        // LEGACY_ROLE_COMMENTED_OUT: Keep only ADMIN and OWNER from system roles + all custom staff organization roles
+        // const systemOrder = ['ADMIN', 'MANAGER', 'MEMBER', 'OWNER'];
+        const systemOrder = ['ADMIN', 'OWNER'];
+        const filteredRoles = rolesData.filter((r) => {
+          const upper = (r.name || '').toUpperCase();
+          return !(r.isSystemRole && (upper === 'MANAGER' || upper === 'MEMBER'));
+        });
+        const sorted = [...filteredRoles].sort((a, b) => {
           const aIndex = systemOrder.indexOf(a.name);
           const bIndex = systemOrder.indexOf(b.name);
           if (aIndex !== -1 && bIndex !== -1) return aIndex - bIndex;
@@ -873,7 +954,8 @@ export default function SettingsPage() {
         setSelectedRoleId((prev) => {
           const found = sorted.find((r) => r.id === prev);
           if (found) return prev;
-          const adminRole = sorted.find((r) => r.name === 'ADMIN') || sorted[0];
+          const customRole = !isOwnerOrAdmin ? sorted.find((r) => !r.isSystemRole) : null;
+          const adminRole = customRole || sorted.find((r) => r.name === 'ADMIN') || sorted[0];
           return adminRole ? adminRole.id : null;
         });
       }
@@ -1168,6 +1250,57 @@ export default function SettingsPage() {
     } catch {}
   };
 
+  const handleUpdateShareLink = async (patch: {
+    enabled?: boolean;
+    regenerate?: boolean;
+    defaultRoleId?: string | null;
+    defaultDepartmentId?: string | null;
+    defaultTeamId?: string | null;
+    defaultDesignationTitle?: string | null;
+    defaultDataScope?: string;
+  }) => {
+    setSavingShareLink(true);
+    try {
+      const res = await fetch(`${BRANDING.apiUrl}/workspaces/invite-link`, {
+        method: 'PATCH',
+        headers: getHeaders(),
+        body: JSON.stringify(patch),
+      });
+      const raw = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(raw?.message || 'Failed to update invite link');
+      const data = raw?.data !== undefined ? raw.data : raw;
+      setShareInviteLink(data);
+      toast.success(
+        patch.regenerate
+          ? 'Generated a fresh workspace invite link!'
+          : 'Shareable invite link settings updated.',
+      );
+    } catch (err: any) {
+      toast.error(err?.message || 'Could not update shareable invite link');
+    } finally {
+      setSavingShareLink(false);
+    }
+  };
+
+  const resolvePublicJoinUrl = () => {
+    const code = shareInviteLink?.code;
+    if (!code) return shareInviteLink?.joinUrl || '';
+    if (typeof window !== 'undefined') {
+      return `${window.location.origin}/join?code=${code}`;
+    }
+    return shareInviteLink?.joinUrl || '';
+  };
+
+  const buildGmailInviteHref = () => {
+    const joinUrl = resolvePublicJoinUrl();
+    const orgName = name || workspace?.name || 'our Orvexa workspace';
+    const subject = encodeURIComponent(`Join ${orgName} on Orvexa`);
+    const body = encodeURIComponent(
+      `Hi,\n\nYou're invited to join ${orgName} on Orvexa.\n\nUse this workspace invite link to create or link your account and set up your profile:\n${joinUrl}\n\nLooking forward to working together!`,
+    );
+    return `https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`;
+  };
+
   // Helper: Resolve effective catalog & permission IDs for a role
   const effectiveCatalog = allPermissions.length > 0 ? allPermissions : DEFAULT_PERMISSIONS_CATALOG;
 
@@ -1187,6 +1320,7 @@ export default function SettingsPage() {
   const resolveRoleDataScope = (role: any): string => {
     if (!role) return 'GLOBAL';
     if (role.name === 'OWNER') return 'GLOBAL';
+    if (role.dataScope) return role.dataScope;
     const configured = workspace?.settings?.roleDataScopes?.[role.id];
     if (configured) return configured;
     if (role.name === 'ADMIN') return 'GLOBAL';
@@ -1195,11 +1329,19 @@ export default function SettingsPage() {
     return 'DEPARTMENT';
   };
 
+  const resolveRoleScopedTeams = (role: any): string[] => {
+    if (!role) return [];
+    if (Array.isArray(role.scopedTeamIds)) return role.scopedTeamIds;
+    const configured = workspace?.settings?.roleScopedTeams?.[role.id];
+    return Array.isArray(configured) ? configured : [];
+  };
+
   useEffect(() => {
     const role = roles.find((r) => r.id === selectedRoleId) || roles[0];
     if (role) {
       setDraftRolePermIds(extractRolePermissionIds(role));
       setDraftRoleDataScope(resolveRoleDataScope(role));
+      setDraftRoleScopedTeamIds(resolveRoleScopedTeams(role));
       setRolePermsDirty(false);
     }
   }, [selectedRoleId, roles.length, workspace?.id]);
@@ -1237,6 +1379,7 @@ export default function SettingsPage() {
           description: newRoleDesc.trim(),
           copyFromRoleId: newRoleCopyFromId || undefined,
           dataScope: newRoleDataScope,
+          scopedTeamIds: newRoleDataScope === 'TEAM' ? newRoleScopedTeamIds : [],
         }),
       });
       const data = await res.json();
@@ -1246,6 +1389,7 @@ export default function SettingsPage() {
       setNewRoleName('');
       setNewRoleDesc('');
       setNewRoleCopyFromId('');
+      setNewRoleScopedTeamIds([]);
       setShowCreateRoleModal(false);
       await loadAllData();
       if (newRole?.id) {
@@ -1293,6 +1437,7 @@ export default function SettingsPage() {
   const handleSaveRolePermissions = async () => {
     if (!selectedRoleObj || selectedRoleObj.name === 'OWNER') return;
     setSavingRolePerms(true);
+    const effectiveScopedTeams = draftRoleDataScope === 'TEAM' ? draftRoleScopedTeamIds : [];
     try {
       const res = await fetch(`${BRANDING.apiUrl}/roles/${selectedRoleObj.id}/permissions`, {
         method: 'PATCH',
@@ -1300,6 +1445,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           permissionIds: draftRolePermIds,
           dataScope: draftRoleDataScope,
+          scopedTeamIds: effectiveScopedTeams,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -1310,6 +1456,8 @@ export default function SettingsPage() {
           r.id === selectedRoleObj.id
             ? {
                 ...r,
+                dataScope: draftRoleDataScope,
+                scopedTeamIds: effectiveScopedTeams,
                 permissions: draftRolePermIds.map((id) => {
                   const found = effectiveCatalog.find((c) => c.id === id);
                   return { permissionId: id, code: found?.code, permission: found };
@@ -1327,6 +1475,10 @@ export default function SettingsPage() {
                 roleDataScopes: {
                   ...(prev.settings?.roleDataScopes || {}),
                   [selectedRoleObj.id]: draftRoleDataScope,
+                },
+                roleScopedTeams: {
+                  ...(prev.settings?.roleScopedTeams || {}),
+                  [selectedRoleObj.id]: effectiveScopedTeams,
                 },
               },
             }
@@ -1347,6 +1499,7 @@ export default function SettingsPage() {
     if (!source) return;
     setDraftRolePermIds(extractRolePermissionIds(source));
     setDraftRoleDataScope(resolveRoleDataScope(source));
+    setDraftRoleScopedTeamIds(resolveRoleScopedTeams(source));
     setRolePermsDirty(true);
     setCopyFromMenuOpen(false);
     toast.info(`Copied permissions from ${source.name}. Click "Save Changes" to apply.`);
@@ -1357,6 +1510,7 @@ export default function SettingsPage() {
     if (rolePermsDirty && !selectedRoleObj.isSystemRole) {
       setDraftRolePermIds(extractRolePermissionIds(selectedRoleObj));
       setDraftRoleDataScope(resolveRoleDataScope(selectedRoleObj));
+      setDraftRoleScopedTeamIds(resolveRoleScopedTeams(selectedRoleObj));
       setRolePermsDirty(false);
       toast.info('Reverted unsaved changes');
       return;
@@ -1572,13 +1726,27 @@ export default function SettingsPage() {
       const res = await fetch(`${BRANDING.apiUrl}/teams`, {
         method: 'POST',
         headers: getHeaders(),
-        body: JSON.stringify({ name: newTeamName.trim(), departmentId: newTeamDeptId || undefined }),
+        body: JSON.stringify({
+          name: newTeamName.trim(),
+          departmentId: newTeamDeptId || undefined,
+          leadMembershipId: newTeamLeadId || undefined,
+        }),
       });
       if (!res.ok) throw new Error('Failed to add team');
       const data = await res.json();
       const newTeam = data.data !== undefined ? data.data : data;
-      setTeams([...teams, newTeam]);
+      const matchingDept = departments.find((d) => (d.id || d.data?.id) === newTeamDeptId);
+      const matchingLead = directoryMembers.find((m) => m.id === newTeamLeadId);
+      setTeams([
+        ...teams,
+        {
+          ...newTeam,
+          department: newTeam.department || (matchingDept ? (matchingDept.data !== undefined ? matchingDept.data : matchingDept) : undefined),
+          leadMembership: newTeam.leadMembership || matchingLead || undefined,
+        },
+      ]);
       setNewTeamName('');
+      setNewTeamLeadId('');
       toast.success('Team created');
     } catch (err: any) {
       toast.error(err.message || 'Error creating team');
@@ -1601,12 +1769,14 @@ export default function SettingsPage() {
     setEditingTeamId(team.id);
     setEditTeamName(team.name || '');
     setEditTeamDeptId(team.departmentId || team.department?.id || '');
+    setEditTeamLeadId(team.leadMembershipId || team.leadMembership?.id || '');
   };
 
   const cancelEditTeam = () => {
     setEditingTeamId(null);
     setEditTeamName('');
     setEditTeamDeptId('');
+    setEditTeamLeadId('');
   };
 
   const handleSaveTeam = async (id: string) => {
@@ -1622,12 +1792,14 @@ export default function SettingsPage() {
         body: JSON.stringify({
           name: editTeamName.trim(),
           departmentId: editTeamDeptId || null,
+          leadMembershipId: editTeamLeadId || null,
         }),
       });
       if (!res.ok) throw new Error('Failed to update team');
       const data = await res.json();
       const updated = data.data !== undefined ? data.data : data;
       const matchingDept = departments.find((d) => (d.id || d.data?.id) === editTeamDeptId);
+      const matchingLead = directoryMembers.find((m) => m.id === editTeamLeadId);
       setTeams((prev) =>
         prev.map((t) => {
           const tid = t.id || t.data?.id;
@@ -1636,7 +1808,9 @@ export default function SettingsPage() {
               ...(t.data !== undefined ? t.data : t),
               name: editTeamName.trim(),
               departmentId: editTeamDeptId || null,
+              leadMembershipId: editTeamLeadId || null,
               department: matchingDept ? (matchingDept.data !== undefined ? matchingDept.data : matchingDept) : null,
+              leadMembership: matchingLead || null,
               ...(updated && typeof updated === 'object' ? updated : {}),
             };
           }
@@ -2041,8 +2215,12 @@ export default function SettingsPage() {
     if (!roleName) return 'Role';
     const upper = roleName.toUpperCase();
     if (upper === 'ADMIN') return 'Admin';
+    /* LEGACY_ROLE_COMMENTED_OUT:
     if (upper === 'MANAGER') return 'Manager';
     if (upper === 'MEMBER') return 'Member';
+    */
+    if (upper === 'MANAGER') return 'Staff Lead (Legacy)';
+    if (upper === 'MEMBER') return 'Staff';
     if (upper === 'OWNER') return 'Owner';
     return roleName;
   };
@@ -2112,7 +2290,7 @@ export default function SettingsPage() {
         >
           <Network className="h-3.5 w-3.5" /> Organization Structure
         </button>
-        {isOwnerOrAdmin && (
+        {canManageRoles && (
           <button
             onClick={() => setActiveTab('roles')}
             className={`flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-xs font-semibold transition-all ${
@@ -2452,7 +2630,7 @@ export default function SettingsPage() {
                       </CardDescription>
                     </div>
                   </div>
-                  {isOwnerOrAdmin && (
+                  {canManageRoles && (
                     <button
                       type="button"
                       onClick={() => setActiveTab('roles')}
@@ -2471,7 +2649,7 @@ export default function SettingsPage() {
                         key={r.id}
                         type="button"
                         onClick={() => {
-                          if (isOwnerOrAdmin) {
+                          if (canManageRoles) {
                             setSelectedRoleId(r.id);
                             setActiveTab('roles');
                           }
@@ -2495,7 +2673,7 @@ export default function SettingsPage() {
                           <span className="h-6 min-w-6 px-1.5 rounded-md bg-muted text-foreground text-[11px] font-bold flex items-center justify-center">
                             {memberCount}
                           </span>
-                          {isOwnerOrAdmin && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                          {canManageRoles && <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
                         </div>
                       </button>
                     );
@@ -2507,7 +2685,7 @@ export default function SettingsPage() {
                   <Users className="h-3.5 w-3.5" />
                   {roles.length} Roles • {allMembersList.length} Assigned Members
                 </span>
-                {isOwnerOrAdmin && (
+                {canManageRoles && (
                   <button
                     type="button"
                     onClick={() => setActiveTab('roles')}
@@ -2536,7 +2714,7 @@ export default function SettingsPage() {
                   </p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
                 <Link href="/app/people?invite=1">
                   <Button size="sm" variant="outline" className="text-xs h-8 gap-1.5">
                     <Plus className="h-3.5 w-3.5" /> Invite Member
@@ -2550,6 +2728,193 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* Shareable Workspace Link & Setup Wizard Launcher */}
+          <div className="grid gap-5 lg:grid-cols-2">
+            {canManageInvites && (
+              <Card className="border-border shadow-xs">
+                <CardHeader className="pb-3 flex flex-row items-start justify-between gap-2 space-y-0">
+                  <div className="flex items-start gap-2.5">
+                    <div className="h-9 w-9 rounded-lg bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                      <Share2 className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <CardTitle className="text-sm font-bold text-foreground">Shareable Workspace Invite Link</CardTitle>
+                      <CardDescription className="text-[11px] mt-0.5">
+                        Anyone joining with this link lands on Profile Setup first and gets placed automatically.
+                      </CardDescription>
+                    </div>
+                  </div>
+                  {shareInviteLink && (
+                    <Badge variant={shareInviteLink.enabled !== false ? 'default' : 'secondary'} className="text-[10px]">
+                      {shareInviteLink.enabled !== false ? 'Active' : 'Paused'}
+                    </Badge>
+                  )}
+                </CardHeader>
+                <CardContent className="space-y-3 text-xs">
+                  <div className="flex items-center gap-2">
+                    <input
+                      readOnly
+                      value={resolvePublicJoinUrl() || 'Generating link...'}
+                      onClick={(e) => (e.target as HTMLInputElement).select()}
+                      className="flex-1 rounded-md border border-input bg-muted/40 px-2.5 py-1.5 text-[11px] font-mono text-foreground"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs gap-1 shrink-0"
+                      onClick={() => {
+                        const url = resolvePublicJoinUrl();
+                        if (!url) return;
+                        navigator.clipboard.writeText(url).then(
+                          () => toast.success('Workspace invite link copied!'),
+                          () => toast.info(url),
+                        );
+                      }}
+                    >
+                      <Copy className="h-3.5 w-3.5" /> Copy
+                    </Button>
+                    <a
+                      href={buildGmailInviteHref()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center justify-center gap-1 rounded-md border border-blue-500/30 bg-blue-500/10 px-2.5 h-8 text-[11px] font-semibold text-blue-600 hover:bg-blue-500/20 shrink-0"
+                    >
+                      <Mail className="h-3.5 w-3.5" /> Gmail
+                    </a>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Default Staff Role</label>
+                      <select
+                        value={shareInviteLink?.defaultRoleId || ''}
+                        disabled={savingShareLink}
+                        onChange={(e) => handleUpdateShareLink({ defaultRoleId: e.target.value || null })}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-[11px]"
+                      >
+                        <option value="">Standard Staff</option>
+                        {roles
+                          .filter((r) => !r.isSystemRole)
+                          .map((r) => (
+                            <option key={r.id} value={r.id}>
+                              {r.name}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Default Dept</label>
+                      <select
+                        value={shareInviteLink?.defaultDepartmentId || ''}
+                        disabled={savingShareLink}
+                        onChange={(e) => handleUpdateShareLink({ defaultDepartmentId: e.target.value || null })}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-[11px]"
+                      >
+                        <option value="">General</option>
+                        {departments.map((rawD) => {
+                          const d = rawD.data !== undefined ? rawD.data : rawD;
+                          return (
+                            <option key={d.id} value={d.id}>
+                              {d.name}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Default Team</label>
+                      <select
+                        value={shareInviteLink?.defaultTeamId || ''}
+                        disabled={savingShareLink}
+                        onChange={(e) => handleUpdateShareLink({ defaultTeamId: e.target.value || null })}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-[11px]"
+                      >
+                        <option value="">None</option>
+                        {teams.map((rawT) => {
+                          const t = rawT.data !== undefined ? rawT.data : rawT;
+                          return (
+                            <option key={t.id} value={t.id}>
+                              {t.name}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-muted-foreground block mb-1">Default Scope</label>
+                      <select
+                        value={shareInviteLink?.defaultDataScope || 'ASSIGNED'}
+                        disabled={savingShareLink}
+                        onChange={(e) => handleUpdateShareLink({ defaultDataScope: e.target.value })}
+                        className="w-full rounded-md border border-input bg-background px-2 py-1 text-[11px]"
+                      >
+                        {DATA_SCOPE_OPTIONS.filter(
+                          (opt) => isOwnerOrAdmin || (DATA_SCOPE_ORDER_MAP[opt.key] ?? 1) <= actorDataScopeRank,
+                        ).map((opt) => (
+                          <option key={opt.key} value={opt.key}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </CardContent>
+                <CardFooter className="pt-2 border-t border-border/60 flex items-center justify-between text-[11px]">
+                  <button
+                    type="button"
+                    disabled={savingShareLink}
+                    onClick={() => handleUpdateShareLink({ enabled: shareInviteLink?.enabled === false })}
+                    className="text-muted-foreground hover:text-foreground font-semibold"
+                  >
+                    {shareInviteLink?.enabled !== false ? 'Pause Invite Link' : 'Re-enable Invite Link'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={savingShareLink}
+                    onClick={() => handleUpdateShareLink({ regenerate: true })}
+                    className="text-blue-600 hover:underline font-semibold flex items-center gap-1"
+                  >
+                    <RefreshCw className="h-3 w-3" /> Reset Code
+                  </button>
+                </CardFooter>
+              </Card>
+            )}
+
+            <Card className="border-border shadow-xs flex flex-col justify-between">
+              <CardHeader className="pb-3">
+                <div className="flex items-start gap-2.5">
+                  <div className="h-9 w-9 rounded-lg bg-indigo-500/10 text-indigo-600 flex items-center justify-center shrink-0">
+                    <Compass className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-sm font-bold text-foreground">Guided Organization Setup Wizard</CardTitle>
+                    <CardDescription className="text-[11px] mt-0.5">
+                      Revisit industry recommendations, module presets, org structure, or step-by-step onboarding anytime.
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="text-xs text-muted-foreground space-y-2">
+                <p>
+                  Every feature, module, and staff role in Orvexa is customizable independently of your organization chart.
+                </p>
+              </CardContent>
+              <CardFooter className="pt-2 border-t border-border/60 flex flex-wrap items-center gap-2">
+                <Link href="/app/onboarding?stage=industries_size">
+                  <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" /> Re-run Recommendations
+                  </Button>
+                </Link>
+                <Link href="/app/onboarding?mode=stepper">
+                  <Button size="sm" className="h-8 text-xs gap-1.5">
+                    <ExternalLink className="h-3.5 w-3.5" /> Open Setup Stepper
+                  </Button>
+                </Link>
+              </CardFooter>
+            </Card>
+          </div>
         </div>
       )}
 
@@ -3155,8 +3520,19 @@ export default function SettingsPage() {
       )}
 
       {/* TAB 3: Roles & Permissions (Image 3 2-Pane Configurator) */}
-      {activeTab === 'roles' && isOwnerOrAdmin && (
+      {activeTab === 'roles' && canManageRoles && (
         <div className="space-y-6">
+          {!isOwnerOrAdmin && (
+            <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 p-3.5 text-xs flex items-start gap-2.5 text-foreground">
+              <ShieldCheck className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">Delegated Role Configuration Access</div>
+                <p className="text-muted-foreground text-[11px] mt-0.5 leading-relaxed">
+                  You have delegated permission to create and customize staff roles within your own permission ceiling and data scope (<span className="font-mono font-semibold text-foreground">{actorDataScope}</span>). Owner and Admin system roles cannot be modified.
+                </p>
+              </div>
+            </div>
+          )}
           <div className="grid gap-6 lg:grid-cols-[310px_1fr] items-start">
             {/* Left Column: Workspace Roles Directory */}
             <div className="rounded-xl border border-border bg-card p-4 shadow-xs space-y-3.5">
@@ -3443,7 +3819,7 @@ export default function SettingsPage() {
                       </p>
                     </div>
                     <div className="flex items-center gap-2 relative">
-                      {selectedRoleObj?.name !== 'OWNER' && (
+                      {selectedRoleObj?.name !== 'OWNER' && (isOwnerOrAdmin || !selectedRoleObj?.isSystemRole) && (
                         <>
                           <div className="relative">
                             <Button
@@ -3545,6 +3921,8 @@ export default function SettingsPage() {
 
                     const isOwnerSelected = selectedRoleObj?.name === 'OWNER';
                     const isRoleDisabled = selectedRoleObj?.isActive === false;
+                    const isSystemLockedForDelegated = !isOwnerOrAdmin && Boolean(selectedRoleObj?.isSystemRole);
+                    const isRoleReadOnly = isOwnerSelected || isRoleDisabled || isSystemLockedForDelegated;
 
                     const getModuleFriendlyLabel = (modName: string) => {
                       const raw = MODULE_DISPLAY_NAMES[modName] || modName;
@@ -3660,15 +4038,19 @@ export default function SettingsPage() {
                                 </div>
                               </div>
 
-                              {!isOwnerSelected && !isRoleDisabled && activeModPerms.length > 0 && (
+                              {!isRoleReadOnly && activeModPerms.length > 0 && (
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    const ids = activeModPerms.map((p) => p.id);
-                                    if (allModuleSelected) {
-                                      setDraftRolePermIds((prev) => prev.filter((id) => !ids.includes(id)));
+                                    const assignableIds = activeModPerms
+                                      .filter((p) => isOwnerOrAdmin || checkPermission(activeWorkspaceCtx, p.code))
+                                      .map((p) => p.id);
+                                    if (assignableIds.length === 0) return;
+                                    const allAssignableSelected = assignableIds.every((id) => draftRolePermIds.includes(id));
+                                    if (allAssignableSelected) {
+                                      setDraftRolePermIds((prev) => prev.filter((id) => !assignableIds.includes(id)));
                                     } else {
-                                      setDraftRolePermIds((prev) => Array.from(new Set([...prev, ...ids])));
+                                      setDraftRolePermIds((prev) => Array.from(new Set([...prev, ...assignableIds])));
                                     }
                                     setRolePermsDirty(true);
                                   }}
@@ -3685,17 +4067,21 @@ export default function SettingsPage() {
                               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                                 {activeModPerms.map((perm) => {
                                   const isGranted = isOwnerSelected || draftRolePermIds.includes(perm.id);
+                                  const exceedsActorCeiling =
+                                    !isOwnerOrAdmin && !checkPermission(activeWorkspaceCtx, perm.code);
+                                  const permButtonDisabled = isRoleReadOnly || exceedsActorCeiling;
                                   return (
                                     <button
                                       key={perm.id}
                                       type="button"
-                                      disabled={isOwnerSelected || isRoleDisabled}
+                                      disabled={permButtonDisabled}
+                                      title={exceedsActorCeiling ? 'Exceeds your own delegated permission ceiling' : perm.name}
                                       onClick={() => handleToggleDraftPermission(perm.id)}
                                       className={`flex items-start gap-2.5 p-2.5 rounded-lg border text-left transition-all ${
                                         isGranted
                                           ? 'border-blue-500/40 bg-blue-50/40 dark:bg-blue-950/20'
                                           : 'border-border/70 bg-card hover:bg-muted/20'
-                                      } ${isOwnerSelected || isRoleDisabled ? 'opacity-80 cursor-default' : 'cursor-pointer'}`}
+                                      } ${permButtonDisabled ? 'opacity-65 cursor-not-allowed' : 'cursor-pointer'}`}
                                     >
                                       <div
                                         className={`mt-0.5 h-4 w-4 rounded flex items-center justify-center shrink-0 transition-colors ${
@@ -3707,8 +4093,9 @@ export default function SettingsPage() {
                                         {isGranted && <Check className="h-3 w-3 stroke-[3]" />}
                                       </div>
                                       <div className="min-w-0">
-                                        <div className="text-xs font-semibold text-foreground leading-snug">
-                                          {perm.name}
+                                        <div className="text-xs font-semibold text-foreground leading-snug flex items-center gap-1">
+                                          <span className="truncate">{perm.name}</span>
+                                          {exceedsActorCeiling && <Lock className="h-2.5 w-2.5 text-muted-foreground shrink-0" />}
                                         </div>
                                         <div className="text-[10px] font-mono text-muted-foreground mt-0.5">
                                           {perm.code}
@@ -3731,21 +4118,24 @@ export default function SettingsPage() {
                               {DATA_SCOPE_OPTIONS.map((opt) => {
                                 const isActiveScope =
                                   (isOwnerSelected ? 'GLOBAL' : draftRoleDataScope) === opt.key;
+                                const exceedsScopeCeiling =
+                                  !isOwnerOrAdmin && (DATA_SCOPE_ORDER_MAP[opt.key] ?? 1) > actorDataScopeRank;
+                                const scopeDisabled = isRoleReadOnly || exceedsScopeCeiling;
                                 return (
                                   <button
                                     key={opt.key}
                                     type="button"
-                                    disabled={isOwnerSelected || isRoleDisabled}
+                                    disabled={scopeDisabled}
                                     onClick={() => {
                                       setDraftRoleDataScope(opt.key);
                                       setRolePermsDirty(true);
                                     }}
-                                    title={opt.desc}
+                                    title={exceedsScopeCeiling ? `Exceeds your own ${actorDataScope} scope ceiling` : opt.desc}
                                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-all ${
                                       isActiveScope
                                         ? 'border-blue-600 bg-blue-500/10 text-blue-700 dark:text-blue-400 font-semibold'
                                         : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                                    }`}
+                                    } ${scopeDisabled ? 'opacity-60 cursor-not-allowed' : ''}`}
                                   >
                                     <span
                                       className={`h-3.5 w-3.5 rounded-full border flex items-center justify-center ${
@@ -3759,6 +4149,69 @@ export default function SettingsPage() {
                                 );
                               })}
                             </div>
+
+                            {/* Customizable Team Scope Mapping */}
+                            {(isOwnerSelected ? 'GLOBAL' : draftRoleDataScope) === 'TEAM' && (
+                              <div className="mt-2.5 p-3 rounded-lg border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-[11px] font-semibold text-foreground">
+                                    Permitted Teams for This Role (Optional)
+                                  </div>
+                                  {draftRoleScopedTeamIds.length > 0 && (
+                                    <button
+                                      type="button"
+                                      disabled={isRoleReadOnly}
+                                      onClick={() => {
+                                        setDraftRoleScopedTeamIds([]);
+                                        setRolePermsDirty(true);
+                                      }}
+                                      className="text-[10px] font-semibold text-blue-600 hover:underline"
+                                    >
+                                      Reset to Own Team Only ({draftRoleScopedTeamIds.length})
+                                    </button>
+                                  )}
+                                </div>
+                                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                  {draftRoleScopedTeamIds.length === 0
+                                    ? 'By default, users with this role only see their own assigned/led team and direct reports.'
+                                    : `Users with this role can access records across their own team plus ${draftRoleScopedTeamIds.length} selected team(s).`}
+                                </p>
+                                {teams.length > 0 ? (
+                                  <div className="flex flex-wrap gap-1.5 pt-1">
+                                    {teams.map((rawT) => {
+                                      const t = rawT.data !== undefined ? rawT.data : rawT;
+                                      const isSelected = draftRoleScopedTeamIds.includes(t.id);
+                                      const deptLabel = t.department?.name || departments.find((d) => d.id === t.departmentId)?.name;
+                                      return (
+                                        <button
+                                          key={t.id}
+                                          type="button"
+                                          disabled={isRoleReadOnly}
+                                          onClick={() => {
+                                            setDraftRoleScopedTeamIds((prev) =>
+                                              prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id],
+                                            );
+                                            setRolePermsDirty(true);
+                                          }}
+                                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-[11px] font-medium transition-colors ${
+                                            isSelected
+                                              ? 'border-blue-600 bg-blue-600 text-white'
+                                              : 'border-border bg-background text-foreground hover:border-blue-400'
+                                          }`}
+                                        >
+                                          {isSelected && <Check className="h-3 w-3 stroke-[3]" />}
+                                          <span>{t.name}{deptLabel ? ` (${deptLabel})` : ''}</span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <div className="text-[11px] text-muted-foreground italic">
+                                    No teams created yet. Create teams under Organization Structure.
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -3773,6 +4226,13 @@ export default function SettingsPage() {
                           <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0" />
                           <span className="text-muted-foreground">
                             Owner automatically retains full permissions across the entire workspace.
+                          </span>
+                        </>
+                      ) : !isOwnerOrAdmin && selectedRoleObj?.isSystemRole ? (
+                        <>
+                          <Lock className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <span className="text-muted-foreground">
+                            System roles (Owner &amp; Admin) can only be modified by an Owner or Admin. Select or create a Staff role to customize permissions.
                           </span>
                         </>
                       ) : rolePermsDirty ? (
@@ -3792,7 +4252,7 @@ export default function SettingsPage() {
                       )}
                     </div>
 
-                    {selectedRoleObj?.name !== 'OWNER' && (
+                    {selectedRoleObj?.name !== 'OWNER' && (isOwnerOrAdmin || !selectedRoleObj?.isSystemRole) && (
                       <Button
                         type="button"
                         size="sm"
@@ -3874,15 +4334,25 @@ export default function SettingsPage() {
                                     </div>
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                                   {m.designation?.title && (
                                     <Badge variant="outline" className="text-[10px]">
                                       {m.designation.title}
                                     </Badge>
                                   )}
+                                  {m.team?.name && (
+                                    <Badge variant="secondary" className="text-[10px] bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20">
+                                      Team: {m.team.name}
+                                    </Badge>
+                                  )}
                                   {m.department?.name && (
                                     <Badge variant="secondary" className="text-[10px]">
                                       {m.department.name}
+                                    </Badge>
+                                  )}
+                                  {(m.effectiveDataScope || m.dataScope) && (
+                                    <Badge variant="outline" className="text-[10px] font-mono">
+                                      {m.effectiveDataScope || m.dataScope}
                                     </Badge>
                                   )}
                                 </div>
@@ -4352,7 +4822,20 @@ export default function SettingsPage() {
                       );
                     })}
                   </select>
-                  <Button type="submit" size="sm" className="h-8 text-xs px-3">Add</Button>
+                  <select
+                    value={newTeamLeadId}
+                    onChange={(e) => setNewTeamLeadId(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none"
+                    title="Assign Team Lead (Optional)"
+                  >
+                    <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">Team Lead (Optional)</option>
+                    {directoryMembers.map((m) => (
+                      <option key={m.id} value={m.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                        {m.user?.firstName} {m.user?.lastName}
+                      </option>
+                    ))}
+                  </select>
+                  <Button type="submit" size="sm" className="h-8 text-xs px-3 shrink-0">Add</Button>
                 </div>
               </form>
               <div className="space-y-1.5 max-h-64 overflow-y-auto">
@@ -4382,7 +4865,7 @@ export default function SettingsPage() {
                             className="w-full rounded border border-input bg-background px-2 py-1 text-xs focus:ring-1 focus:ring-primary focus:outline-none"
                             autoFocus
                           />
-                          <div className="flex gap-1.5">
+                          <div className="flex gap-1.5 flex-wrap sm:flex-nowrap">
                             <select
                               value={editTeamDeptId}
                               onChange={(e) => setEditTeamDeptId(e.target.value)}
@@ -4397,6 +4880,19 @@ export default function SettingsPage() {
                                   </option>
                                 );
                               })}
+                            </select>
+                            <select
+                              value={editTeamLeadId}
+                              onChange={(e) => setEditTeamLeadId(e.target.value)}
+                              className="w-full rounded border border-input bg-background px-2 py-1 text-xs text-slate-900 dark:text-slate-100 focus:ring-1 focus:ring-primary focus:outline-none"
+                              title="Team Lead"
+                            >
+                              <option value="" className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">No Team Lead</option>
+                              {directoryMembers.map((m) => (
+                                <option key={m.id} value={m.id} className="text-slate-900 bg-white dark:text-slate-100 dark:bg-slate-900">
+                                  {m.user?.firstName} {m.user?.lastName}
+                                </option>
+                              ))}
                             </select>
                             <Button
                               type="submit"
@@ -4421,12 +4917,21 @@ export default function SettingsPage() {
                       );
                     }
 
+                    const leadName = t.leadMembership?.user
+                      ? `${t.leadMembership.user.firstName || ''} ${t.leadMembership.user.lastName || ''}`.trim()
+                      : '';
+
                     return (
                       <div key={t.id} className="group flex items-center justify-between p-2 rounded-md bg-muted/40 hover:bg-muted/60 transition-colors text-xs">
-                        <div className="min-w-0 pr-2">
+                        <div className="min-w-0 pr-2 flex flex-wrap items-center gap-1.5">
                           <span className="font-semibold text-slate-900 dark:text-slate-100">{t.name}</span>
                           {(t.department?.name || t.departmentName) && (
-                            <span className="text-[10px] text-muted-foreground ml-2">({t.department?.name || t.departmentName})</span>
+                            <span className="text-[10px] text-muted-foreground">({t.department?.name || t.departmentName})</span>
+                          )}
+                          {leadName && (
+                            <Badge variant="outline" className="text-[10px] py-0 px-1.5 bg-blue-500/5 border-blue-500/20 text-blue-700 dark:text-blue-300">
+                              Lead: {leadName}
+                            </Badge>
                           )}
                         </div>
                         <div className="flex items-center gap-1 shrink-0">
@@ -4508,8 +5013,11 @@ export default function SettingsPage() {
                     onChange={(e) => setNewDesigAccessRole(e.target.value as any)}
                     className="rounded-md border border-input bg-background px-2 py-1.5 text-[11px] text-foreground focus:ring-1 focus:ring-primary focus:outline-none"
                   >
+                    {/* LEGACY_ROLE_COMMENTED_OUT: MANAGER and MEMBER hidden in favor of customizable staff roles
                     <option value="MEMBER">Role: Member</option>
                     <option value="MANAGER">Role: Manager</option>
+                    */}
+                    <option value="MEMBER">Role: Staff (Role / Designation)</option>
                     <option value="ADMIN">Role: Admin</option>
                   </select>
                 </div>
@@ -4580,8 +5088,11 @@ export default function SettingsPage() {
                               onChange={(e) => setEditDesigAccessRole(e.target.value as any)}
                               className="rounded border border-input bg-background px-1.5 py-1 text-[11px]"
                             >
+                              {/* LEGACY_ROLE_COMMENTED_OUT:
                               <option value="MEMBER">MEMBER</option>
                               <option value="MANAGER">MANAGER</option>
+                              */}
+                              <option value="MEMBER">STAFF</option>
                               <option value="ADMIN">ADMIN</option>
                             </select>
                             <select
@@ -5482,11 +5993,13 @@ export default function SettingsPage() {
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
                 >
                   <option value="">Start from scratch (empty)</option>
-                  {roles.map((r) => (
-                    <option key={r.id} value={r.id}>
-                      {formatRoleDisplayName(r.name)} ({extractRolePermissionIds(r).length} permissions)
-                    </option>
-                  ))}
+                  {roles
+                    .filter((r) => isOwnerOrAdmin || !r.isSystemRole)
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {formatRoleDisplayName(r.name)} ({extractRolePermissionIds(r).length} permissions)
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -5497,13 +6010,48 @@ export default function SettingsPage() {
                   onChange={(e) => setNewRoleDataScope(e.target.value as any)}
                   className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
                 >
-                  {DATA_SCOPE_OPTIONS.map((opt) => (
+                  {DATA_SCOPE_OPTIONS.filter(
+                    (opt) => isOwnerOrAdmin || (DATA_SCOPE_ORDER_MAP[opt.key] ?? 1) <= actorDataScopeRank,
+                  ).map((opt) => (
                     <option key={opt.key} value={opt.key}>
                       {opt.label} — {opt.desc}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {newRoleDataScope === 'TEAM' && teams.length > 0 && (
+                <div className="p-2.5 rounded-lg border border-blue-200/80 dark:border-blue-900/50 bg-blue-50/40 dark:bg-blue-950/20 space-y-1.5">
+                  <div className="text-[11px] font-semibold text-foreground">
+                    Permitted Teams (Leave empty for member's own assigned team)
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {teams.map((rawT) => {
+                      const t = rawT.data !== undefined ? rawT.data : rawT;
+                      const checked = newRoleScopedTeamIds.includes(t.id);
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() =>
+                            setNewRoleScopedTeamIds((prev) =>
+                              prev.includes(t.id) ? prev.filter((id) => id !== t.id) : [...prev, t.id],
+                            )
+                          }
+                          className={`inline-flex items-center gap-1 px-2 py-1 rounded border text-[11px] font-medium transition-colors ${
+                            checked
+                              ? 'border-blue-600 bg-blue-600 text-white'
+                              : 'border-border bg-background text-foreground hover:border-blue-400'
+                          }`}
+                        >
+                          {checked && <Check className="h-3 w-3 stroke-[3]" />}
+                          <span>{t.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-2 border-t border-border">
                 <Button type="button" variant="ghost" size="sm" onClick={() => setShowCreateRoleModal(false)}>
@@ -5619,8 +6167,11 @@ export default function SettingsPage() {
                     onChange={(e) => setNewDesigAccessRole(e.target.value as any)}
                     className="w-full rounded-lg border border-input bg-background px-3 py-2 text-xs"
                   >
+                    {/* LEGACY_ROLE_COMMENTED_OUT:
                     <option value="MEMBER">MEMBER</option>
                     <option value="MANAGER">MANAGER</option>
+                    */}
+                    <option value="MEMBER">Staff (Role / Designation)</option>
                     <option value="ADMIN">ADMIN</option>
                   </select>
                 </div>

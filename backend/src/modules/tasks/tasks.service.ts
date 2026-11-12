@@ -8,6 +8,12 @@ import {
 import { PrismaService } from '../../database/prisma.service';
 import { TaskStatus, PriorityLevel, ApprovalStatus } from '@prisma/client';
 import { isTaskDeadlinePassed, isTaskOverdue } from '../../common/utils/task-overdue.util';
+import {
+  getDefaultDataScopeForRole,
+  resolveMemberScopeContext,
+  resolveMemberEffectivePermissions,
+  satisfiesPermissionCode,
+} from '../../common/utils/scope.util';
 
 export interface WorkflowRule {
   id: string;
@@ -105,29 +111,33 @@ export class TasksService implements OnModuleInit {
 
     const roleUpper = (userContext?.accessRole || '').toUpperCase();
     const roleNameUpper = (userContext?.roleName || '').toUpperCase();
-    const isManagerOrAdmin =
-      roleUpper === 'OWNER' ||
-      roleUpper === 'ADMIN' ||
-      roleUpper === 'MANAGER' ||
-      roleUpper.includes('MANAGER') ||
-      roleUpper.includes('LEAD') ||
-      roleNameUpper.includes('MANAGER') ||
-      roleNameUpper.includes('LEAD') ||
-      roleNameUpper.includes('DIRECTOR') ||
-      roleNameUpper.includes('HEAD');
+    const isGlobalAdmin = roleUpper === 'OWNER' || roleUpper === 'ADMIN';
 
-    // Explicit filter.scope handling
-    let applyMyWorkFilter = false;
-    let applyTeamWorkFilter = false;
-    let applyDataScopeFilter = false;
-
-    if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
-      applyMyWorkFilter = true;
-    } else if (filter?.scope === 'TEAM_WORK' && userContext?.membershipId) {
-      applyTeamWorkFilter = true;
-    } else if (userContext && !isManagerOrAdmin) {
-      applyDataScopeFilter = true;
+    let effectiveScope = userContext?.dataScope;
+    let allowedTeamIds: string[] = Array.isArray(userContext?.scopedTeamIds)
+      ? userContext.scopedTeamIds.filter((id: any): id is string => Boolean(id))
+      : [];
+    if (userContext?.teamId && !allowedTeamIds.includes(userContext.teamId)) {
+      allowedTeamIds.push(userContext.teamId);
     }
+    const effectiveDepartmentId = userContext?.departmentId;
+
+    if (userContext?.membershipId && !isGlobalAdmin && (!effectiveScope || !Array.isArray(userContext?.scopedTeamIds))) {
+      const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, {
+        id: userContext.membershipId,
+        accessRole: userContext.accessRole,
+        roleId: userContext.roleId,
+        dataScope: userContext.dataScope,
+        teamId: userContext.teamId,
+        departmentId: userContext.departmentId,
+        role: userContext.roleName ? { id: userContext.roleId, name: userContext.roleName } : undefined,
+      });
+      if (!effectiveScope) effectiveScope = resolved.effectiveDataScope;
+      allowedTeamIds = Array.from(new Set([...allowedTeamIds, ...resolved.scopedTeamIds]));
+    }
+    effectiveScope =
+      effectiveScope ||
+      (isGlobalAdmin ? 'GLOBAL' : getDefaultDataScopeForRole(roleUpper, roleNameUpper));
 
     let tasks = await this.prisma.task.findMany({
       where,
@@ -146,105 +156,100 @@ export class TasksService implements OnModuleInit {
       orderBy: { updatedAt: 'desc' },
     });
 
-    if (applyMyWorkFilter && userContext?.membershipId) {
+    if (filter?.scope === 'MY_WORK' && userContext?.membershipId) {
       tasks = tasks.filter((t: any) => {
         const sla = (t.sla as any) || {};
         const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
         return t.assigneeMembershipId === userContext.membershipId || assigneeIds.includes(userContext.membershipId);
       });
-    } else if (applyTeamWorkFilter && userContext?.membershipId) {
-      if (isManagerOrAdmin && !userContext?.teamId) {
-        // Managers/leads without an assigned team view workspace/direct-report tasks
-      } else if (isManagerOrAdmin && userContext?.teamId && roleUpper !== 'MANAGER' && roleUpper !== 'MEMBER') {
-        // OWNER / ADMIN in TEAM_WORK retain full team/workspace visibility
-      } else {
-        const workspaceMembers = await this.prisma.membership
-          .findMany({
-            where: { workspaceId },
-            select: { id: true, teamId: true, departmentId: true, reportsToId: true },
-          })
-          .catch(() => []);
-        const memberMap = new Map<string, any>();
-        for (const m of workspaceMembers) memberMap.set(m.id, m);
+    } else if (
+      userContext?.membershipId &&
+      !isGlobalAdmin &&
+      effectiveScope !== 'GLOBAL' &&
+      effectiveScope !== 'ALL'
+    ) {
+      const myId = userContext.membershipId;
+      const workspaceMembers = await this.prisma.membership
+        ?.findMany?.({
+          where: { workspaceId },
+          select: { id: true, teamId: true, departmentId: true, reportsToId: true },
+        })
+        ?.catch?.(() => []) || [];
+      const memberMap = new Map<string, any>();
+      for (const m of workspaceMembers) memberMap.set(m.id, m);
 
-        const hasConfiguredTeam = workspaceMembers.some(
-          (m: any) =>
-            m.id !== userContext.membershipId &&
-            (m.reportsToId === userContext.membershipId || Boolean(userContext.teamId && m.teamId === userContext.teamId)),
-        );
-
-        if (!isManagerOrAdmin || hasConfiguredTeam) {
-          tasks = tasks.filter((t: any) => {
-            const sla = (t.sla as any) || {};
-            const assigneeIds: string[] = Array.from(
-              new Set([
-                t.assigneeMembershipId,
-                ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
-              ].filter(Boolean)),
-            );
-            const isAssignedToMe = assigneeIds.includes(userContext.membershipId);
-            const isCreatedByMe =
-              sla.creatorMembershipId === userContext.membershipId ||
-              (Array.isArray(sla.activityLog) &&
-                sla.activityLog.some(
-                  (a: any) =>
-                    (a?.action === 'CREATED' || a?.action === 'REASSIGNED') &&
-                    a?.actorId === userContext.membershipId,
-                ));
-            const matchesTeamOrReport = assigneeIds.some((aId) => {
-              const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
-              return (
-                mem?.reportsToId === userContext.membershipId ||
-                Boolean(userContext.teamId && mem?.teamId === userContext.teamId)
-              );
-            });
-            return isAssignedToMe || isCreatedByMe || matchesTeamOrReport;
-          });
-        }
-      }
-    } else if (applyDataScopeFilter && userContext?.membershipId) {
-      const scope = userContext.dataScope || 'ASSIGNED';
-      if (scope === 'ASSIGNED' || scope === 'OWN') {
-        tasks = tasks.filter((t: any) => {
-          const sla = (t.sla as any) || {};
-          const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
-          return (
-            t.assigneeMembershipId === userContext.membershipId ||
-            assigneeIds.includes(userContext.membershipId) ||
-            sla.creatorMembershipId === userContext.membershipId
-          );
-        });
-      } else if (scope === 'TEAM') {
-        tasks = tasks.filter((t: any) => {
-          const sla = (t.sla as any) || {};
-          const assigneeIds: string[] = Array.from(
-            new Set([
+      tasks = tasks.filter((t: any) => {
+        const sla = (t.sla as any) || {};
+        const assigneeIds: string[] = Array.from(
+          new Set(
+            [
               t.assigneeMembershipId,
               ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
-            ].filter(Boolean)),
+            ].filter(Boolean),
+          ),
+        );
+        const creatorId = sla.creatorMembershipId || null;
+        const isAssignedToMe = assigneeIds.includes(myId);
+        const isCreatedByMe =
+          creatorId === myId ||
+          (Array.isArray(sla.activityLog) &&
+            sla.activityLog.some(
+              (a: any) =>
+                (a?.action === 'CREATED' || a?.action === 'REASSIGNED') && a?.actorId === myId,
+            ));
+
+        if (effectiveScope === 'ASSIGNED' || effectiveScope === 'OWN') {
+          return isAssignedToMe || isCreatedByMe;
+        }
+
+        if (effectiveScope === 'DEPARTMENT') {
+          const assigneeInDept = assigneeIds.some((aId) => {
+            const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
+            return Boolean(effectiveDepartmentId && mem?.departmentId === effectiveDepartmentId);
+          });
+          const creatorMem = creatorId ? memberMap.get(creatorId) : null;
+          const unassignedInMyDept =
+            assigneeIds.length === 0 &&
+            Boolean(
+              (effectiveDepartmentId && sla.departmentId === effectiveDepartmentId) ||
+                (effectiveDepartmentId && creatorMem?.departmentId === effectiveDepartmentId),
+            );
+          return (
+            isAssignedToMe ||
+            isCreatedByMe ||
+            Boolean(effectiveDepartmentId && sla.departmentId === effectiveDepartmentId) ||
+            assigneeInDept ||
+            unassignedInMyDept
           );
-          if (assigneeIds.includes(userContext.membershipId) || sla.creatorMembershipId === userContext.membershipId) {
+        }
+
+        // Strict TEAM scope (default for MANAGER / Team Lead / custom Team-scoped roles):
+        // ONLY self, own created tasks, direct reports, tasks assigned to permitted team(s),
+        // or unassigned tasks explicitly tagged to a permitted team / created by a team member.
+        if (isAssignedToMe || isCreatedByMe) return true;
+        if (sla.teamId && allowedTeamIds.includes(sla.teamId)) return true;
+
+        const matchesTeamOrReport = assigneeIds.some((aId) => {
+          const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
+          return (
+            mem?.reportsToId === myId ||
+            Boolean(mem?.teamId && allowedTeamIds.includes(mem.teamId))
+          );
+        });
+        if (matchesTeamOrReport) return true;
+
+        if (assigneeIds.length === 0 && creatorId) {
+          const creatorMem = memberMap.get(creatorId);
+          if (
+            creatorMem?.reportsToId === myId ||
+            Boolean(creatorMem?.teamId && allowedTeamIds.includes(creatorMem.teamId))
+          ) {
             return true;
           }
-          const mem = t.assignee;
-          return (
-            mem?.reportsToId === userContext.membershipId ||
-            Boolean(userContext.teamId && mem?.teamId === userContext.teamId)
-          );
-        });
-      } else if (scope === 'DEPARTMENT') {
-        tasks = tasks.filter((t: any) => {
-          const sla = (t.sla as any) || {};
-          const assigneeIds: string[] = Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : [];
-          return (
-            t.assigneeMembershipId === userContext.membershipId ||
-            assigneeIds.includes(userContext.membershipId) ||
-            sla.creatorMembershipId === userContext.membershipId ||
-            sla.departmentId === userContext.departmentId ||
-            Boolean(userContext.departmentId && t.assignee?.departmentId === userContext.departmentId)
-          );
-        });
-      }
+        }
+
+        return false;
+      });
     }
 
     if (filterOverdue) {
@@ -479,15 +484,13 @@ export class TasksService implements OnModuleInit {
     const isAssigneeChanging = primaryAssigneeId !== undefined && primaryAssigneeId !== existing.assigneeMembershipId;
     const isDueDateChanging = data.dueDate && new Date(data.dueDate).getTime() !== (existing.dueDate ? new Date(existing.dueDate).getTime() : 0);
 
-    // If status moving to COMPLETED, check dependencies
+    // If status moving to COMPLETED, enforce permission-based completion rights & check dependencies
     if (data.status === TaskStatus.COMPLETED) {
       if (actorMembershipId) {
-        const actor = await this.prisma.membership.findFirst({
-          where: { id: actorMembershipId, workspaceId },
-        });
-        if (actor && actor.accessRole === 'MEMBER') {
+        const canComplete = await this.canActorCompleteTask(workspaceId, actorMembershipId);
+        if (!canComplete) {
           throw new ForbiddenException(
-            'Access restricted: Only managers and workspace administrators are authorized to complete work items. Please submit the item for review.',
+            'Access restricted: Only roles with task completion or review permission can complete work items. Please submit the item for review.',
           );
         }
       }
@@ -656,14 +659,7 @@ export class TasksService implements OnModuleInit {
       );
     } else {
       const teamId = updated.assignee?.teamId;
-      const managersToAlert = await this.prisma.membership.findMany({
-        where: {
-          workspaceId,
-          status: 'ACTIVE',
-          ...(teamId ? { teamId } : {}),
-          accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] },
-        },
-      });
+      const managersToAlert = await this.findTaskReviewers(workspaceId, teamId);
       for (const m of (managersToAlert || [])) {
         if (m.id === actorMembershipId) continue;
         await this.sendNotification(
@@ -732,12 +728,10 @@ export class TasksService implements OnModuleInit {
 
   async complete(id: string, workspaceId: string, actorMembershipId?: string, actualHours?: number) {
     if (actorMembershipId) {
-      const actor = await this.prisma.membership.findFirst({
-        where: { id: actorMembershipId, workspaceId },
-      });
-      if (actor && actor.accessRole === 'MEMBER') {
+      const canComplete = await this.canActorCompleteTask(workspaceId, actorMembershipId);
+      if (!canComplete) {
         throw new ForbiddenException(
-          'Access restricted: Only managers and workspace administrators can complete work items. Please submit the item for review.',
+          'Access restricted: Only roles with task completion or review permission can complete work items. Please submit the item for review.',
         );
       }
     }
@@ -1146,13 +1140,7 @@ export class TasksService implements OnModuleInit {
       },
     });
 
-    const managers = await this.prisma.membership.findMany({
-      where: {
-        workspaceId,
-        status: 'ACTIVE',
-        accessRole: { in: ['MANAGER', 'ADMIN', 'OWNER'] },
-      },
-    });
+    const managers = await this.findTaskReviewers(workspaceId);
     for (const m of managers) {
       if (m.id === actorMembershipId) continue;
       await this.sendNotification(
@@ -1602,22 +1590,9 @@ export class TasksService implements OnModuleInit {
           higherOfficials = [{ id: task.assignee.reportsToId }];
         } else {
           const teamId = task.assignee?.teamId;
-          higherOfficials = await this.prisma.membership.findMany({
-            where: {
-              workspaceId: task.workspaceId,
-              status: 'ACTIVE',
-              ...(teamId ? { teamId } : {}),
-              accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] },
-            },
-          });
+          higherOfficials = await this.findTaskReviewers(task.workspaceId, teamId);
           if (teamId && (!higherOfficials || higherOfficials.length === 0)) {
-            higherOfficials = await this.prisma.membership.findMany({
-              where: {
-                workspaceId: task.workspaceId,
-                status: 'ACTIVE',
-                accessRole: { in: ['OWNER', 'ADMIN', 'MANAGER'] },
-              },
-            });
+            higherOfficials = await this.findTaskReviewers(task.workspaceId);
           }
         }
 
@@ -1662,6 +1637,76 @@ export class TasksService implements OnModuleInit {
     } catch (err) {
       // Overdue scan errors do not crash caller
     }
+  }
+
+  private async canActorCompleteTask(workspaceId: string, actorMembershipId?: string): Promise<boolean> {
+    if (!actorMembershipId) return true;
+    const actor: any = await this.prisma.membership.findFirst({
+      where: { id: actorMembershipId, workspaceId },
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+      },
+    });
+    if (!actor) return true;
+    if (actor.accessRole === 'OWNER' || actor.accessRole === 'ADMIN') {
+      return true;
+    }
+    const baseCodes: string[] = Array.isArray(actor.role?.permissions)
+      ? actor.role.permissions.map((rp: any) => rp?.permission?.code || rp?.code).filter(Boolean)
+      : [];
+    let wsSettings: any = null;
+    if ((this.prisma as any).workspace?.findUnique) {
+      const ws = await (this.prisma as any).workspace
+        .findUnique({ where: { id: workspaceId }, select: { settings: true } })
+        .catch(() => null);
+      wsSettings = ws?.settings || null;
+    }
+    const effectivePerms = resolveMemberEffectivePermissions(baseCodes, actorMembershipId, wsSettings);
+    if (
+      satisfiesPermissionCode(effectivePerms, 'tasks:review') ||
+      satisfiesPermissionCode(effectivePerms, 'tasks:complete') ||
+      satisfiesPermissionCode(effectivePerms, 'tasks:manage')
+    ) {
+      return true;
+    }
+    // LEGACY_ROLE_COMMENTED_OUT: preserve historical behavior only when no custom role permissions are hydrated
+    if (!actor.role?.permissions && actor.accessRole === 'MANAGER') {
+      return true;
+    }
+    return false;
+  }
+
+  private async findTaskReviewers(workspaceId: string, teamId?: string | null) {
+    const members: any[] = await this.prisma.membership.findMany({
+      where: {
+        workspaceId,
+        status: 'ACTIVE',
+        ...(teamId ? { teamId } : {}),
+      },
+      include: {
+        role: { include: { permissions: { include: { permission: true } } } },
+      },
+    });
+    const ws = (this.prisma as any).workspace?.findUnique
+      ? await (this.prisma as any).workspace
+          .findUnique({ where: { id: workspaceId }, select: { settings: true } })
+          .catch(() => null)
+      : null;
+    const wsSettings = ws?.settings || null;
+    return (members || []).filter((m: any) => {
+      if (m.accessRole === 'OWNER' || m.accessRole === 'ADMIN') return true;
+      // LEGACY_ROLE_COMMENTED_OUT: legacy MANAGER reviewer fallback
+      if (m.accessRole === 'MANAGER') return true;
+      const baseCodes: string[] = Array.isArray(m.role?.permissions)
+        ? m.role.permissions.map((rp: any) => rp?.permission?.code || rp?.code).filter(Boolean)
+        : [];
+      const effectivePerms = resolveMemberEffectivePermissions(baseCodes, m.id, wsSettings);
+      return (
+        satisfiesPermissionCode(effectivePerms, 'tasks:review') ||
+        satisfiesPermissionCode(effectivePerms, 'tasks:assign') ||
+        satisfiesPermissionCode(effectivePerms, 'tasks:manage')
+      );
+    });
   }
 
   private async sendNotification(

@@ -1,9 +1,82 @@
 import { Injectable, BadRequestException, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
+import {
+  resolveMemberScopeContext,
+  resolveMemberEffectivePermissions,
+  satisfiesPermissionCode,
+  getScopeRank,
+} from '../../common/utils/scope.util';
+import { getRecommendedSetup } from '../workspaces/onboarding-recommendations.util';
 
 @Injectable()
 export class RolesService {
   constructor(private readonly prisma: PrismaService) {}
+
+  private isLegacyHiddenSystemRole(role: { name?: string | null; isSystemRole?: boolean } | null | undefined): boolean {
+    if (!role?.isSystemRole) return false;
+    const upper = (role.name || '').toUpperCase();
+    // LEGACY_ROLE_COMMENTED_OUT: MANAGER and MEMBER are hidden from active platform roles while kept in DB for legacy safety
+    return upper === 'MANAGER' || upper === 'MEMBER';
+  }
+
+  private async enforceDelegatedRoleAuthority(
+    actorContext: any,
+    options: {
+      targetRole?: any;
+      requestedPermIds?: string[];
+      requestedPermCodes?: string[];
+      requestedDataScope?: string;
+    },
+  ) {
+    if (!actorContext) return;
+    const accessUpper = (actorContext.accessRole || '').toUpperCase();
+    if (accessUpper === 'OWNER' || accessUpper === 'ADMIN') return;
+
+    if (options.targetRole?.isSystemRole) {
+      throw new ForbiddenException('Only Organization Owners and Admins can modify platform system roles.');
+    }
+
+    const actorPerms: string[] = Array.isArray(actorContext.permissions) ? actorContext.permissions : [];
+    const restrictedAdminCodes = new Set(['billing:manage', 'settings:manage', 'org:manage']);
+
+    let codesToValidate: string[] = Array.isArray(options.requestedPermCodes)
+      ? [...options.requestedPermCodes]
+      : [];
+
+    if (codesToValidate.length === 0 && Array.isArray(options.requestedPermIds) && options.requestedPermIds.length > 0) {
+      const perms = await this.prisma.permission
+        ?.findMany?.({ where: { id: { in: options.requestedPermIds } }, select: { code: true } })
+        ?.catch?.(() => []);
+      codesToValidate = (perms || []).map((p: any) => p.code).filter(Boolean);
+    }
+
+    for (const code of codesToValidate) {
+      if (restrictedAdminCodes.has(code) && !satisfiesPermissionCode(actorPerms, code)) {
+        throw new ForbiddenException(
+          `Delegated authority ceiling: you cannot grant system-level permission "${code}".`,
+        );
+      }
+      if (!satisfiesPermissionCode(actorPerms, code)) {
+        throw new ForbiddenException(
+          `Delegated authority ceiling: you cannot grant permission "${code}" that you do not hold.`,
+        );
+      }
+    }
+
+    if (options.requestedDataScope) {
+      const actorRank = getScopeRank(actorContext.dataScope || 'ASSIGNED');
+      const requestedRank = getScopeRank(options.requestedDataScope);
+      if (requestedRank > actorRank) {
+        throw new ForbiddenException(
+          `Delegated authority ceiling: you cannot grant a data scope (${options.requestedDataScope}) broader than your own (${actorContext.dataScope || 'ASSIGNED'}).`,
+        );
+      }
+    }
+  }
+
+  getRecommendedStarterTemplates(industries?: string[], orgSize?: string) {
+    return getRecommendedSetup(industries, orgSize);
+  }
 
   private getDefaultDataScopeForRole(roleName?: string): string {
     const upper = (roleName || '').toUpperCase();
@@ -24,7 +97,7 @@ export class RolesService {
     return undefined;
   }
 
-  async listWorkspaceRoles(workspaceId: string) {
+  async listWorkspaceRoles(workspaceId: string, options?: { includeLegacy?: boolean }) {
     await this.ensureSystemPermissions();
     await this.ensureSystemRoles();
 
@@ -33,8 +106,9 @@ export class RolesService {
       select: { settings: true },
     })?.catch(() => null);
     const roleDataScopes: Record<string, string> = ((ws?.settings as any)?.roleDataScopes) || {};
+    const roleScopedTeams: Record<string, string[]> = ((ws?.settings as any)?.roleScopedTeams) || {};
 
-    const roles = await this.prisma.role.findMany({
+    const rawRoles = await this.prisma.role.findMany({
       where: {
         OR: [{ workspaceId }, { isSystemRole: true }],
       },
@@ -46,6 +120,11 @@ export class RolesService {
       },
       orderBy: [{ isSystemRole: 'desc' }, { name: 'asc' }],
     });
+
+    // LEGACY_ROLE_COMMENTED_OUT: Keep only Owner and Admin active as system roles; hide MANAGER & MEMBER by default
+    const roles = options?.includeLegacy
+      ? rawRoles
+      : rawRoles.filter((r) => !this.isLegacyHiddenSystemRole(r));
 
     // Count memberships scoped strictly to this workspace when available
     const wsMembers = await this.prisma.membership?.findMany?.({
@@ -71,6 +150,7 @@ export class RolesService {
         description: cleanDesc,
         isActive: !isDeactivated,
         dataScope: roleDataScopes[r.id] || this.getDefaultDataScopeForRole(r.name),
+        scopedTeamIds: Array.isArray(roleScopedTeams[r.id]) ? roleScopedTeams[r.id] : [],
         _count: {
           ...(r._count || {}),
           memberships: wsCount,
@@ -91,7 +171,8 @@ export class RolesService {
     name: string,
     description?: string,
     permissionIds?: string[],
-    options?: { dataScope?: string; copyFromRoleId?: string; permissionCodes?: string[] },
+    options?: { dataScope?: string; scopedTeamIds?: string[]; copyFromRoleId?: string; permissionCodes?: string[] },
+    actorContext?: any,
   ) {
     const cleanName = name.trim();
     if (!cleanName) {
@@ -111,6 +192,7 @@ export class RolesService {
 
     let resolvedPermIds = await this.resolvePermissionIds(permissionIds, options?.permissionCodes);
     let inheritedScope: string | undefined;
+    let inheritedScopedTeams: string[] | undefined;
 
     if ((!resolvedPermIds || resolvedPermIds.length === 0) && options?.copyFromRoleId) {
       const sourceRole = await this.prisma.role.findFirst({
@@ -124,8 +206,17 @@ export class RolesService {
           select: { settings: true },
         })?.catch(() => null);
         inheritedScope = ((ws?.settings as any)?.roleDataScopes || {})[sourceRole.id] || this.getDefaultDataScopeForRole(sourceRole.name);
+        const srcTeams = ((ws?.settings as any)?.roleScopedTeams || {})[sourceRole.id];
+        if (Array.isArray(srcTeams)) inheritedScopedTeams = srcTeams;
       }
     }
+
+    const finalScope = options?.dataScope || inheritedScope || this.getDefaultDataScopeForRole(cleanName);
+    await this.enforceDelegatedRoleAuthority(actorContext, {
+      requestedPermIds: resolvedPermIds,
+      requestedPermCodes: options?.permissionCodes,
+      requestedDataScope: finalScope,
+    });
 
     const role = await this.prisma.role.create({
       data: {
@@ -145,14 +236,23 @@ export class RolesService {
       });
     }
 
-    const finalScope = options?.dataScope || inheritedScope || this.getDefaultDataScopeForRole(cleanName);
-    if (options?.dataScope || inheritedScope) {
+    const finalScopedTeamIds = Array.isArray(options?.scopedTeamIds)
+      ? Array.from(new Set(options.scopedTeamIds.filter(Boolean)))
+      : Array.isArray(inheritedScopedTeams)
+      ? inheritedScopedTeams
+      : [];
+
+    if (options?.dataScope || inheritedScope || Array.isArray(options?.scopedTeamIds) || inheritedScopedTeams) {
       const ws = await this.prisma.workspace?.findUnique?.({
         where: { id: workspaceId },
         select: { settings: true },
-      })?.catch(() => null);
+      })?.catch?.(() => null);
       if (ws && this.prisma.workspace?.update) {
         const settings = (ws.settings as any) || {};
+        const nextRoleScopedTeams = { ...(settings.roleScopedTeams || {}) };
+        if (Array.isArray(options?.scopedTeamIds) || inheritedScopedTeams) {
+          nextRoleScopedTeams[role.id] = finalScope === 'TEAM' ? finalScopedTeamIds : [];
+        }
         await this.prisma.workspace.update({
           where: { id: workspaceId },
           data: {
@@ -162,9 +262,10 @@ export class RolesService {
                 ...(settings.roleDataScopes || {}),
                 [role.id]: finalScope,
               },
+              roleScopedTeams: nextRoleScopedTeams,
             },
           },
-        }).catch(() => null);
+        })?.catch?.(() => null);
       }
     }
 
@@ -177,13 +278,15 @@ export class RolesService {
       ...createdRole,
       isActive: true,
       dataScope: finalScope,
+      scopedTeamIds: finalScope === 'TEAM' ? finalScopedTeamIds : [],
     };
   }
 
   async updateRole(
     workspaceId: string,
     roleId: string,
-    data: { name?: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string },
+    data: { name?: string; description?: string; permissionIds?: string[]; permissionCodes?: string[]; dataScope?: string; scopedTeamIds?: string[] },
+    actorContext?: any,
   ) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, OR: [{ workspaceId }, { isSystemRole: true }] },
@@ -192,6 +295,14 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException('Role not found');
     }
+
+    const resolvedPermIds = await this.resolvePermissionIds(data.permissionIds, data.permissionCodes);
+    await this.enforceDelegatedRoleAuthority(actorContext, {
+      targetRole: role,
+      requestedPermIds: resolvedPermIds,
+      requestedPermCodes: data.permissionCodes,
+      requestedDataScope: data.dataScope,
+    });
 
     const isCurrentlyDeactivated = Boolean(role.description && role.description.startsWith('[DEACTIVATED]'));
 
@@ -220,7 +331,6 @@ export class RolesService {
       });
     }
 
-    const resolvedPermIds = await this.resolvePermissionIds(data.permissionIds, data.permissionCodes);
     if (resolvedPermIds !== undefined) {
       await this.prisma.rolePermission.deleteMany({ where: { roleId } });
       if (resolvedPermIds.length > 0) {
@@ -233,31 +343,55 @@ export class RolesService {
       }
     }
 
-    if (data.dataScope !== undefined) {
+    let persistedScope: string | undefined = data.dataScope;
+    let persistedScopedTeams: string[] | undefined = Array.isArray(data.scopedTeamIds)
+      ? Array.from(new Set(data.scopedTeamIds.filter(Boolean)))
+      : undefined;
+
+    if (data.dataScope !== undefined || data.scopedTeamIds !== undefined) {
       const ws = await this.prisma.workspace?.findUnique?.({
         where: { id: workspaceId },
         select: { settings: true },
-      })?.catch(() => null);
+      })?.catch?.(() => null);
+      const settings: any = (ws?.settings as any) || {};
+      const nextRoleDataScopes = { ...(settings.roleDataScopes || {}) };
+      if (data.dataScope !== undefined) {
+        nextRoleDataScopes[roleId] = data.dataScope;
+      }
+      const nextScope = data.dataScope || nextRoleDataScopes[roleId] || this.getDefaultDataScopeForRole(role.name);
+      persistedScope = nextScope;
+
+      const nextRoleScopedTeams = { ...(settings.roleScopedTeams || {}) };
+      if (persistedScopedTeams !== undefined) {
+        nextRoleScopedTeams[roleId] = nextScope === 'TEAM' ? persistedScopedTeams : [];
+      } else if (data.dataScope !== undefined && data.dataScope !== 'TEAM') {
+        nextRoleScopedTeams[roleId] = [];
+      }
+      persistedScopedTeams = Array.isArray(nextRoleScopedTeams[roleId]) ? nextRoleScopedTeams[roleId] : [];
+
       if (ws && this.prisma.workspace?.update) {
-        const settings = (ws.settings as any) || {};
         await this.prisma.workspace.update({
           where: { id: workspaceId },
           data: {
             settings: {
               ...settings,
-              roleDataScopes: {
-                ...(settings.roleDataScopes || {}),
-                [roleId]: data.dataScope,
-              },
+              roleDataScopes: nextRoleDataScopes,
+              roleScopedTeams: nextRoleScopedTeams,
             },
           },
-        }).catch(() => null);
+        })?.catch?.(() => null);
       }
-      if (this.prisma.membership?.updateMany && role.name !== 'OWNER') {
+
+      if (data.dataScope !== undefined && this.prisma.membership?.updateMany && role.name !== 'OWNER') {
+        const overrideIds = Object.keys(settings.memberDataScopes || {});
         await this.prisma.membership.updateMany({
-          where: { workspaceId, roleId },
+          where: {
+            workspaceId,
+            roleId,
+            ...(overrideIds.length > 0 ? { id: { notIn: overrideIds } } : {}),
+          },
           data: { dataScope: data.dataScope },
-        }).catch(() => null);
+        })?.catch?.(() => null);
       }
     }
 
@@ -273,7 +407,8 @@ export class RolesService {
       ...updated,
       description: cleanDesc,
       isActive: !isDeactivated,
-      dataScope: data.dataScope || this.getDefaultDataScopeForRole(updated?.name),
+      dataScope: persistedScope || this.getDefaultDataScopeForRole(updated?.name),
+      scopedTeamIds: persistedScopedTeams ?? [],
     };
   }
 
@@ -329,7 +464,7 @@ export class RolesService {
     return this.updateRole(workspaceId, roleId, { permissionIds: permIds, dataScope: defaultScope });
   }
 
-  async deactivateRole(workspaceId: string, roleId: string) {
+  async deactivateRole(workspaceId: string, roleId: string, actorContext?: any) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, workspaceId },
     });
@@ -337,6 +472,8 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException('Custom role not found in this workspace');
     }
+
+    await this.enforceDelegatedRoleAuthority(actorContext, { targetRole: role });
 
     if (role.isSystemRole) {
       throw new BadRequestException('Platform system roles cannot be deactivated');
@@ -363,7 +500,7 @@ export class RolesService {
     };
   }
 
-  async reactivateRole(workspaceId: string, roleId: string) {
+  async reactivateRole(workspaceId: string, roleId: string, actorContext?: any) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, workspaceId },
     });
@@ -371,6 +508,8 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException('Custom role not found in this workspace');
     }
+
+    await this.enforceDelegatedRoleAuthority(actorContext, { targetRole: role });
 
     const cleanDescription = (role.description || '').replace('[DEACTIVATED]', '').trim() || null;
     await this.prisma.role.update({
@@ -385,7 +524,7 @@ export class RolesService {
     };
   }
 
-  async deleteRole(workspaceId: string, roleId: string, reassignRoleId?: string) {
+  async deleteRole(workspaceId: string, roleId: string, reassignRoleId?: string, actorContext?: any) {
     const role = await this.prisma.role.findFirst({
       where: { id: roleId, workspaceId },
       include: { _count: { select: { memberships: true } } },
@@ -394,6 +533,8 @@ export class RolesService {
     if (!role) {
       throw new NotFoundException('Role not found or is a system role');
     }
+
+    await this.enforceDelegatedRoleAuthority(actorContext, { targetRole: role });
 
     if (role.isSystemRole) {
       throw new BadRequestException('Platform system roles cannot be deleted');
@@ -436,7 +577,7 @@ export class RolesService {
   }
 
   async getRoleMembers(workspaceId: string, roleId: string) {
-    return this.prisma.membership.findMany({
+    const members = await this.prisma.membership.findMany({
       where: { workspaceId, roleId },
       include: {
         user: { select: { id: true, firstName: true, lastName: true, email: true, avatarUrl: true } },
@@ -445,6 +586,22 @@ export class RolesService {
         designation: true,
       },
     });
+    const ws = await this.prisma.workspace?.findUnique?.({
+      where: { id: workspaceId },
+      select: { settings: true },
+    })?.catch(() => null);
+    if (!ws) return members;
+    const settings = (ws.settings as any) || {};
+    return Promise.all(
+      members.map(async (m: any) => {
+        const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, m, settings);
+        return {
+          ...m,
+          dataScope: resolved.effectiveDataScope,
+          scopedTeamIds: resolved.scopedTeamIds,
+        };
+      }),
+    );
   }
 
   /**
@@ -480,7 +637,17 @@ export class RolesService {
 
     const isPlatformAdmin = membership.accessRole === 'OWNER' || membership.accessRole === 'ADMIN';
     const isRoleActive = !membership.role?.description?.startsWith('[DEACTIVATED]');
-    const assignedPermissions = membership.role?.permissions?.map((rp) => rp.permission.code) || [];
+    const wsRecForPerms = await this.prisma.workspace
+      ?.findUnique?.({ where: { id: workspaceId }, select: { settings: true } })
+      ?.catch?.(() => null);
+    const wsSettingsForPerms: Record<string, any> | null = (wsRecForPerms?.settings as any) || null;
+    const roleAssignedPermissions = membership.role?.permissions?.map((rp) => rp.permission.code) || [];
+    const assignedPermissions = resolveMemberEffectivePermissions(
+      roleAssignedPermissions,
+      membership.id,
+      wsSettingsForPerms,
+    );
+    const memberOverrideEntry = wsSettingsForPerms?.memberPermissionOverrides?.[membership.id];
 
     // Compute effective granted permissions
     let effectivePermissions: string[] = [];
@@ -495,21 +662,37 @@ export class RolesService {
     } else if (isRoleActive) {
       effectivePermissions = [...assignedPermissions];
       assignedPermissions.forEach((code) => {
-        permissionSources[code] = `ACTIVE_ROLE_ASSIGNMENT (Granted via role: ${membership.role?.name || membership.accessRole})`;
+        if (Array.isArray(memberOverrideEntry?.added) && memberOverrideEntry.added.includes(code) && !roleAssignedPermissions.includes(code)) {
+          permissionSources[code] = 'INDIVIDUAL_PERMISSION_OVERRIDE (Granted specifically for this member)';
+        } else {
+          permissionSources[code] = `ACTIVE_ROLE_ASSIGNMENT (Granted via role: ${membership.role?.name || membership.accessRole})`;
+        }
       });
     } else {
       effectivePermissions = [];
     }
 
+    const resolvedScope = await resolveMemberScopeContext(this.prisma, workspaceId, membership);
+    let scopedTeamNames: string[] = [];
+    if (resolvedScope.scopedTeamIds.length > 0 && (this.prisma as any).team?.findMany) {
+      const teamRows = await (this.prisma as any).team
+        .findMany({ where: { workspaceId, id: { in: resolvedScope.scopedTeamIds } }, select: { id: true, name: true } })
+        .catch(() => []);
+      if (Array.isArray(teamRows)) {
+        scopedTeamNames = teamRows.map((t: any) => t.name).filter(Boolean);
+      }
+    }
+
     // Data scope description
-    const scope = membership.dataScope || 'ASSIGNED';
+    const scope = resolvedScope.effectiveDataScope || 'ASSIGNED';
     let scopeDescription = 'Restricted to records directly assigned to or created by this member';
     if (scope === 'GLOBAL' || scope === 'ALL') {
       scopeDescription = 'Global access to all records across all departments in the organization';
     } else if (scope === 'DEPARTMENT') {
       scopeDescription = `Restricted to records within the member's department: ${membership.department?.name || 'Unassigned'}`;
     } else if (scope === 'TEAM') {
-      scopeDescription = `Restricted to records within the member's team (${membership.team?.name || 'Unassigned'}) and direct reports (${membership.directReports?.length || 0} reports)`;
+      const teamsLabel = scopedTeamNames.length > 0 ? scopedTeamNames.join(', ') : (membership.team?.name || 'No team assigned');
+      scopeDescription = `Restricted to records within permitted team(s) (${teamsLabel}) and direct reports (${membership.directReports?.length || 0} reports)`;
     }
 
     // Permission evaluation
@@ -571,6 +754,8 @@ export class RolesService {
           : null,
         directReportsCount: membership.directReports?.length || 0,
         dataScope: scope,
+        scopedTeamIds: resolvedScope.scopedTeamIds,
+        scopedTeams: scopedTeamNames,
       },
       isPlatformAdmin,
       effectivePermissionsCount: effectivePermissions.length,
@@ -578,6 +763,8 @@ export class RolesService {
       permissionSources,
       dataScopePolicy: {
         scope,
+        scopedTeamIds: resolvedScope.scopedTeamIds,
+        scopedTeams: scopedTeamNames,
         description: scopeDescription,
       },
       evaluation,
@@ -588,8 +775,9 @@ export class RolesService {
   }
 
   /**
-   * 4 Core Platform Roles: OWNER, ADMIN, MANAGER, MEMBER.
-   * Decoupled from job designations, departments, and custom permission matrices.
+   * Active system roles: OWNER & ADMIN.
+   * LEGACY_ROLE_COMMENTED_OUT: MANAGER and MEMBER are preserved internally for DB enum/foreign-key
+   * backwards compatibility but suppressed from active platform role lists and onboarding.
    */
   public async ensureSystemRoles() {
     await this.ensureSystemPermissions();
@@ -602,13 +790,14 @@ export class RolesService {
         name: 'ADMIN',
         description: 'Organization administration: invites, departments, module policies, and operations',
       },
+      // LEGACY_ROLE_COMMENTED_OUT: preserved only as internal DB records for existing legacy foreign keys; hidden from listWorkspaceRoles()
       {
         name: 'MANAGER',
-        description: 'Team and operations management: workloads, attendance, timesheets, leaves, and quality reviews',
+        description: '[LEGACY_HIDDEN] Team and operations management (migrated to customizable Staff Organization Roles)',
       },
       {
         name: 'MEMBER',
-        description: 'Individual contributor: assigned tasks, projects, operational work, attendance, and personal profile',
+        description: '[LEGACY_HIDDEN] Individual contributor carrier (migrated to customizable Staff Organization Roles)',
       },
     ];
 
@@ -727,6 +916,8 @@ export class RolesService {
       { code: 'tasks:edit', name: 'Update Task Progress & Details', module: 'Tasks' },
       { code: 'tasks:delete', name: 'Delete Tasks', module: 'Tasks' },
       { code: 'tasks:assign', name: 'Assign Tasks to Team Members', module: 'Tasks' },
+      { code: 'tasks:review', name: 'Review & Approve Work Deliverables', module: 'Tasks' },
+      { code: 'tasks:complete', name: 'Mark Tasks as Completed', module: 'Tasks' },
       { code: 'tasks:export', name: 'Export Tasks & Backlogs', module: 'Tasks' },
       { code: 'tasks:manage', name: 'Full Task Administration', module: 'Tasks' },
 
@@ -808,6 +999,7 @@ export class RolesService {
       { code: 'documents:delete', name: 'Delete documents', module: 'Documents' },
 
       // Organization Structure & Administration
+      { code: 'requests:manage', name: 'Manage Service Requests & Queues', module: 'Approvals' },
       { code: 'org:manage', name: 'Manage Organization Profile', module: 'Organization' },
       { code: 'invitations:manage', name: 'Invite & Manage Team Members', module: 'Invitations' },
       { code: 'roles:manage', name: 'Configure Custom Roles & Permissions', module: 'Roles' },

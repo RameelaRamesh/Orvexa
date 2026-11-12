@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { isTaskOverdue } from '../../common/utils/task-overdue.util';
+import { getDefaultDataScopeForRole, resolveMemberScopeContext } from '../../common/utils/scope.util';
 
 export interface DateFilter {
   startDate?: string;
@@ -88,6 +89,139 @@ export class AnalyticsService {
     };
   }
 
+  private buildMembershipFilter(allowedIds?: string[]) {
+    if (!allowedIds) return undefined;
+    if (allowedIds.length === 1) return allowedIds[0];
+    return { in: allowedIds.length > 0 ? allowedIds : ['__none__'] };
+  }
+
+  private async resolveAnalyticsScope(
+    workspaceId: string,
+    membershipId: string,
+    userRole: string,
+    filters: { departmentId?: string; teamId?: string; memberId?: string; scope?: string } = {},
+    userContext?: any,
+  ): Promise<{
+    isGlobalAccess: boolean;
+    allowedMembershipIds?: string[];
+  }> {
+    const roleUpper = (userContext?.accessRole || userRole || '').toUpperCase();
+    const isAdminOrOwner = roleUpper === 'OWNER' || roleUpper === 'ADMIN';
+    const scopeParam = (filters.scope || '').toUpperCase();
+
+    if (scopeParam === 'MY_DATA') {
+      return { isGlobalAccess: false, allowedMembershipIds: membershipId ? [membershipId] : [] };
+    }
+
+    let effectiveDataScope = userContext?.dataScope;
+    let allowedTeamIds: string[] = Array.isArray(userContext?.scopedTeamIds)
+      ? [...userContext.scopedTeamIds]
+      : [];
+    if (userContext?.teamId && !allowedTeamIds.includes(userContext.teamId)) {
+      allowedTeamIds.push(userContext.teamId);
+    }
+    let departmentId = userContext?.departmentId;
+
+    if (!isAdminOrOwner && membershipId && (!effectiveDataScope || !Array.isArray(userContext?.scopedTeamIds))) {
+      let membershipRecord: any = null;
+      if (this.prisma.membership?.findFirst) {
+        try {
+          membershipRecord = await this.prisma.membership.findFirst({
+            where: { id: membershipId, workspaceId },
+            include: { role: true },
+          });
+        } catch {
+          membershipRecord = null;
+        }
+      }
+      if (membershipRecord) {
+        departmentId = departmentId || membershipRecord.departmentId;
+        const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, membershipRecord);
+        if (!effectiveDataScope) effectiveDataScope = resolved.effectiveDataScope;
+        allowedTeamIds = Array.from(new Set([...allowedTeamIds, ...resolved.scopedTeamIds]));
+      }
+    }
+
+    if (!effectiveDataScope) {
+      effectiveDataScope = isAdminOrOwner
+        ? 'GLOBAL'
+        : getDefaultDataScopeForRole(roleUpper, userContext?.roleName);
+    }
+
+    if (isAdminOrOwner || effectiveDataScope === 'GLOBAL' || effectiveDataScope === 'ALL') {
+      if (filters.memberId) {
+        return { isGlobalAccess: false, allowedMembershipIds: [filters.memberId] };
+      }
+      if ((filters.departmentId || filters.teamId) && this.prisma.membership?.findMany) {
+        try {
+          const allMems = await this.prisma.membership.findMany({ where: { workspaceId } });
+          const filtered = (allMems || []).filter(
+            (m: any) =>
+              (!filters.departmentId || m.departmentId === filters.departmentId) &&
+              (!filters.teamId || m.teamId === filters.teamId),
+          );
+          return {
+            isGlobalAccess: false,
+            allowedMembershipIds: filtered.map((m: any) => m.id).filter(Boolean),
+          };
+        } catch {
+          return { isGlobalAccess: true };
+        }
+      }
+      return { isGlobalAccess: true };
+    }
+
+    if (effectiveDataScope === 'OWN' || effectiveDataScope === 'ASSIGNED') {
+      return { isGlobalAccess: false, allowedMembershipIds: membershipId ? [membershipId] : [] };
+    }
+
+    let workspaceMembers: any[] = [];
+    if (this.prisma.membership?.findMany) {
+      try {
+        workspaceMembers = await this.prisma.membership.findMany({
+          where: { workspaceId },
+          select: { id: true, teamId: true, departmentId: true, reportsToId: true },
+        });
+      } catch {
+        workspaceMembers = [];
+      }
+    }
+
+    let permittedIds: string[] = [];
+    if (effectiveDataScope === 'DEPARTMENT') {
+      permittedIds = departmentId
+        ? workspaceMembers
+            .filter((m: any) => m.id === membershipId || m.departmentId === departmentId)
+            .map((m: any) => m.id)
+        : [membershipId];
+    } else {
+      permittedIds = workspaceMembers
+        .filter(
+          (m: any) =>
+            m.id === membershipId ||
+            m.reportsToId === membershipId ||
+            Boolean(m.teamId && allowedTeamIds.includes(m.teamId)),
+        )
+        .map((m: any) => m.id);
+    }
+
+    if (membershipId && !permittedIds.includes(membershipId)) {
+      permittedIds.push(membershipId);
+    }
+
+    if (filters.memberId) {
+      return {
+        isGlobalAccess: false,
+        allowedMembershipIds: permittedIds.includes(filters.memberId) ? [filters.memberId] : [],
+      };
+    }
+
+    return {
+      isGlobalAccess: false,
+      allowedMembershipIds: Array.from(new Set(permittedIds)),
+    };
+  }
+
   // ---------------------------------------------------------------------------
   // OVERVIEW METRICS ENGINE
   // ---------------------------------------------------------------------------
@@ -105,34 +239,24 @@ export class AnalyticsService {
       priority?: string;
       scope?: string;
     } = {},
+    userContext?: any,
   ) {
-    const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
-
     // Date Range Scoping
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const end = filters.endDate ? new Date(filters.endDate) : new Date();
     // Ensure end date covers end of that day
     end.setHours(23, 59, 59, 999);
 
-    let targetMembershipId: string | undefined = undefined;
-    const scopeUpper = (filters.scope || '').toUpperCase();
-    if (scopeUpper === 'MY_DATA') {
-      targetMembershipId = membershipId;
-    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
-      targetMembershipId = undefined;
-    } else if (filters.memberId && isManagerOrAdmin) {
-      targetMembershipId = filters.memberId;
-    } else if (!isManagerOrAdmin) {
-      targetMembershipId = membershipId;
-    }
+    const scopeRes = await this.resolveAnalyticsScope(workspaceId, membershipId, userRole, filters, userContext);
+    const memberFilter = scopeRes.isGlobalAccess ? undefined : this.buildMembershipFilter(scopeRes.allowedMembershipIds);
 
     // 1. Task Queries
     const taskWhere: any = {
       workspaceId,
       createdAt: { gte: start, lte: end },
     };
-    if (targetMembershipId) {
-      taskWhere.assigneeMembershipId = targetMembershipId;
+    if (memberFilter !== undefined) {
+      taskWhere.assigneeMembershipId = memberFilter;
     }
     if (filters.status && filters.status !== 'ALL') {
       taskWhere.status = filters.status;
@@ -141,7 +265,7 @@ export class AnalyticsService {
       taskWhere.priority = filters.priority;
     }
 
-    const [allTasks, totalMembersCount, activeProjectsCount, totalProjectsCount] = await Promise.all([
+    const [allTasks, rawMembersCount, activeProjectsCount, totalProjectsCount] = await Promise.all([
       this.prisma.task.findMany({
         where: taskWhere,
         select: {
@@ -166,6 +290,10 @@ export class AnalyticsService {
           })
         : Promise.resolve(0),
     ]);
+    const totalMembersCount =
+      !scopeRes.isGlobalAccess && Array.isArray(scopeRes.allowedMembershipIds)
+        ? Math.max(scopeRes.allowedMembershipIds.length, 1)
+        : rawMembersCount;
 
     const totalTasks = allTasks.length;
     const completedTasks = allTasks.filter((t) => t.status === 'COMPLETED').length;
@@ -184,8 +312,8 @@ export class AnalyticsService {
       workspaceId,
       createdAt: { gte: start, lte: end },
     };
-    if (targetMembershipId) {
-      workItemWhere.assignedMembershipId = targetMembershipId;
+    if (memberFilter !== undefined) {
+      workItemWhere.assignedMembershipId = memberFilter;
     }
 
     const workItems = await this.prisma.workItem.findMany({
@@ -212,8 +340,8 @@ export class AnalyticsService {
       workspaceId,
       date: { gte: start, lte: end },
     };
-    if (targetMembershipId) {
-      attendanceWhere.membershipId = targetMembershipId;
+    if (memberFilter !== undefined) {
+      attendanceWhere.membershipId = memberFilter;
     }
 
     const attendances = await this.prisma.attendance.findMany({
@@ -238,11 +366,16 @@ export class AnalyticsService {
     const endOfToday = new Date();
     endOfToday.setHours(23, 59, 59, 999);
 
+    const todayAttendanceWhere: any = {
+      workspaceId,
+      date: { gte: startOfToday, lte: endOfToday },
+    };
+    if (memberFilter !== undefined) {
+      todayAttendanceWhere.membershipId = memberFilter;
+    }
+
     const todayAttendances = await this.prisma.attendance.findMany({
-      where: {
-        workspaceId,
-        date: { gte: startOfToday, lte: endOfToday },
-      },
+      where: todayAttendanceWhere,
       select: {
         id: true,
         membershipId: true,
@@ -259,8 +392,8 @@ export class AnalyticsService {
       startDate: { lte: end },
       endDate: { gte: start },
     };
-    if (targetMembershipId) {
-      leaveWhere.membershipId = targetMembershipId;
+    if (memberFilter !== undefined) {
+      leaveWhere.membershipId = memberFilter;
     }
 
     const leaveRequests = await this.prisma.leaveRequest.findMany({
@@ -701,23 +834,14 @@ export class AnalyticsService {
       limit?: number;
       offset?: number;
     } = {},
+    userContext?: any,
   ) {
-    const isManagerOrAdmin = ['OWNER', 'ADMIN', 'MANAGER', 'HR'].includes(userRole);
     const start = filters.startDate ? new Date(filters.startDate) : new Date(new Date().getFullYear(), new Date().getMonth(), 1);
     const end = filters.endDate ? new Date(filters.endDate) : new Date();
     end.setHours(23, 59, 59, 999);
 
-    let targetMembershipId: string | undefined = undefined;
-    const scopeUpper = (filters.scope || '').toUpperCase();
-    if (scopeUpper === 'MY_DATA') {
-      targetMembershipId = membershipId;
-    } else if (scopeUpper === 'ENTIRE_WORKSPACE' && isManagerOrAdmin) {
-      targetMembershipId = undefined;
-    } else if (filters.memberId && isManagerOrAdmin) {
-      targetMembershipId = filters.memberId;
-    } else if (!isManagerOrAdmin) {
-      targetMembershipId = membershipId;
-    }
+    const scopeRes = await this.resolveAnalyticsScope(workspaceId, membershipId, userRole, filters, userContext);
+    const memberFilter = scopeRes.isGlobalAccess ? undefined : this.buildMembershipFilter(scopeRes.allowedMembershipIds);
 
     const limit = Number(filters.limit) || 50;
     const offset = Number(filters.offset) || 0;
@@ -728,7 +852,7 @@ export class AnalyticsService {
           workspaceId,
           createdAt: { gte: start, lte: end },
         };
-        if (targetMembershipId) where.assigneeMembershipId = targetMembershipId;
+        if (memberFilter !== undefined) where.assigneeMembershipId = memberFilter;
         if (filters.status && filters.status !== 'ALL') {
           if (filters.status === 'OVERDUE') {
             where.dueDate = { not: null };
@@ -815,7 +939,7 @@ export class AnalyticsService {
           workspaceId,
           date: { gte: start, lte: end },
         };
-        if (targetMembershipId) where.membershipId = targetMembershipId;
+        if (memberFilter !== undefined) where.membershipId = memberFilter;
         if (filters.status && filters.status !== 'ALL') where.status = filters.status;
 
         const [items, total] = await Promise.all([
@@ -859,7 +983,7 @@ export class AnalyticsService {
           startDate: { lte: end },
           endDate: { gte: start },
         };
-        if (targetMembershipId) where.membershipId = targetMembershipId;
+        if (memberFilter !== undefined) where.membershipId = memberFilter;
         if (filters.status && filters.status !== 'ALL') where.status = filters.status;
 
         const [items, total] = await Promise.all([
@@ -1052,12 +1176,20 @@ export class AnalyticsService {
     category: string,
     format: 'json' | 'csv' = 'json',
     filters: any = {},
+    userContext?: any,
   ) {
-    const drilldown = await this.getDrilldown(workspaceId, membershipId, userRole, category, {
-      ...filters,
-      limit: 1000, // Export up to 1000 rows
-      offset: 0,
-    });
+    const drilldown = await this.getDrilldown(
+      workspaceId,
+      membershipId,
+      userRole,
+      category,
+      {
+        ...filters,
+        limit: 1000, // Export up to 1000 rows
+        offset: 0,
+      },
+      userContext,
+    );
 
     if (format === 'json') {
       return {

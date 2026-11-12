@@ -37,6 +37,12 @@ import {
   Pencil,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  checkPermission,
+  extractPermissionCodes,
+  getDataScope,
+  type PermissionContext,
+} from '@/lib/permissions';
 
 export default function TimeAttendancePage() {
   const [activeTab, setActiveTab] = useState<'team_logs' | 'corrections' | 'shifts_policy' | 'leave'>('team_logs');
@@ -72,6 +78,7 @@ export default function TimeAttendancePage() {
   };
   const [currentMembershipId, setCurrentMembershipId] = useState<string>('');
   const [userPermissions, setUserPermissions] = useState<string[]>([]);
+  const [activeTimeContext, setActiveTimeContext] = useState<PermissionContext | null>(null);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
   const [showApplyLeaveModal, setShowApplyLeaveModal] = useState(false);
   const [applyLeaveType, setApplyLeaveType] = useState('CASUAL');
@@ -311,25 +318,28 @@ export default function TimeAttendancePage() {
         meRes.json(),
       ]);
 
+      const wsData = rawWs.data !== undefined ? rawWs.data : rawWs;
       const meData = rawMe.data !== undefined ? rawMe.data : rawMe;
       let currentMembershipObj: any = null;
       if (meData?.memberships) {
         const mem = meData.memberships.find((m: any) => m.workspaceId === wsId);
         if (mem) {
+          /* LEGACY_ROLE_COMMENTED_OUT: Keep real accessRole; permissions (leave:approve, etc.) are configured independently on custom roles and per-member overrides
           const isHR =
             mem.designation?.title?.toLowerCase().includes('hr') ||
             mem.department?.name?.toLowerCase().includes('hr') ||
             mem.user?.email?.toLowerCase().includes('hr');
           const effectiveRole = isHR && mem.accessRole === 'MEMBER' ? 'MANAGER' : (mem.accessRole || 'MEMBER');
-          setCurrentUserRole(effectiveRole);
+          */
+          setCurrentUserRole(mem.accessRole || 'MEMBER');
           setCurrentMembershipId(mem.id);
           setCurrentUserDesignation(mem.designation?.title || '');
           const isOwner = mem.accessRole === 'OWNER';
           setIsPlatformAdmin(isOwner);
 
-          const perms: string[] = (mem.role?.permissions || []).map(
-            (rp: any) => rp.permission?.code || rp.code || rp
-          );
+          const timeCtx: PermissionContext = { ...mem, workspace: wsData };
+          setActiveTimeContext(timeCtx);
+          const perms = extractPermissionCodes(timeCtx);
           setUserPermissions(perms);
 
           currentMembershipObj = {
@@ -410,7 +420,6 @@ export default function TimeAttendancePage() {
           peopleList = Array.isArray(rawP.data) ? rawP.data : Array.isArray(rawP) ? rawP : [];
         } catch {}
       }
-      const wsData = rawWs.data !== undefined ? rawWs.data : rawWs;
       const wsMems = Array.isArray(wsData?.memberships) ? wsData.memberships : [];
       const combinedEmployees = peopleList.length > 0 ? peopleList : wsMems;
       setWorkspaceEmployees(combinedEmployees);
@@ -443,7 +452,8 @@ export default function TimeAttendancePage() {
   };
 
   const hasPerm = (perm: string) => {
-    if (isPlatformAdmin) return true;
+    if (isPlatformAdmin || currentUserRole === 'OWNER' || currentUserRole === 'ADMIN') return true;
+    if (activeTimeContext && checkPermission(activeTimeContext, perm)) return true;
     const [mod] = perm.split(':');
     return (
       userPermissions.includes(perm) ||
@@ -470,8 +480,8 @@ export default function TimeAttendancePage() {
     hasPerm('time:manage') ||
     hasPerm('attendance:manage') ||
     currentUserRole === 'OWNER' ||
-    currentUserRole === 'ADMIN' ||
-    currentUserRole === 'MANAGER'
+    currentUserRole === 'ADMIN'
+    /* LEGACY_ROLE_COMMENTED_OUT: || currentUserRole === 'MANAGER' */
   );
 
   const canViewCorrections = !isAttendanceDisabled && (
@@ -479,9 +489,21 @@ export default function TimeAttendancePage() {
     hasPerm('attendance:edit') ||
     hasPerm('attendance:manage') ||
     currentUserRole === 'OWNER' ||
-    currentUserRole === 'ADMIN' ||
-    currentUserRole === 'MANAGER'
+    currentUserRole === 'ADMIN'
+    /* LEGACY_ROLE_COMMENTED_OUT: || currentUserRole === 'MANAGER' */
   );
+
+  const canApproveLeave =
+    isPlatformAdmin ||
+    currentUserRole === 'OWNER' ||
+    currentUserRole === 'ADMIN' ||
+    hasPerm('leave:approve') ||
+    hasPerm('leave:manage');
+
+  const actorTimeDataScope = (getDataScope(activeTimeContext) || 'ASSIGNED').toUpperCase();
+  const showLeaveApprovalsInbox =
+    canApproveLeave ||
+    (hasPerm('leave:view') && ['TEAM', 'DEPARTMENT', 'GLOBAL', 'WORKSPACE'].includes(actorTimeDataScope));
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -1862,20 +1884,27 @@ export default function TimeAttendancePage() {
             })}
           </div>
 
-          {/* Team Approvals Inbox (Visible for Managers, Admins & Owner) */}
-          {(currentUserRole === 'OWNER' || currentUserRole === 'ADMIN' || currentUserRole === 'MANAGER') && (
+          {/* Team Leave Approvals Inbox (Permission-based: Owner, Admin, or custom staff roles with leave:approve / leave:view across Team/Dept/Global) */}
+          {showLeaveApprovalsInbox && (
             <Card className="border-border shadow-xs">
               <CardHeader className="pb-3 border-b border-border/60">
                 <div className="flex items-center justify-between">
                   <div>
                     <CardTitle className="text-sm font-bold flex items-center gap-2">
                       <Users className="h-4 w-4 text-primary" />
-                      Team Leave Approvals {currentUserRole === 'MANAGER' ? '(Team Lead — View Only)' : currentUserRole === 'ADMIN' ? '(Admin Approvals)' : '(Owner Approvals)'}
+                      Team Leave Approvals{' '}
+                      {!canApproveLeave
+                        ? '(View Only)'
+                        : currentUserRole === 'OWNER'
+                        ? '(Owner Approvals)'
+                        : currentUserRole === 'ADMIN'
+                        ? '(Admin Approvals)'
+                        : `(${activeTimeContext?.role?.name || currentUserDesignation || 'Delegated'} Approvals)`}
                     </CardTitle>
                     <CardDescription className="text-xs mt-0.5">
-                      {currentUserRole === 'MANAGER'
-                        ? 'View pending and approved leave applications submitted by your team (Approvals handled by HR / Owner)'
-                        : 'Review, approve, or reject leave applications submitted by team members'}
+                      {!canApproveLeave
+                        ? 'View pending and approved leave applications within your permitted scope'
+                        : 'Review, approve, or reject leave applications within your role permission & scope'}
                     </CardDescription>
                   </div>
                   <Badge variant="secondary" className="text-xs">
@@ -1911,7 +1940,7 @@ export default function TimeAttendancePage() {
                                 {req.membership?.user?.firstName} {req.membership?.user?.lastName}
                               </div>
                               <div className="text-[10px] text-muted-foreground">
-                                {req.membership?.department?.name || 'Engineering'} • {req.membership?.designation?.title || 'Member'}
+                                {req.membership?.department?.name || 'General'} • {req.membership?.designation?.title || 'Staff'}
                               </div>
                             </td>
                             <td className="py-3 px-4">
@@ -1957,19 +1986,17 @@ export default function TimeAttendancePage() {
                                     );
                                   }
 
-                                  // 2. Team Lead / Manager: "team lead cant acces the leave approve, they will see only"
-                                  const isTeamLeadOrManager =
-                                    currentUserRole === 'MANAGER' ||
-                                    (currentUserDesignation && /lead/i.test(currentUserDesignation) && currentUserRole !== 'OWNER' && currentUserRole !== 'ADMIN');
-                                  if (isTeamLeadOrManager) {
+                                  // 2. Permission check: view-only unless holding leave:approve / leave:manage
+                                  /* LEGACY_ROLE_COMMENTED_OUT: Hardcoded MANAGER / Lead title block replaced by independent permission check */
+                                  if (!canApproveLeave) {
                                     return (
                                       <Badge variant="outline" className="text-[10px] text-muted-foreground border-border">
-                                        View Only (Team Lead)
+                                        View Only
                                       </Badge>
                                     );
                                   }
 
-                                  // 3. HR Leave: "if hr wants to apply leave the owner will be approve or disapprove"
+                                  // 3. HR / Approver Leave: only Owner can approve
                                   const isApplicantHR =
                                     req.membership?.accessRole === 'ADMIN' ||
                                     req.membership?.designation?.title?.toLowerCase().includes('hr') ||
@@ -1983,7 +2010,7 @@ export default function TimeAttendancePage() {
                                     );
                                   }
 
-                                  // Authorized Approver: Owner (for anyone) or HR Executive (for non-HR members)
+                                  // Authorized Approver: Owner, Admin, or Staff Role with leave:approve
                                   return (
                                     <>
                                       <Button

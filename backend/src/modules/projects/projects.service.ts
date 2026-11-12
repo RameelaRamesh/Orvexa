@@ -2,6 +2,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../database/prisma.service';
 import { ProjectStatus, PriorityLevel } from '@prisma/client';
 import { isTaskOverdue } from '../../common/utils/task-overdue.util';
+import { getDefaultDataScopeForRole, resolveMemberScopeContext } from '../../common/utils/scope.util';
 
 @Injectable()
 export class ProjectsService {
@@ -41,7 +42,7 @@ export class ProjectsService {
     return allMeta[projectId];
   }
 
-  async list(workspaceId: string, status?: ProjectStatus) {
+  async list(workspaceId: string, status?: ProjectStatus, userContext?: any) {
     const where: any = { workspaceId };
     if (status) where.status = status;
 
@@ -56,7 +57,7 @@ export class ProjectsService {
       }),
       this.prisma.task.findMany({
         where: { workspaceId, projectId: { not: null } },
-        select: { id: true, projectId: true, status: true },
+        select: { id: true, projectId: true, status: true, assigneeMembershipId: true, sla: true },
       }),
       this.prisma.membership.findMany({
         where: { workspaceId },
@@ -72,7 +73,7 @@ export class ProjectsService {
       this.getWorkspaceProjectMetadata(workspaceId),
     ]);
 
-    return projects.map((proj) => {
+    const mapped = projects.map((proj) => {
       const meta = allMeta[proj.id] || {};
       const projTasks = tasks.filter((t) => t.projectId === proj.id);
       const totalTasks = projTasks.length;
@@ -103,8 +104,87 @@ export class ProjectsService {
         totalTasks,
         completedTasks,
         filesCount: (meta.files || []).length,
+        _projTasks: projTasks,
+        _activity: meta.activity || [],
       };
     });
+
+    const roleUpper = (userContext?.accessRole || '').toUpperCase();
+    const isGlobalAdmin = roleUpper === 'OWNER' || roleUpper === 'ADMIN';
+    if (!userContext?.membershipId || isGlobalAdmin) {
+      return mapped.map(({ _projTasks, _activity, ...p }) => p);
+    }
+
+    const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, {
+      id: userContext.membershipId,
+      accessRole: userContext.accessRole,
+      roleId: userContext.roleId,
+      dataScope: userContext.dataScope,
+      teamId: userContext.teamId,
+      departmentId: userContext.departmentId,
+      role: userContext.roleName ? { id: userContext.roleId, name: userContext.roleName } : undefined,
+    });
+    const effectiveScope =
+      userContext.dataScope ||
+      resolved.effectiveDataScope ||
+      getDefaultDataScopeForRole(roleUpper, userContext.roleName);
+
+    if (effectiveScope === 'GLOBAL' || effectiveScope === 'ALL') {
+      return mapped.map(({ _projTasks, _activity, ...p }) => p);
+    }
+
+    const allowedTeamIds = Array.from(
+      new Set([
+        ...(Array.isArray(userContext.scopedTeamIds) ? userContext.scopedTeamIds : []),
+        ...resolved.scopedTeamIds,
+        ...(userContext.teamId ? [userContext.teamId] : []),
+      ].filter(Boolean)),
+    );
+    const myId = userContext.membershipId;
+    const allowedMemberIds = new Set<string>([myId]);
+    if (effectiveScope === 'DEPARTMENT') {
+      const deptId = userContext.departmentId;
+      if (deptId) {
+        for (const m of memberships) {
+          if (m.departmentId === deptId) allowedMemberIds.add(m.id);
+        }
+      }
+    } else if (effectiveScope === 'TEAM') {
+      for (const m of memberships) {
+        if (m.reportsToId === myId || (m.teamId && allowedTeamIds.includes(m.teamId))) {
+          allowedMemberIds.add(m.id);
+        }
+      }
+    }
+
+    return mapped
+      .filter((p) => {
+        if (p.managerMembershipId && allowedMemberIds.has(p.managerMembershipId)) return true;
+        if (p.memberMembershipIds.some((id: string) => allowedMemberIds.has(id))) return true;
+        if (
+          p._activity.some(
+            (a: any) => a?.action === 'PROJECT_CREATED' && a?.actorId && allowedMemberIds.has(a.actorId),
+          )
+        ) {
+          return true;
+        }
+        if (effectiveScope === 'DEPARTMENT' && userContext.departmentId && p.departmentId === userContext.departmentId) {
+          return true;
+        }
+        return p._projTasks.some((t: any) => {
+          const sla = (t.sla as any) || {};
+          const assignees = [
+            t.assigneeMembershipId,
+            ...(Array.isArray(sla.assigneeMembershipIds) ? sla.assigneeMembershipIds : []),
+          ].filter(Boolean);
+          return (
+            assignees.some((aId) => allowedMemberIds.has(aId)) ||
+            (sla.creatorMembershipId && allowedMemberIds.has(sla.creatorMembershipId)) ||
+            (effectiveScope === 'TEAM' && sla.teamId && allowedTeamIds.includes(sla.teamId))
+          );
+        });
+      })
+      .map(({ _projTasks, _activity, ...p }) => p);
   }
 
   async getById(id: string, workspaceId: string) {

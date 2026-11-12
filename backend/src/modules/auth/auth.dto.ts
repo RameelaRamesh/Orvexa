@@ -1,4 +1,4 @@
-import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, MinLength, IsOptional, IsBoolean } from 'class-validator';
 
 export class RegisterDto {
   @IsEmail({}, { message: 'Enter a valid work email address.' })
@@ -131,5 +131,17 @@ export class UpdateProfileDto {
   @IsString()
   @IsOptional()
   avatarUrl?: string;
+
+  @IsString()
+  @IsOptional()
+  location?: string;
+
+  @IsString()
+  @IsOptional()
+  workLocation?: string;
+
+  @IsBoolean()
+  @IsOptional()
+  profileSetupCompleted?: boolean;
 }
 

@@ -24,6 +24,10 @@ import {
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
 import { generateMfaSecret, generateRecoveryCodes, verifyTOTP } from './totp.util';
+import {
+  resolveMemberScopeContext,
+  resolveMemberEffectivePermissions,
+} from '../../common/utils/scope.util';
 
 @Injectable()
 export class AuthService {
@@ -48,6 +52,55 @@ export class AuthService {
       const slug = (m.workspace?.slug || '').toLowerCase();
       return !name.includes('kb construction') && !slug.includes('kb-construction');
     });
+  }
+
+  private resolveProfileSetupCompleted(userId: string, memberships: any[]): boolean {
+    if (!Array.isArray(memberships) || memberships.length === 0) return true;
+    const hasExplicitPending = memberships.some((m: any) => {
+      if ((m.accessRole || '').toUpperCase() === 'OWNER') return false;
+      const wsSettings =
+        m.workspace?.settings && typeof m.workspace.settings === 'object'
+          ? m.workspace.settings
+          : null;
+      return wsSettings?.profileSetupCompletedByUser?.[userId] === false;
+    });
+    return !hasExplicitPending;
+  }
+
+  private async enrichMembershipsWithScope(memberships: any[]) {
+    const clean = this.filterCleanMemberships(memberships);
+    return Promise.all(
+      clean.map(async (m: any) => {
+        const wsSettings =
+          m.workspace?.settings && typeof m.workspace.settings === 'object'
+            ? m.workspace.settings
+            : undefined;
+        const resolved = await resolveMemberScopeContext(
+          this.prisma,
+          m.workspaceId,
+          m,
+          wsSettings,
+        );
+        const roleCodes = Array.isArray(m.role?.permissions)
+          ? m.role.permissions
+              .map((rp: any) => rp?.permission?.code || rp?.code)
+              .filter(Boolean)
+          : [];
+        const effectivePermissions = resolveMemberEffectivePermissions(
+          roleCodes,
+          m.id,
+          wsSettings,
+        );
+        return {
+          ...m,
+          dataScope: resolved.effectiveDataScope,
+          scopedTeamIds: resolved.scopedTeamIds,
+          ledTeamIds: resolved.ledTeamIds,
+          effectivePermissions,
+          memberPermissionOverrides: wsSettings?.memberPermissionOverrides?.[m.id] || null,
+        };
+      }),
+    );
   }
 
   async register(dto: RegisterDto) {
@@ -105,14 +158,21 @@ export class AuthService {
           settings: {
             country: dto.country || 'US',
             timezone: dto.timezone || 'UTC',
-            orgSize: dto.orgSize || '10-50',
+            orgSize: dto.orgSize || '0-10',
+            industries: dto.businessType && dto.businessType !== 'GENERAL' ? [dto.businessType] : [],
             enabledModules: defaultModules,
+            preStepper: {
+              welcomeDone: false,
+              industriesDone: false,
+              modulesDone: false,
+              orgStructureChoice: null,
+            },
             onboarding: {
               isCompleted: false,
               completedSteps: ['profile'],
               currentStep: 'schedule',
               mandatorySteps: ['profile', 'schedule'],
-              optionalSteps: ['holidays', 'locations', 'departments'],
+              optionalSteps: ['holidays', 'locations', 'departments', 'team_invite'],
             },
           },
         },
@@ -290,6 +350,7 @@ export class AuthService {
     });
 
     const token = this.generateToken(user.id, user.email, user.tokenVersion);
+    const enrichedMemberships = await this.enrichMembershipsWithScope(user.memberships);
 
     return {
       message: 'Logged in successfully',
@@ -302,8 +363,9 @@ export class AuthService {
         mustChangePassword: user.mustChangePassword,
         mfaEnabled: user.mfaEnabled,
         lastLoginAt: user.lastLoginAt,
+        profileSetupCompleted: this.resolveProfileSetupCompleted(user.id, enrichedMemberships),
       },
-      memberships: this.filterCleanMemberships(user.memberships),
+      memberships: enrichedMemberships,
       accessToken: token,
     };
   }
@@ -448,6 +510,7 @@ export class AuthService {
     });
 
     const accessToken = this.generateToken(user.id, user.email, user.tokenVersion);
+    const enrichedMemberships = await this.enrichMembershipsWithScope(user.memberships);
 
     return {
       message: 'Two-step authentication verified successfully',
@@ -460,8 +523,9 @@ export class AuthService {
         mustChangePassword: user.mustChangePassword,
         mfaEnabled: user.mfaEnabled,
         lastLoginAt: user.lastLoginAt,
+        profileSetupCompleted: this.resolveProfileSetupCompleted(user.id, enrichedMemberships),
       },
-      memberships: this.filterCleanMemberships(user.memberships),
+      memberships: enrichedMemberships,
       accessToken,
     };
   }
@@ -677,6 +741,11 @@ export class AuthService {
             department: true,
             team: true,
             designation: true,
+            reportsTo: {
+              include: {
+                user: { select: { firstName: true, lastName: true, email: true } },
+              },
+            },
           },
         },
       },
@@ -687,10 +756,13 @@ export class AuthService {
     }
 
     if (user && user.memberships) {
-      (user as any).memberships = this.filterCleanMemberships(user.memberships);
+      (user as any).memberships = await this.enrichMembershipsWithScope(user.memberships);
     }
 
-    return user;
+    return {
+      ...user,
+      profileSetupCompleted: this.resolveProfileSetupCompleted(user.id, (user as any).memberships || []),
+    };
   }
 
   async refreshToken(userId: string) {
@@ -733,8 +805,8 @@ export class AuthService {
       data: {
         ...(newEmail ? { email: newEmail } : {}),
         ...(dto.firstName ? { firstName: dto.firstName.trim() } : {}),
-        ...(dto.lastName ? { lastName: dto.lastName.trim() } : {}),
-        ...(dto.phone ? { phone: dto.phone.trim() } : {}),
+        ...(dto.lastName !== undefined ? { lastName: dto.lastName.trim() } : {}),
+        ...(dto.phone !== undefined ? { phone: dto.phone ? dto.phone.trim() : null } : {}),
         ...(dto.avatarUrl !== undefined ? { avatarUrl: dto.avatarUrl } : {}),
       },
       select: {
@@ -749,7 +821,59 @@ export class AuthService {
       },
     });
 
-    return { message: 'Profile updated successfully', user: updated };
+    const nextWorkLocation = (dto.workLocation ?? dto.location)?.trim();
+    if (
+      (nextWorkLocation !== undefined || dto.profileSetupCompleted !== undefined) &&
+      (this.prisma as any).membership?.findMany
+    ) {
+      const memberships = await (this.prisma as any).membership
+        .findMany({
+          where: { userId, status: 'ACTIVE' },
+          include: { workspace: { select: { id: true, settings: true } } },
+        })
+        ?.catch?.(() => []);
+
+      if (Array.isArray(memberships)) {
+        for (const mem of memberships) {
+          if (nextWorkLocation !== undefined && (this.prisma as any).membership?.update) {
+            await (this.prisma as any).membership
+              .update({
+                where: { id: mem.id },
+                data: { workLocation: nextWorkLocation || null },
+              })
+              ?.catch?.(() => null);
+          }
+          if (dto.profileSetupCompleted !== undefined && (this.prisma as any).workspace?.update) {
+            const wsSettings: any = (mem.workspace?.settings as any) || {};
+            const nextMap = {
+              ...(wsSettings.profileSetupCompletedByUser || {}),
+              [userId]: Boolean(dto.profileSetupCompleted),
+            };
+            await (this.prisma as any).workspace
+              .update({
+                where: { id: mem.workspaceId },
+                data: {
+                  settings: {
+                    ...wsSettings,
+                    profileSetupCompletedByUser: nextMap,
+                  },
+                },
+              })
+              ?.catch?.(() => null);
+          }
+        }
+      }
+    }
+
+    return {
+      message: 'Profile updated successfully',
+      user: {
+        ...updated,
+        ...(dto.profileSetupCompleted !== undefined
+          ? { profileSetupCompleted: Boolean(dto.profileSetupCompleted) }
+          : {}),
+      },
+    };
   }
 
   async adminTriggerReset(workspaceId: string, adminUserId: string, targetUserId: string) {

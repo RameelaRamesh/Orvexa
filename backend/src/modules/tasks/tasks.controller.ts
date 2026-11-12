@@ -42,8 +42,9 @@ export class TasksController {
     const userContext = req.userContext || {
       membershipId: req.membershipId || req.membership?.id,
       accessRole: req.membership?.accessRole || 'MEMBER',
+      roleId: req.membership?.roleId,
       roleName: req.membership?.role?.name,
-      dataScope: req.membership?.dataScope || 'ASSIGNED',
+      dataScope: req.membership?.dataScope,
       teamId: req.membership?.teamId,
       departmentId: req.membership?.departmentId,
     };

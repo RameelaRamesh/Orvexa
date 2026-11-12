@@ -63,6 +63,8 @@ export interface ServiceRequest {
   
   // Role-Group Routing (Requirement 2)
   targetRole: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
+  targetRoleId?: string | null;
+  targetRoleName?: string | null;
   targetUserId?: string | null;
   targetUserName?: string | null;
   assignedTo?: string | null; // membershipId or userId of claimant
@@ -152,33 +154,66 @@ export class RequestsService {
         user: true,
         designation: true,
         department: true,
+        role: true,
       },
     });
 
-    const groups: Record<'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER', any[]> = {
+    const formatMember = (m: any) => ({
+      id: m.id,
+      userId: m.userId,
+      name: `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || 'Team Member',
+      firstName: m.user?.firstName || '',
+      lastName: m.user?.lastName || '',
+      email: m.user?.email || '',
+      avatarUrl: m.user?.avatarUrl || null,
+      role: m.role?.name || m.accessRole,
+      roleId: m.roleId || null,
+      teamId: m.teamId || null,
+      designation: m.designation?.title || '',
+      department: m.department?.name || '',
+    });
+
+    // LEGACY_ROLE_COMMENTED_OUT: MANAGER and MEMBER arrays kept internally for legacy compatibility; active routing focuses on OWNER, ADMIN, customRoles, and teams
+    const groups: {
+      OWNER: any[];
+      ADMIN: any[];
+      MANAGER: any[];
+      MEMBER: any[];
+      customRoles: Array<{ id: string; name: string; members: any[] }>;
+      teams: Array<{ id: string; name: string; members: any[] }>;
+    } = {
       OWNER: [],
       ADMIN: [],
       MANAGER: [],
       MEMBER: [],
+      customRoles: [],
+      teams: [],
     };
 
     for (const m of members) {
-      const role = (m.accessRole || 'MEMBER').toUpperCase() as keyof typeof groups;
-      if (groups[role]) {
-        groups[role].push({
-          id: m.id,
-          userId: m.userId,
-          name: `${m.user?.firstName || ''} ${m.user?.lastName || ''}`.trim() || 'Team Member',
-          firstName: m.user?.firstName || '',
-          lastName: m.user?.lastName || '',
-          email: m.user?.email || '',
-          avatarUrl: m.user?.avatarUrl || null,
-          role: m.accessRole,
-          designation: m.designation?.title || '',
-          department: m.department?.name || '',
-        });
+      const formatted = formatMember(m);
+      const role = (m.accessRole || 'MEMBER').toUpperCase();
+      if (role === 'OWNER' || role === 'ADMIN' || role === 'MANAGER' || role === 'MEMBER') {
+        groups[role].push(formatted);
       }
     }
+
+    const [wsRoles, wsTeams] = await Promise.all([
+      (this.prisma as any).role?.findMany?.({ where: { workspaceId, isSystemRole: false } })?.catch?.(() => []) || [],
+      (this.prisma as any).team?.findMany?.({ where: { workspaceId } })?.catch?.(() => []) || [],
+    ]);
+
+    groups.customRoles = (wsRoles || []).map((r: any) => ({
+      id: r.id,
+      name: r.name,
+      members: members.filter((m: any) => m.roleId === r.id).map(formatMember),
+    }));
+
+    groups.teams = (wsTeams || []).map((t: any) => ({
+      id: t.id,
+      name: t.name,
+      members: members.filter((m: any) => m.teamId === t.id).map(formatMember),
+    }));
 
     return groups;
   }
@@ -326,6 +361,8 @@ export class RequestsService {
       description?: string;
       priority?: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
       targetRole?: 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER' | 'owner' | 'admin' | 'manager' | 'member';
+      targetRoleId?: string | null;
+      targetRoleName?: string | null;
       targetUserId?: string | null;
       dueDate?: Date | string;
       departmentId?: string;
@@ -347,11 +384,13 @@ export class RequestsService {
       throw new BadRequestException('Enter a title');
     }
 
-    const hasExplicitTargetRole = !!data.targetRole;
-    const rawTargetRole = data.targetRole || 'ADMIN';
+    const hasExplicitTargetRoleId = !!data.targetRoleId;
+    const hasExplicitTargetRole = !!data.targetRole && !hasExplicitTargetRoleId;
+    const rawTargetRole =
+      data.targetRole || (hasExplicitTargetRoleId || data.responsibleTeamId ? 'MEMBER' : 'ADMIN');
     const normalizedTargetRole = rawTargetRole.toUpperCase() as 'OWNER' | 'ADMIN' | 'MANAGER' | 'MEMBER';
 
-    // 2. Fetch requester details and check hierarchy permissions (Requirement 7)
+    // 2. Fetch requester details and check hierarchy permissions
     const requester = await this.prisma.membership.findFirst({
       where: { id: requesterMembershipId, workspaceId },
       include: { user: true, department: true },
@@ -374,26 +413,53 @@ export class RequestsService {
         throw new BadRequestException('Invalid target role specified');
       }
 
+      /* LEGACY_ROLE_COMMENTED_OUT: Hierarchical MEMBER -> MANAGER -> ADMIN -> OWNER routing lock retired so Staff/Admin/Owner can route requests freely across org roles and teams.
       // Rule: A user can send only to their own role level or above
       if (targetLevel < userLevel) {
         throw new ForbiddenException(`You can only route requests to your own role level (${requesterRole}) or above.`);
       }
 
-      // Rule: Members cannot send directly to Owner
+      // Rule: Members cannot send directly to Owner unless routing via category/custom role
       if (requesterRole === 'MEMBER' && normalizedTargetRole === 'OWNER') {
         throw new ForbiddenException('Members cannot send service requests directly to the Owner.');
       }
+      */
     }
 
-    // 3. Verify target role has active members in workspace (Requirement 7)
-    let activeTargetMembers = await this.prisma.membership.findMany({
-      where: { workspaceId, accessRole: normalizedTargetRole as any, status: 'ACTIVE' },
-      include: { user: true },
-    });
+    // 3. Verify target role / custom role / team has active members in workspace
+    let activeTargetMembers: any[] = [];
+    let resolvedTargetRoleName = data.targetRoleName || null;
+
+    if (hasExplicitTargetRoleId) {
+      activeTargetMembers = await this.prisma.membership.findMany({
+        where: { workspaceId, roleId: data.targetRoleId!, status: 'ACTIVE' },
+        include: { user: true, role: true },
+      });
+      if (!resolvedTargetRoleName && activeTargetMembers[0]?.role?.name) {
+        resolvedTargetRoleName = activeTargetMembers[0].role.name;
+      }
+      if (activeTargetMembers.length === 0) {
+        const roleRec = await (this.prisma as any).role?.findFirst?.({ where: { id: data.targetRoleId } })?.catch?.(() => null);
+        resolvedTargetRoleName = resolvedTargetRoleName || roleRec?.name || 'Custom Role';
+      }
+    } else if (data.responsibleTeamId && !hasExplicitTargetRole) {
+      activeTargetMembers = await this.prisma.membership.findMany({
+        where: { workspaceId, teamId: data.responsibleTeamId, status: 'ACTIVE' },
+        include: { user: true },
+      });
+    } else {
+      activeTargetMembers = await this.prisma.membership.findMany({
+        where: { workspaceId, accessRole: normalizedTargetRole as any, status: 'ACTIVE' },
+        include: { user: true },
+      });
+    }
 
     if (activeTargetMembers.length === 0) {
       if (hasExplicitTargetRole) {
         throw new BadRequestException(`No active ${normalizedTargetRole.toLowerCase()}s found in this workspace yet.`);
+      }
+      if (hasExplicitTargetRoleId) {
+        throw new BadRequestException(`No active members assigned to ${resolvedTargetRoleName || 'selected role'} yet.`);
       }
       activeTargetMembers = [requester];
     }
@@ -446,6 +512,10 @@ export class RequestsService {
 
     const routeLabel = resolvedTargetUserName
       ? resolvedTargetUserName
+      : resolvedTargetRoleName
+      ? `${resolvedTargetRoleName} group`
+      : resolvedTeamName
+      ? `${resolvedTeamName} team`
       : `${normalizedTargetRole.charAt(0) + normalizedTargetRole.slice(1).toLowerCase()} group`;
 
     const newRequest: ServiceRequest = {
@@ -461,6 +531,8 @@ export class RequestsService {
       requesterEmail: requester.user.email,
       requesterRole: requester.accessRole as any,
       targetRole: normalizedTargetRole,
+      targetRoleId: data.targetRoleId || null,
+      targetRoleName: resolvedTargetRoleName,
       targetUserId: resolvedTargetUserId,
       targetUserName: resolvedTargetUserName,
       assignedTo: null,
@@ -595,12 +667,17 @@ export class RequestsService {
     // 5. System OWNER
     if (userContext && userContext.accessRole !== 'OWNER') {
       const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
+      const userRoleId = userContext.roleId;
+      const userTeamId = userContext.teamId;
       const currentMemId = userContext.membershipId;
       const currentUserId = userContext.userId || currentMemId;
 
       requests = requests.filter((r) => {
         const isRequester = r.requesterMembershipId === currentMemId;
-        const isTargetRole = r.targetRole && r.targetRole.toUpperCase() === userRole;
+        const isTargetRoleId = r.targetRoleId && userRoleId && r.targetRoleId === userRoleId;
+        const isTargetRole =
+          !r.targetRoleId && !r.responsibleTeamId && r.targetRole && r.targetRole.toUpperCase() === userRole;
+        const isTargetTeam = r.responsibleTeamId && userTeamId && r.responsibleTeamId === userTeamId;
         const isTargetUser =
           r.targetUserId === currentUserId ||
           r.targetUserId === currentMemId;
@@ -609,20 +686,24 @@ export class RequestsService {
           r.assignedTo === currentUserId ||
           r.ownerMembershipId === currentMemId;
 
-        return isRequester || isTargetRole || isTargetUser || isAssigned;
+        return isRequester || isTargetRoleId || isTargetRole || isTargetTeam || isTargetUser || isAssigned;
       });
     }
 
     // Apply Filter: All / Sent to me / Sent by me (Requirement 3)
     if (query?.scope === 'SENT_TO_ME' && userContext) {
       const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
+      const userRoleId = userContext.roleId;
+      const userTeamId = userContext.teamId;
       const currentMemId = userContext.membershipId;
       const currentUserId = userContext.userId || currentMemId;
 
       requests = requests.filter(
         (r) =>
           r.requesterMembershipId !== currentMemId &&
-          (r.targetRole?.toUpperCase() === userRole ||
+          ((r.targetRoleId && userRoleId && r.targetRoleId === userRoleId) ||
+            (!r.targetRoleId && !r.responsibleTeamId && r.targetRole?.toUpperCase() === userRole) ||
+            (r.responsibleTeamId && userTeamId && r.responsibleTeamId === userTeamId) ||
             r.targetUserId === currentUserId ||
             r.targetUserId === currentMemId ||
             r.assignedTo === currentMemId ||
@@ -667,14 +748,19 @@ export class RequestsService {
       throw new NotFoundException('Service request not found in this workspace');
     }
 
-    // Backend Privacy Check (Requirement 3)
+    // Backend Privacy Check
     if (userContext && userContext.accessRole !== 'OWNER') {
       const userRole = (userContext.accessRole || 'MEMBER').toUpperCase();
+      const userRoleId = userContext.roleId;
+      const userTeamId = userContext.teamId;
       const currentMemId = userContext.membershipId;
       const currentUserId = userContext.userId || currentMemId;
 
       const isRequester = request.requesterMembershipId === currentMemId;
-      const isTargetRole = request.targetRole && request.targetRole.toUpperCase() === userRole;
+      const isTargetRoleId = request.targetRoleId && userRoleId && request.targetRoleId === userRoleId;
+      const isTargetRole =
+        !request.targetRoleId && !request.responsibleTeamId && request.targetRole && request.targetRole.toUpperCase() === userRole;
+      const isTargetTeam = request.responsibleTeamId && userTeamId && request.responsibleTeamId === userTeamId;
       const isTargetUser =
         request.targetUserId === currentUserId ||
         request.targetUserId === currentMemId;
@@ -683,7 +769,7 @@ export class RequestsService {
         request.assignedTo === currentUserId ||
         request.ownerMembershipId === currentMemId;
 
-      if (!isRequester && !isTargetRole && !isTargetUser && !isAssigned) {
+      if (!isRequester && !isTargetRoleId && !isTargetRole && !isTargetTeam && !isTargetUser && !isAssigned) {
         throw new ForbiddenException('Access denied: You are not authorized to view this service request.');
       }
     }
@@ -809,9 +895,9 @@ export class RequestsService {
     });
     const actorName = actor ? `${actor.user.firstName} ${actor.user.lastName}`.trim() : 'Team Member';
 
-    // Move target_role up one level (member to manager to admin to owner)
+    // LEGACY_ROLE_COMMENTED_OUT: Escalate staff/member tier directly to ADMIN -> OWNER (skipping retired MANAGER tier)
     const escalationLadder: Record<string, 'MANAGER' | 'ADMIN' | 'OWNER'> = {
-      MEMBER: 'MANAGER',
+      MEMBER: 'ADMIN', // previously 'MANAGER'
       MANAGER: 'ADMIN',
       ADMIN: 'OWNER',
       OWNER: 'OWNER',
@@ -830,10 +916,12 @@ export class RequestsService {
       details: `Escalated from ${currentRole} to ${nextRole} group. Reason: ${reason}`,
     });
 
-    // Clear assigned_to, set priority URGENT, notify new group
+    // Clear assigned_to, set priority URGENT, clear custom targetRoleId when escalating to Admin/Owner
     requests[reqIndex] = {
       ...req,
       targetRole: nextRole,
+      targetRoleId: null,
+      targetRoleName: null,
       targetUserId: null,
       targetUserName: null,
       assignedTo: null,

@@ -3,7 +3,7 @@ import { PeopleService } from './people.service';
 import { PrismaService } from '../../database/prisma.service';
 import { JwtService } from '@nestjs/jwt';
 import { MailService } from '../../infrastructure/mail/mail.service';
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 
 describe('PeopleService - Security & Lifecycle Tests', () => {
   let service: PeopleService;
@@ -39,6 +39,14 @@ describe('PeopleService - Security & Lifecycle Tests', () => {
     role: {
       findFirst: jest.fn(),
       create: jest.fn(),
+    },
+    workspace: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
+    team: {
+      findMany: jest.fn().mockResolvedValue([]),
     },
     task: {
       updateMany: jest.fn(),
@@ -269,6 +277,146 @@ describe('PeopleService - Security & Lifecycle Tests', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('Shareable Join Link, Profile Setup & Delegated Invite Ceiling', () => {
+    it('acceptJoinLink adds user via safe Staff carrier and sets profileSetupCompleted: false', async () => {
+      const wsRecord = {
+        id: 'ws_join_1',
+        name: 'Alpha Studio',
+        slug: 'alpha-studio',
+        logoUrl: null,
+        settings: {
+          shareInviteLink: {
+            code: 'joinabc123',
+            enabled: true,
+            defaultRoleId: 'role_staff_dev',
+            defaultDataScope: 'ASSIGNED',
+          },
+        },
+      };
+      mockPrisma.workspace.findMany.mockResolvedValue([wsRecord]);
+      mockPrisma.workspace.findUnique.mockResolvedValue(wsRecord);
+      mockPrisma.workspace.update.mockResolvedValue({});
+      mockPrisma.subscription.findFirst.mockResolvedValue({ seatCount: 10 });
+      mockPrisma.membership.count.mockResolvedValue(2);
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.user.create.mockResolvedValue({
+        id: 'user_new_1',
+        email: 'newstaff@alpha.com',
+        firstName: 'Sam',
+        lastName: 'Patel',
+        tokenVersion: 1,
+      });
+      mockPrisma.role.findFirst.mockResolvedValue({
+        id: 'role_staff_dev',
+        name: 'Software Engineer',
+        isSystemRole: false,
+      });
+      mockPrisma.membership.upsert.mockResolvedValue({
+        id: 'mem_joined_1',
+        workspaceId: 'ws_join_1',
+        accessRole: 'MEMBER',
+        roleId: 'role_staff_dev',
+        dataScope: 'ASSIGNED',
+        status: 'ACTIVE',
+      });
+
+      const result = await service.acceptJoinLink({
+        code: 'joinabc123',
+        email: 'newstaff@alpha.com',
+        password: 'Password123!',
+        firstName: 'Sam',
+        lastName: 'Patel',
+      });
+
+      expect(result.profileSetupCompleted).toBe(false);
+      expect(result.user.profileSetupCompleted).toBe(false);
+      expect(result.accessToken).toBe('mock_token');
+      expect(mockPrisma.workspace.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            settings: expect.objectContaining({
+              profileSetupCompletedByUser: expect.objectContaining({ user_new_1: false }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('enforces delegated inviter permission & role ceiling when a Team Lead invites members', async () => {
+      const leadActor = {
+        membershipId: 'mem_tl',
+        accessRole: 'MEMBER',
+        dataScope: 'TEAM',
+        teamId: 'team_eng',
+        scopedTeamIds: ['team_eng'],
+        permissions: ['invitations:manage', 'tasks:view', 'tasks:create'],
+      };
+
+      await expect(
+        service.inviteMember(
+          'ws_1',
+          'user_tl',
+          {
+            email: 'admin@alpha.com',
+            firstName: 'Eve',
+            lastName: 'Admin',
+            accessRole: 'ADMIN' as any,
+          },
+          leadActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      await expect(
+        service.inviteMember(
+          'ws_1',
+          'user_tl',
+          {
+            email: 'payroll@alpha.com',
+            firstName: 'Max',
+            lastName: 'Pay',
+            dataScope: 'TEAM',
+            permissionCodes: ['payroll:manage'],
+          },
+          leadActor,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('persists per-member permissionOverrides via updateMemberOrgDetails', async () => {
+      mockPrisma.membership.findFirst.mockResolvedValue({
+        id: 'mem_staff_9',
+        userId: 'u_9',
+        workspaceId: 'ws_1',
+        accessRole: 'MEMBER',
+        dataScope: 'ASSIGNED',
+      });
+      mockPrisma.membership.update.mockResolvedValue({
+        id: 'mem_staff_9',
+        userId: 'u_9',
+        workspaceId: 'ws_1',
+        accessRole: 'MEMBER',
+        dataScope: 'TEAM',
+        user: { id: 'u_9', firstName: 'Riya', lastName: 'K', email: 'riya@alpha.com' },
+        role: { id: 'r_staff', name: 'Coordinator' },
+        department: null,
+        team: null,
+        designation: null,
+      });
+      mockPrisma.workspace.findUnique.mockResolvedValue({ id: 'ws_1', settings: {} });
+      mockPrisma.workspace.update.mockResolvedValue({});
+
+      const updated: any = await service.updateMemberOrgDetails('ws_1', 'mem_staff_9', {
+        dataScope: 'TEAM',
+        permissionOverrides: { added: ['leave:approve'], revoked: ['tasks:delete'] },
+      });
+
+      expect(updated.memberPermissionOverrides).toEqual({
+        added: ['leave:approve'],
+        revoked: ['tasks:delete'],
+      });
     });
   });
 });

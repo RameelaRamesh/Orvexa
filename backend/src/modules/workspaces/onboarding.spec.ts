@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { WorkspacesService } from './workspaces.service';
 import { PrismaService } from '../../database/prisma.service';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, ForbiddenException } from '@nestjs/common';
 
 describe('WorkspacesService - Organization Onboarding (Phase 4 Acceptance Tests)', () => {
   let service: WorkspacesService;
@@ -245,6 +245,74 @@ describe('WorkspacesService - Organization Onboarding (Phase 4 Acceptance Tests)
           code: 'CS',
         },
       });
+    });
+  });
+
+  describe('3. Pre-Stepper Onboarding, Recommendations & Shareable Invite Link', () => {
+    it('returns exactly 8 employee brackets ending with Above 1,000 and multi-industry recommendations', () => {
+      const rec = service.getOnboardingRecommendations(['IT_SOFTWARE', 'MARKETING_AGENCY'], '26-50');
+      expect(rec.orgSizeBrackets).toHaveLength(8);
+      expect(rec.orgSizeBrackets[0]).toMatchObject({ key: '0-10', label: '0 - 10' });
+      expect(rec.orgSizeBrackets[7]).toMatchObject({ key: '1000+', label: 'Above 1,000' });
+      expect(rec.recommendedModules).toEqual(expect.arrayContaining(['people', 'projects', 'tasks', 'time']));
+      expect(Object.values(rec.recommendedFeatureToggles).filter(Boolean).length).toBeGreaterThan(5);
+      expect(rec.starterRoleTemplates.map((r) => r.name)).not.toContain('Manager');
+      expect(rec.starterRoleTemplates.map((r) => r.name)).not.toContain('Member');
+    });
+
+    it('stores pre-stepper industries_size, recommended_modules, and org_structure_choice without marking stepper steps complete', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ ...mockWorkspace, settings: { onboarding: { completedSteps: [] } } });
+      prisma.workspace.update.mockResolvedValue({});
+      prisma.shift.count.mockResolvedValue(0);
+
+      await service.updateOnboardingStep(
+        'ws_demo_1',
+        'industries_size',
+        { industries: ['IT_SOFTWARE', 'FINANCE_ACCOUNTING'], orgSize: '1000+' },
+        true,
+      );
+
+      expect(prisma.workspace.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            businessType: 'IT_SOFTWARE',
+            settings: expect.objectContaining({
+              industries: ['IT_SOFTWARE', 'FINANCE_ACCOUNTING'],
+              orgSize: '1000+',
+              preStepper: expect.objectContaining({ welcomeDone: true, industriesDone: true }),
+              onboarding: expect.objectContaining({
+                completedSteps: [],
+              }),
+            }),
+          }),
+        }),
+      );
+
+      await service.updateOnboardingStep('ws_demo_1', 'org_structure_choice', { choice: 'skip_later' }, true);
+      expect(prisma.workspace.update).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            settings: expect.objectContaining({
+              preStepper: expect.objectContaining({ orgStructureChoice: 'skip_later', skipped: true }),
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('generates shareable invite link and prevents configuring Owner or Admin as auto-assigned join role', async () => {
+      prisma.workspace.findUnique.mockResolvedValue({ ...mockWorkspace, settings: {} });
+      prisma.workspace.update.mockResolvedValue({});
+      const share = await service.getShareInviteLink('ws_demo_1');
+      expect(share.joinUrl).toContain('/join?code=');
+      expect(share.enabled).toBe(true);
+
+      prisma.role = {
+        findFirst: jest.fn().mockResolvedValue({ id: 'role_sys_admin', name: 'Admin', isSystemRole: true }),
+      };
+      await expect(
+        service.updateShareInviteLink('ws_demo_1', { defaultRoleId: 'role_sys_admin' }),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

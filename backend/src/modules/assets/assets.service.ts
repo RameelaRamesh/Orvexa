@@ -152,16 +152,32 @@ export class AssetsService {
       ];
     }
 
-    // Role-based data scoping
+    // Role & data-scope enforcement (LEGACY_ROLE_COMMENTED_OUT: uses effective dataScope rather than MANAGER literal)
     if (
       userContext &&
       userContext.accessRole !== 'OWNER' &&
-      userContext.accessRole !== 'ADMIN' &&
-      userContext.accessRole !== 'MANAGER'
+      userContext.accessRole !== 'ADMIN'
     ) {
-      const scope = userContext.dataScope || 'ASSIGNED';
+      const scope = (userContext.dataScope || 'ASSIGNED').toUpperCase();
       if (scope === 'ASSIGNED' || scope === 'OWN') {
         where.assignedToMembershipId = userContext.membershipId;
+      } else if (scope === 'DEPARTMENT' && (userContext as any).departmentId) {
+        where.assignedTo = { departmentId: (userContext as any).departmentId };
+      } else if (scope === 'TEAM') {
+        const teamIds = Array.from(
+          new Set([
+            ...((userContext as any).scopedTeamIds || []),
+            ...((userContext as any).teamId ? [(userContext as any).teamId] : []),
+          ].filter(Boolean)),
+        );
+        if (teamIds.length > 0) {
+          where.OR = [
+            { assignedToMembershipId: userContext.membershipId },
+            { assignedTo: { teamId: { in: teamIds } } },
+          ];
+        } else {
+          where.assignedToMembershipId = userContext.membershipId;
+        }
       }
     }
 

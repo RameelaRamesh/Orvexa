@@ -42,7 +42,9 @@ export class DesignationsService {
       }).catch(() => []);
       const permIds = (allPerms || []).map((p: any) => p.id).filter(Boolean);
 
-      const desiredRoleName = `${title.trim()} Role`;
+      const cleanTitle = title.trim();
+      // Unified 1:1 Organization Role per Designation (check legacy "${title} Role" if migrating, otherwise exact title)
+      const desiredRoleName = cleanTitle;
       let targetRole: any = null;
 
       if (existingRoleId) {
@@ -52,7 +54,14 @@ export class DesignationsService {
       }
       if (!targetRole) {
         targetRole = await roleModel.findFirst({
-          where: { workspaceId, name: { equals: desiredRoleName, mode: 'insensitive' }, isSystemRole: false },
+          where: {
+            workspaceId,
+            OR: [
+              { name: { equals: desiredRoleName, mode: 'insensitive' } },
+              { name: { equals: `${cleanTitle} Role`, mode: 'insensitive' } },
+            ],
+            isSystemRole: false,
+          },
         }).catch(() => null);
       }
 
@@ -61,7 +70,7 @@ export class DesignationsService {
           data: {
             workspaceId,
             name: desiredRoleName,
-            description: `Configured permission profile for ${title.trim()} designation`,
+            description: `Configured permission profile for ${cleanTitle}`,
             isSystemRole: false,
           },
         }).catch(() => null);
@@ -169,7 +178,8 @@ export class DesignationsService {
       const { settings, configs } = await this.getWorkspaceDesignationConfigs(workspaceId);
       const nextCfg: DesignationPermissionConfig = {
         departmentId: config.departmentId || null,
-        defaultAccessRole: config.defaultAccessRole || (Number(level) >= 3 ? 'MANAGER' : 'MEMBER'),
+        // LEGACY_ROLE_COMMENTED_OUT: internal SystemAccessRole DB carrier only ('MEMBER' or explicit ADMIN); active UX uses Organization Roles + dataScope
+        defaultAccessRole: config.defaultAccessRole || 'MEMBER',
         defaultDataScope: config.defaultDataScope || (Number(level) >= 3 ? 'TEAM' : 'ASSIGNED'),
         defaultRoleId: resolvedRoleId,
         permissionCodes: permCodes,
