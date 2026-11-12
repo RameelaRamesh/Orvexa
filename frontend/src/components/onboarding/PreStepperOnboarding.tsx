@@ -8,6 +8,11 @@ import { BRANDING } from '@/config/branding';
 import { toast } from 'sonner';
 import { WelcomeRunningDog } from './WelcomeRunningDog';
 import {
+  INDUSTRIES_CATALOG as FALLBACK_INDUSTRIES,
+  ORG_SIZE_BRACKETS as FALLBACK_ORG_SIZE_BRACKETS,
+  getLocalRecommendedSetup,
+} from '@/lib/onboarding-recommendations';
+import {
   ArrowLeft,
   ArrowRight,
   Briefcase,
@@ -48,30 +53,6 @@ interface PreStepperOnboardingProps {
   onEnterStepper: (updatedStatus?: any) => void;
   onSkipToDashboard: (updatedStatus?: any) => void;
 }
-
-const FALLBACK_ORG_SIZE_BRACKETS = [
-  { key: '0-10', label: '0 - 10', hint: 'Founding team or micro studio' },
-  { key: '11-25', label: '11 - 25', hint: 'Growing core team' },
-  { key: '26-50', label: '26 - 50', hint: 'Multi-team business' },
-  { key: '51-100', label: '51 - 100', hint: 'Departmental organization' },
-  { key: '101-250', label: '101 - 250', hint: 'Scaling mid-market org' },
-  { key: '251-500', label: '251 - 500', hint: 'Established enterprise division' },
-  { key: '501-1000', label: '501 - 1,000', hint: 'Large multi-site enterprise' },
-  { key: '1000+', label: 'Above 1,000', hint: 'Global enterprise scale' },
-];
-
-const FALLBACK_INDUSTRIES = [
-  { key: 'IT_SOFTWARE', label: 'Software, IT & Technology', description: 'Product engineering, SaaS, IT support & digital agencies', icon: 'Code2' },
-  { key: 'OPERATIONS_BPO', label: 'Operations, BPO & Support', description: 'Service desks, fulfillment queues, SLA workflows & QA', icon: 'Headset' },
-  { key: 'MARKETING_AGENCY', label: 'Marketing, Creative & Agency', description: 'Client campaigns, deliverables, time tracking & approvals', icon: 'Megaphone' },
-  { key: 'FINANCE_ACCOUNTING', label: 'Finance, Accounting & Consulting', description: 'Audits, payroll, client advisory & controlled access', icon: 'Landmark' },
-  { key: 'HEALTHCARE', label: 'Healthcare & Wellness', description: 'Clinics, shift rosters, compliance & leave coverage', icon: 'HeartPulse' },
-  { key: 'RETAIL_ECOMMERCE', label: 'Retail, D2C & E-Commerce', description: 'Store ops, stock movements, shift schedules & fulfillment', icon: 'ShoppingBag' },
-  { key: 'MANUFACTURING_LOGISTICS', label: 'Manufacturing & Logistics', description: 'Warehouse inventory, assets, quality audits & field shifts', icon: 'Truck' },
-  { key: 'EDUCATION', label: 'Education & Training', description: 'Faculty, cohorts, attendance & academic operations', icon: 'GraduationCap' },
-  { key: 'CONSTRUCTION_REAL_ESTATE', label: 'Construction & Real Estate', description: 'Site projects, equipment assets, field attendance & requests', icon: 'HardHat' },
-  { key: 'GENERAL', label: 'General Business & Services', description: 'Cross-functional teams managing work, people & approvals', icon: 'Briefcase' },
-];
 
 const INDUSTRY_ICON_MAP: Record<string, any> = {
   Code2,
@@ -123,6 +104,21 @@ export function PreStepperOnboarding({
     };
   };
 
+  const applyRecommendationsPayload = (payload: any, applyDefaults: boolean) => {
+    setRecommendations(payload);
+    if (applyDefaults || enabledModules.length === 0) {
+      const recMods: string[] = Array.isArray(payload?.recommendedModules) ? payload.recommendedModules : [];
+      setEnabledModules(recMods);
+      if (payload?.recommendedFeatureToggles && typeof payload.recommendedFeatureToggles === 'object') {
+        setFeatureToggles(payload.recommendedFeatureToggles);
+      }
+    }
+    if (Array.isArray(payload?.starterRoleTemplates)) {
+      setSelectedStarterRoleKeys(payload.starterRoleTemplates.map((r: any) => r.key));
+    }
+    return payload;
+  };
+
   const fetchRecommendations = async (industries: string[], orgSize: string, applyDefaults: boolean) => {
     setLoadingRecs(true);
     try {
@@ -133,28 +129,21 @@ export function PreStepperOnboarding({
       const res = await fetch(`${BRANDING.apiUrl}/workspaces/onboarding/recommendations?${qs.toString()}`, {
         headers: getHeaders(),
       });
-      const raw = await res.json();
-      if (!res.ok) throw new Error(raw?.message || 'Failed to load recommendations');
-      const payload = raw?.data !== undefined ? raw.data : raw;
-      setRecommendations(payload);
-
-      if (applyDefaults || enabledModules.length === 0) {
-        const recMods: string[] = Array.isArray(payload.recommendedModules) ? payload.recommendedModules : [];
-        setEnabledModules(recMods);
-        if (payload.recommendedFeatureToggles && typeof payload.recommendedFeatureToggles === 'object') {
-          setFeatureToggles(payload.recommendedFeatureToggles);
+      const raw = await res.json().catch(() => null);
+      if (res.ok && raw) {
+        const payload = raw?.data !== undefined ? raw.data : raw;
+        if (Array.isArray(payload?.allModulesCatalog) && payload.allModulesCatalog.length > 0) {
+          return applyRecommendationsPayload(payload, applyDefaults);
         }
       }
-      if (Array.isArray(payload.starterRoleTemplates)) {
-        setSelectedStarterRoleKeys(payload.starterRoleTemplates.map((r: any) => r.key));
-      }
-      return payload;
-    } catch (err: any) {
-      toast.error(err?.message || 'Could not load module recommendations');
-      return null;
+    } catch {
+      // Network/CORS/cold-start fallback handled seamlessly below
     } finally {
       setLoadingRecs(false);
     }
+
+    const fallbackPayload = getLocalRecommendedSetup(industries, orgSize);
+    return applyRecommendationsPayload(fallbackPayload, applyDefaults);
   };
 
   useEffect(() => {
@@ -173,12 +162,38 @@ export function PreStepperOnboarding({
         headers: getHeaders(),
         body: JSON.stringify({ step, data, markCompleted: false }),
       });
-      const raw = await res.json();
+      const raw = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(raw?.message || 'Failed to save progress');
-      const updated = raw?.data !== undefined ? raw.data : raw;
+      let updated = raw?.data !== undefined ? raw.data : raw;
+
+      // Compatibility fallback if API instance hasn't persisted recommended_modules fields yet
+      if (step === 'recommended_modules' && !Array.isArray(updated?.enabledModules) && Array.isArray(data?.enabledModules)) {
+        try {
+          await fetch(`${BRANDING.apiUrl}/workspaces/settings`, {
+            method: 'PATCH',
+            headers: getHeaders(),
+            body: JSON.stringify({
+              settings: {
+                enabledModules: data.enabledModules,
+                moduleFeatureToggles: data.moduleFeatureToggles || {},
+              },
+            }),
+          });
+          updated = {
+            ...(updated || {}),
+            enabledModules: data.enabledModules,
+            moduleFeatureToggles: data.moduleFeatureToggles || {},
+          };
+        } catch {}
+      }
 
       // Keep cached workspace enabledModules aligned when changed
-      if (Array.isArray(updated?.enabledModules)) {
+      const syncedModules = Array.isArray(updated?.enabledModules)
+        ? updated.enabledModules
+        : step === 'recommended_modules' && Array.isArray(data?.enabledModules)
+        ? data.enabledModules
+        : null;
+      if (Array.isArray(syncedModules)) {
         try {
           const cached = localStorage.getItem('orvexa_cached_workspace');
           if (cached) {
@@ -187,12 +202,12 @@ export function PreStepperOnboarding({
               ...(parsed.workspace || {}),
               settings: {
                 ...(parsed.workspace?.settings || {}),
-                enabledModules: updated.enabledModules,
-                moduleFeatureToggles: updated.moduleFeatureToggles || {},
+                enabledModules: syncedModules,
+                moduleFeatureToggles: updated?.moduleFeatureToggles || data?.moduleFeatureToggles || {},
               },
             };
             localStorage.setItem('orvexa_cached_workspace', JSON.stringify(parsed));
-            window.dispatchEvent(new CustomEvent('workspace-updated', { detail: { enabledModules: updated.enabledModules } }));
+            window.dispatchEvent(new CustomEvent('workspace-updated', { detail: { enabledModules: syncedModules } }));
           }
         } catch {}
       }
@@ -238,10 +253,7 @@ export function PreStepperOnboarding({
       return;
     }
 
-    const templates: any[] = Array.isArray(recommendations?.starterRoleTemplates)
-      ? recommendations.starterRoleTemplates
-      : [];
-    const chosenStarterRoles = templates
+    const chosenStarterRoles = starterRoleTemplates
       .filter((t) => selectedStarterRoleKeys.includes(t.key))
       .map((t) => ({
         name: t.name,
@@ -312,10 +324,21 @@ export function PreStepperOnboarding({
     }
   };
 
+  const fallbackCatalogData = useMemo(
+    () => getLocalRecommendedSetup(selectedIndustries, selectedOrgSize),
+    [selectedIndustries, selectedOrgSize],
+  );
+
   const industriesCatalog = recommendations?.industriesCatalog || FALLBACK_INDUSTRIES;
   const orgSizeBrackets = recommendations?.orgSizeBrackets || FALLBACK_ORG_SIZE_BRACKETS;
-  const allModulesCatalog: any[] = recommendations?.allModulesCatalog || [];
-  const starterRoleTemplates: any[] = recommendations?.starterRoleTemplates || [];
+  const allModulesCatalog: any[] =
+    Array.isArray(recommendations?.allModulesCatalog) && recommendations.allModulesCatalog.length > 0
+      ? recommendations.allModulesCatalog
+      : fallbackCatalogData.allModulesCatalog;
+  const starterRoleTemplates: any[] =
+    Array.isArray(recommendations?.starterRoleTemplates) && recommendations.starterRoleTemplates.length > 0
+      ? recommendations.starterRoleTemplates
+      : fallbackCatalogData.starterRoleTemplates;
 
   const groupedModules = useMemo(() => {
     const groups: Record<string, any[]> = {};
