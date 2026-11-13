@@ -142,6 +142,55 @@ interface ProjectItem {
   activity?: Array<{ id: string; action: string; timestamp: string; details: string }>;
 }
 
+const isTaskOverdue = (task?: Partial<TaskItem> | null): boolean => {
+  if (!task || !task.dueDate) return false;
+  const s = (task.status || '').toUpperCase();
+  if (s === 'COMPLETED' || s === 'DONE' || s === 'IN_REVIEW' || s === 'CANCELLED') {
+    return false;
+  }
+
+  let dueYear: number, dueMonth: number, dueDay: number;
+  if (typeof task.dueDate === 'string') {
+    const trimmed = task.dueDate.trim();
+    const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      dueYear = Number(m[1]);
+      dueMonth = Number(m[2]) - 1;
+      dueDay = Number(m[3]);
+    } else {
+      const d = new Date(task.dueDate);
+      if (isNaN(d.getTime())) return false;
+      dueYear = d.getFullYear();
+      dueMonth = d.getMonth();
+      dueDay = d.getDate();
+    }
+  } else {
+    const raw: any = task.dueDate;
+    const d = raw instanceof Date ? raw : new Date(raw);
+    if (isNaN(d.getTime())) return false;
+    dueYear = d.getFullYear();
+    dueMonth = d.getMonth();
+    dueDay = d.getDate();
+  }
+
+  const today = new Date();
+  const curYear = today.getFullYear();
+  const curMonth = today.getMonth();
+  const curDay = today.getDate();
+
+  // If the deadline date is today or in the future in the user's browser, it is NEVER overdue.
+  // It only becomes overdue after the calendar day has completely passed (starting tomorrow).
+  if (
+    dueYear > curYear ||
+    (dueYear === curYear && (dueMonth > curMonth || (dueMonth === curMonth && dueDay >= curDay)))
+  ) {
+    return false;
+  }
+
+  const deadlineEnd = new Date(dueYear, dueMonth, dueDay, 23, 59, 59, 999).getTime();
+  return Date.now() > deadlineEnd;
+};
+
 export default function ProjectsAndTasksPage() {
   const searchParams = useSearchParams();
 
@@ -349,7 +398,8 @@ export default function ProjectsAndTasksPage() {
 
       if (tasksRes.ok) {
         const data = await tasksRes.json();
-        setTasks(Array.isArray(data) ? data : data.data || []);
+        const rawList = Array.isArray(data) ? data : data.data || [];
+        setTasks(rawList.map((t: any) => ({ ...t, isOverdue: isTaskOverdue(t) })));
       }
       if (projectsRes.ok) {
         const data = await projectsRes.json();
@@ -406,7 +456,7 @@ export default function ProjectsAndTasksPage() {
       if (res.ok) {
         const data = await res.json();
         const payload = data && data.data !== undefined ? data.data : data;
-        setSelectedTask(payload);
+        setSelectedTask(payload ? { ...payload, isOverdue: isTaskOverdue(payload) } : null);
       }
     } catch {
       toast.error('Failed to load task details');
@@ -618,7 +668,7 @@ export default function ProjectsAndTasksPage() {
 
       // Status Filter
       if (myWorkStatusFilter === 'OVERDUE') {
-        if (!t.isOverdue) return false;
+        if (!isTaskOverdue(t)) return false;
       } else if (myWorkStatusFilter === 'BLOCKED') {
         if (!t.isBlocked && t.status !== 'BLOCKED') return false;
       } else if (myWorkStatusFilter === 'COMPLETED') {
@@ -725,7 +775,7 @@ export default function ProjectsAndTasksPage() {
         if (t.assignee?.department?.name !== teamDeptFilter) return false;
       }
       if (teamStatusFilter === 'OVERDUE') {
-        if (!t.isOverdue) return false;
+        if (!isTaskOverdue(t)) return false;
       } else if (teamStatusFilter !== 'ALL' && t.status !== teamStatusFilter) {
         return false;
       }
@@ -1073,7 +1123,7 @@ export default function ProjectsAndTasksPage() {
   };
 
   // Helper styles
-  const getStatusBadge = (status: TaskStatusType, isOverdue?: boolean) => {
+  const getStatusBadge = (status: TaskStatusType, isOverdue?: boolean, taskObj?: Partial<TaskItem>) => {
     let base = '';
     let label: string = status;
     if (status === 'TODO') {
@@ -1093,12 +1143,16 @@ export default function ProjectsAndTasksPage() {
       label = 'Done';
     }
 
+    const showOverdue = taskObj !== undefined
+      ? isTaskOverdue(taskObj)
+      : Boolean(isOverdue);
+
     return (
       <div className="flex items-center gap-1.5 flex-wrap">
         <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold border ${base}`}>
           {label}
         </span>
-        {isOverdue && status !== 'COMPLETED' && (status as string) !== 'DONE' && status !== 'IN_REVIEW' && (status as string) !== 'CANCELLED' && (
+        {showOverdue && status !== 'COMPLETED' && (status as string) !== 'DONE' && status !== 'IN_REVIEW' && (status as string) !== 'CANCELLED' && (
           <span className="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-rose-500 text-white shadow-2xs">
             Overdue
           </span>
@@ -1349,7 +1403,7 @@ export default function ProjectsAndTasksPage() {
                             </span>
                           </td>
                           <td className="py-3 px-3">
-                            {getStatusBadge(task.status, task.isOverdue)}
+                            {getStatusBadge(task.status, undefined, task)}
                           </td>
                           <td className="py-3 px-3">
                             {getPriorityBadge(task.priority)}
@@ -1364,7 +1418,7 @@ export default function ProjectsAndTasksPage() {
                                   className={`h-full rounded-full transition-all ${
                                     task.status === 'COMPLETED'
                                       ? 'bg-emerald-500'
-                                      : task.isOverdue
+                                      : isTaskOverdue(task)
                                       ? 'bg-rose-500'
                                       : 'bg-blue-600'
                                   }`}
@@ -1375,7 +1429,7 @@ export default function ProjectsAndTasksPage() {
                           </td>
                           <td className="py-3 px-3 text-muted-foreground">
                             {task.dueDate ? (
-                              <span className={task.isOverdue ? 'text-rose-600 font-semibold' : ''}>
+                              <span className={isTaskOverdue(task) ? 'text-rose-600 font-semibold' : ''}>
                                 {new Date(task.dueDate).toLocaleDateString()}
                               </span>
                             ) : (
@@ -1443,7 +1497,7 @@ export default function ProjectsAndTasksPage() {
                               <span className="text-xs font-semibold text-foreground leading-snug line-clamp-2">
                                 {t.title}
                               </span>
-                              {t.isOverdue && t.status !== 'COMPLETED' && t.status !== 'IN_REVIEW' && (t.status as string) !== 'CANCELLED' && (
+                              {isTaskOverdue(t) && t.status !== 'COMPLETED' && t.status !== 'IN_REVIEW' && (t.status as string) !== 'CANCELLED' && (
                                 <span className="px-1.5 py-0.2 rounded-md text-[9px] font-bold bg-rose-500 text-white shrink-0">
                                   Overdue
                                 </span>
@@ -1792,10 +1846,16 @@ export default function ProjectsAndTasksPage() {
                         <td className="py-3 px-3">
                           {renderTaskAssignees(t)}
                         </td>
-                        <td className="py-3 px-3">{getStatusBadge(t.status, t.isOverdue)}</td>
+                        <td className="py-3 px-3">{getStatusBadge(t.status, undefined, t)}</td>
                         <td className="py-3 px-3">{t.sla?.progress || 0}%</td>
                         <td className="py-3 px-3 text-muted-foreground">
-                          {t.dueDate ? new Date(t.dueDate).toLocaleDateString() : 'None'}
+                          {t.dueDate ? (
+                            <span className={isTaskOverdue(t) ? 'text-rose-600 font-semibold' : ''}>
+                              {new Date(t.dueDate).toLocaleDateString()}
+                            </span>
+                          ) : (
+                            'None'
+                          )}
                         </td>
                         <td className="py-3 px-4 text-right">
                           <button
@@ -2026,11 +2086,11 @@ export default function ProjectsAndTasksPage() {
                         {renderTaskAssignees(t)}
                       </td>
                       <td className="py-3 px-3 text-muted-foreground">{t.project?.name || 'Standalone'}</td>
-                      <td className="py-3 px-3">{getStatusBadge(t.status, t.isOverdue)}</td>
+                      <td className="py-3 px-3">{getStatusBadge(t.status, undefined, t)}</td>
                       <td className="py-3 px-3">{t.progress}%</td>
                       <td className="py-3 px-3 text-muted-foreground">
                         {t.dueDate ? (
-                          <span className={t.isOverdue ? 'text-rose-600 font-semibold' : ''}>
+                          <span className={isTaskOverdue(t) ? 'text-rose-600 font-semibold' : ''}>
                             {new Date(t.dueDate).toLocaleDateString()}
                           </span>
                         ) : (
@@ -2066,7 +2126,7 @@ export default function ProjectsAndTasksPage() {
                 <span className="text-xs font-bold text-muted-foreground">
                   {selectedTask.project?.key ? `${selectedTask.project.key} • ` : ''}TASK-{selectedTask.id ? selectedTask.id.slice(0, 6) : ''}
                 </span>
-                {getStatusBadge(selectedTask.status, selectedTask.isOverdue)}
+                {getStatusBadge(selectedTask.status, undefined, selectedTask)}
               </div>
               <button
                 type="button"

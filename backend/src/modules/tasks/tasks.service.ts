@@ -435,6 +435,8 @@ export class TasksService implements OnModuleInit {
         },
       ],
       reworkCount: 0,
+      isOverdue: false,
+      overdueNotifiedAt: null,
     };
 
     const task = await this.prisma.task.create({
@@ -561,9 +563,12 @@ export class TasksService implements OnModuleInit {
       });
     }
 
+    const effectiveDueDate = data.dueDate !== undefined ? data.dueDate : existing.dueDate;
+    const isDeadlineActive = effectiveDueDate ? !isTaskDeadlinePassed(effectiveDueDate) : true;
+
     const updatedMetadata = {
       ...currentMetadata,
-      ...((isDueDateChanging && data.dueDate && !isTaskDeadlinePassed(data.dueDate)) ? { overdueNotifiedAt: null, isOverdue: false } : {}),
+      ...(isDeadlineActive ? { overdueNotifiedAt: null, isOverdue: false } : {}),
       ...(newAssigneeIds !== undefined
         ? {
             assigneeMembershipIds: newAssigneeIds,

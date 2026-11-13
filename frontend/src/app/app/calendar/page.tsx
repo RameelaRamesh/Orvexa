@@ -84,27 +84,48 @@ interface CalendarEvent {
 
 const isCalendarTaskOverdue = (status?: string | null, dueDate?: string | Date | null): boolean => {
   if (!dueDate) return false;
-  if (status === 'COMPLETED' || status === 'CANCELLED' || status === 'IN_REVIEW') {
+  const s = (status || '').toUpperCase();
+  if (s === 'COMPLETED' || s === 'CANCELLED' || s === 'IN_REVIEW' || s === 'DONE') {
     return false;
   }
 
-  let deadlineEnd: number;
-  if (typeof dueDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dueDate.trim())) {
-    const [year, month, day] = dueDate.trim().split('-').map(Number);
-    deadlineEnd = new Date(year, month - 1, day, 23, 59, 59, 999).getTime();
+  let dueYear: number, dueMonth: number, dueDay: number;
+  if (typeof dueDate === 'string') {
+    const trimmed = dueDate.trim();
+    const m = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) {
+      dueYear = Number(m[1]);
+      dueMonth = Number(m[2]) - 1;
+      dueDay = Number(m[3]);
+    } else {
+      const d = new Date(dueDate);
+      if (isNaN(d.getTime())) return false;
+      dueYear = d.getFullYear();
+      dueMonth = d.getMonth();
+      dueDay = d.getDate();
+    }
   } else {
     const d = dueDate instanceof Date ? dueDate : new Date(dueDate);
     if (isNaN(d.getTime())) return false;
-    const isUtcMidnight =
-      d.getUTCHours() === 0 &&
-      d.getUTCMinutes() === 0 &&
-      d.getUTCSeconds() === 0 &&
-      d.getUTCMilliseconds() === 0;
-    deadlineEnd = isUtcMidnight
-      ? new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999).getTime()
-      : new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999).getTime();
+    dueYear = d.getFullYear();
+    dueMonth = d.getMonth();
+    dueDay = d.getDate();
   }
 
+  const now = new Date();
+  const curYear = now.getFullYear();
+  const curMonth = now.getMonth();
+  const curDay = now.getDate();
+
+  // If due date is today or in the future in user's browser, it is NEVER overdue
+  if (
+    dueYear > curYear ||
+    (dueYear === curYear && (dueMonth > curMonth || (dueMonth === curMonth && dueDay >= curDay)))
+  ) {
+    return false;
+  }
+
+  const deadlineEnd = new Date(dueYear, dueMonth, dueDay, 23, 59, 59, 999).getTime();
   return Date.now() > deadlineEnd;
 };
 

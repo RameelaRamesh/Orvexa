@@ -2,10 +2,11 @@ export const NON_OVERDUE_TASK_STATUSES = [
   'COMPLETED',
   'CANCELLED',
   'IN_REVIEW',
+  'DONE',
 ] as const;
 
 /**
- * Resolves the effective deadline timestamp (end of the deadline calendar day in local time).
+ * Resolves the effective deadline timestamp (end of the deadline calendar day: 23:59:59.999).
  * - Date-only / UTC-midnight values (e.g. "2026-11-10" -> 2026-11-10T00:00:00.000Z)
  *   use the UTC calendar date (YYYY-MM-DD) so timezone offsets do not shift the selected date.
  * - Non-midnight timestamps use their local calendar date's end of day (23:59:59.999).
@@ -17,7 +18,7 @@ export function getDeadlineEndTimestamp(
 
   if (typeof dueDate === 'string') {
     const trimmed = dueDate.trim();
-    const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (dateOnlyMatch) {
       const year = Number(dateOnlyMatch[1]);
       const month = Number(dateOnlyMatch[2]) - 1;
@@ -58,13 +59,19 @@ export function getDeadlineEndTimestamp(
   ).getTime();
 }
 
+/**
+ * Checks whether a task's deadline has completely passed.
+ * Rule: If a deadline is set to "today" (matching current calendar date in local time or UTC),
+ * it is active throughout the entire day and is NOT overdue.
+ * It only becomes overdue once the deadline day has passed (i.e. starting tomorrow).
+ */
 export function isTaskDeadlinePassed(
   dueDate: Date | string | null | undefined,
   now: Date | number = Date.now(),
 ): boolean {
   const deadlineEnd = getDeadlineEndTimestamp(dueDate);
   if (deadlineEnd === null) return false;
-  const nowMs = now instanceof Date ? now.getTime() : now;
+  const nowMs = now instanceof Date ? now.getTime() : typeof now === 'number' ? now : Date.now();
   return nowMs > deadlineEnd;
 }
 
@@ -73,10 +80,12 @@ export function isTaskOverdue(
   now: Date | number = Date.now(),
 ): boolean {
   if (!task || !task.dueDate) return false;
+  const statusUpper = (task.status || '').toUpperCase();
   if (
-    task.status === 'COMPLETED' ||
-    task.status === 'CANCELLED' ||
-    task.status === 'IN_REVIEW'
+    statusUpper === 'COMPLETED' ||
+    statusUpper === 'DONE' ||
+    statusUpper === 'CANCELLED' ||
+    statusUpper === 'IN_REVIEW'
   ) {
     return false;
   }
