@@ -62,6 +62,7 @@ export class PeopleController {
     @Query('accessRole') accessRole?: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('all') all?: string,
   ) {
     return this.peopleService.listMembers(
       workspaceId,
@@ -71,6 +72,7 @@ export class PeopleController {
         accessRole,
         status,
         search,
+        all: all === 'true' || all === '1',
       },
       req.userContext,
     );

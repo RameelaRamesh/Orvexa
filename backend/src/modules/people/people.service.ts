@@ -34,6 +34,7 @@ export class PeopleService {
       accessRole?: string;
       status?: string;
       search?: string;
+      all?: boolean | string;
     },
     userContext?: {
       membershipId?: string;
@@ -66,8 +67,11 @@ export class PeopleService {
       };
     }
 
+    const isAllRequested = query?.all === true || query?.all === 'true';
+
     // Data scope enforcement for non-Admins/Owners
     if (
+      !isAllRequested &&
       userContext &&
       userContext.accessRole !== 'OWNER' &&
       userContext.accessRole !== 'ADMIN'
@@ -97,9 +101,16 @@ export class PeopleService {
             : allowedTeamIds.length > 1
             ? [{ teamId: { in: allowedTeamIds } }]
             : [];
+        const fallbackClause =
+          allowedTeamIds.length === 0
+            ? userContext.departmentId
+              ? [{ departmentId: userContext.departmentId }]
+              : []
+            : [];
         where.OR = [
           { id: userContext.membershipId },
           ...teamClause,
+          ...fallbackClause,
           { reportsToId: userContext.membershipId },
         ];
       }

@@ -210,6 +210,7 @@ export default function ProjectsAndTasksPage() {
     description: '',
     projectId: '',
     assigneeMembershipId: '',
+    assigneeMembershipIds: [] as string[],
     startDate: '',
     dueDate: '',
     priority: 'MEDIUM' as 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT',
@@ -217,6 +218,9 @@ export default function ProjectsAndTasksPage() {
     subtasks: [] as string[],
     newSubtaskInput: '',
   });
+
+  const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false);
+  const [assigneeSearchQuery, setAssigneeSearchQuery] = useState('');
 
   const [extensionForm, setExtensionForm] = useState({
     proposedDeadline: '',
@@ -338,7 +342,7 @@ export default function ProjectsAndTasksPage() {
       const [tasksRes, projectsRes, membersRes, deptsRes, teamsRes] = await Promise.all([
         fetch(`${BRANDING.apiUrl}/tasks`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/projects`, { headers: getHeaders() }),
-        fetch(`${BRANDING.apiUrl}/people?limit=100`, { headers: getHeaders() }),
+        fetch(`${BRANDING.apiUrl}/people?all=true&limit=100`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/departments`, { headers: getHeaders() }),
         fetch(`${BRANDING.apiUrl}/teams`, { headers: getHeaders() }).catch(() => null),
       ]);
@@ -550,6 +554,50 @@ export default function ProjectsAndTasksPage() {
       .map((t) => t.name)
       .filter(Boolean);
   }, [teams, allowedTeamIds]);
+
+  const assignableMembers = useMemo(() => {
+    if (newTaskForm.projectId) {
+      const proj = projects.find((p) => p.id === newTaskForm.projectId);
+      if (proj && Array.isArray((proj as any).memberMembershipIds) && (proj as any).memberMembershipIds.length > 0) {
+        const pMembers = teamMembers.filter((m) => (proj as any).memberMembershipIds.includes(m.id));
+        if (pMembers.length > 0) return pMembers;
+      }
+    }
+    if (teamMembers.length > 0) {
+      return teamMembers;
+    }
+    return scopedTeamMembers;
+  }, [newTaskForm.projectId, projects, teamMembers, scopedTeamMembers]);
+
+  const renderTaskAssignees = (t: TaskItem) => {
+    const sla = ((t as any).sla as any) || {};
+    const multiIds: string[] = Array.isArray((t as any).assigneeMembershipIds)
+      ? (t as any).assigneeMembershipIds
+      : Array.isArray(sla.assigneeMembershipIds)
+      ? sla.assigneeMembershipIds
+      : [];
+
+    if (!t.assignee?.user && multiIds.length === 0) {
+      return <span className="text-muted-foreground italic">Unassigned</span>;
+    }
+
+    const primaryName = t.assignee?.user
+      ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}`
+      : 'Assigned';
+
+    if (multiIds.length > 1) {
+      return (
+        <span className="inline-flex items-center gap-1.5" title={`Assigned to ${multiIds.length} members`}>
+          <span className="font-semibold text-foreground">{primaryName}</span>
+          <span className="px-1.5 py-0.2 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-bold">
+            +{multiIds.length - 1}
+          </span>
+        </span>
+      );
+    }
+
+    return <span>{primaryName}</span>;
+  };
 
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
@@ -764,11 +812,21 @@ export default function ProjectsAndTasksPage() {
     }
 
     try {
+      const selectedAssigneeIds = (newTaskForm.assigneeMembershipIds || []).filter(Boolean);
       const payload: any = {
         title: newTaskForm.title.trim(),
         description: newTaskForm.description.trim() || undefined,
         projectId: newTaskForm.projectId || (activeProjectWorkspace ? activeProjectWorkspace.id : undefined),
-        assigneeMembershipId: newTaskForm.assigneeMembershipId || undefined,
+        assigneeMembershipId:
+          selectedAssigneeIds.length > 0
+            ? selectedAssigneeIds[0]
+            : newTaskForm.assigneeMembershipId || undefined,
+        assigneeMembershipIds:
+          selectedAssigneeIds.length > 0
+            ? selectedAssigneeIds
+            : newTaskForm.assigneeMembershipId
+            ? [newTaskForm.assigneeMembershipId]
+            : undefined,
         startDate: newTaskForm.startDate || undefined,
         dueDate: newTaskForm.dueDate || undefined,
         priority: newTaskForm.priority,
@@ -791,11 +849,14 @@ export default function ProjectsAndTasksPage() {
       const created = createdRaw && createdRaw.data !== undefined ? createdRaw.data : createdRaw;
       toast.success(`Task "${created.title || ''}" created successfully!`);
       setCreateTaskModalOpen(false);
+      setAssigneeDropdownOpen(false);
+      setAssigneeSearchQuery('');
       setNewTaskForm({
         title: '',
         description: '',
         projectId: '',
         assigneeMembershipId: '',
+        assigneeMembershipIds: [],
         startDate: '',
         dueDate: '',
         priority: 'MEDIUM',
@@ -1729,7 +1790,7 @@ export default function ProjectsAndTasksPage() {
                       >
                         <td className="py-3 px-4 font-semibold text-foreground">{t.title}</td>
                         <td className="py-3 px-3">
-                          {t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : 'Unassigned'}
+                          {renderTaskAssignees(t)}
                         </td>
                         <td className="py-3 px-3">{getStatusBadge(t.status, t.isOverdue)}</td>
                         <td className="py-3 px-3">{t.sla?.progress || 0}%</td>
@@ -1962,7 +2023,7 @@ export default function ProjectsAndTasksPage() {
                     >
                       <td className="py-3 px-4 font-semibold text-foreground">{t.title}</td>
                       <td className="py-3 px-3">
-                        {t.assignee?.user ? `${t.assignee.user.firstName} ${t.assignee.user.lastName}` : 'Unassigned'}
+                        {renderTaskAssignees(t)}
                       </td>
                       <td className="py-3 px-3 text-muted-foreground">{t.project?.name || 'Standalone'}</td>
                       <td className="py-3 px-3">{getStatusBadge(t.status, t.isOverdue)}</td>
@@ -2023,6 +2084,42 @@ export default function ProjectsAndTasksPage() {
                 <p className="text-muted-foreground mt-1.5 leading-relaxed">
                   {selectedTask.description || 'No description provided.'}
                 </p>
+              </div>
+
+              {/* Assignees List */}
+              <div className="flex flex-wrap items-center gap-1.5 py-2 px-3 rounded-xl border border-border bg-slate-50/60 dark:bg-slate-800/30">
+                <span className="text-[11px] font-bold text-muted-foreground mr-1">Assignees:</span>
+                {(() => {
+                  const sla = ((selectedTask as any).sla as any) || {};
+                  const multiIds: string[] = Array.isArray((selectedTask as any).assigneeMembershipIds)
+                    ? (selectedTask as any).assigneeMembershipIds
+                    : Array.isArray(sla.assigneeMembershipIds)
+                    ? sla.assigneeMembershipIds
+                    : [];
+                  const allIds = Array.from(new Set([selectedTask.assigneeMembershipId, ...multiIds].filter(Boolean) as string[]));
+                  if (allIds.length === 0) {
+                    return <span className="text-muted-foreground italic text-[11px]">Unassigned</span>;
+                  }
+                  return allIds.map((id) => {
+                    const m = teamMembers.find((mem) => mem.id === id);
+                    const name = m?.user
+                      ? `${m.user.firstName} ${m.user.lastName}`
+                      : id === selectedTask.assigneeMembershipId && selectedTask.assignee?.user
+                      ? `${selectedTask.assignee.user.firstName} ${selectedTask.assignee.user.lastName}`
+                      : 'Assigned Member';
+                    return (
+                      <span
+                        key={id}
+                        className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-blue-100 dark:bg-blue-950/70 text-blue-700 dark:text-blue-300 font-semibold text-[11px] border border-blue-200 dark:border-blue-900"
+                      >
+                        <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
+                          {name[0] || 'U'}
+                        </span>
+                        {name}
+                      </span>
+                    );
+                  });
+                })()}
               </div>
 
               {/* Extension Request Alert if Pending */}
@@ -2280,7 +2377,7 @@ export default function ProjectsAndTasksPage() {
       {/* ========================================================================= */}
       {createProjectModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-border shadow-2xl overflow-hidden p-6 text-left">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-border shadow-2xl p-6 text-left relative">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="font-bold text-base text-foreground">Create New Project</h3>
               <button
@@ -2437,7 +2534,7 @@ export default function ProjectsAndTasksPage() {
       {/* ========================================================================= */}
       {createTaskModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-2xs p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-border shadow-2xl overflow-hidden p-6 text-left">
+          <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 border border-border shadow-2xl p-6 text-left relative">
             <div className="flex items-center justify-between pb-3 border-b border-border">
               <h3 className="font-bold text-base text-foreground">Create New Task</h3>
               <button
@@ -2462,7 +2559,7 @@ export default function ProjectsAndTasksPage() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block font-semibold mb-1">Project (Optional)</label>
                   <select
@@ -2476,20 +2573,175 @@ export default function ProjectsAndTasksPage() {
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block font-semibold mb-1">Assignee</label>
-                  <select
-                    value={newTaskForm.assigneeMembershipId}
-                    onChange={(e) => setNewTaskForm((prev) => ({ ...prev, assigneeMembershipId: e.target.value }))}
-                    className="w-full px-3 py-2 rounded-lg border border-border bg-background text-xs cursor-pointer"
+                <div className="relative">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block font-semibold">Assignees (Multiple)</label>
+                    {newTaskForm.assigneeMembershipIds.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setNewTaskForm((prev) => ({ ...prev, assigneeMembershipIds: [], assigneeMembershipId: '' }))}
+                        className="text-[10px] text-blue-600 hover:underline font-medium cursor-pointer"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Multi-select trigger box */}
+                  <div
+                    onClick={() => setAssigneeDropdownOpen(!assigneeDropdownOpen)}
+                    className="w-full min-h-[38px] px-2.5 py-1.5 rounded-lg border border-border bg-background text-xs cursor-pointer flex flex-wrap items-center gap-1.5 hover:border-blue-400 transition-colors"
                   >
-                    <option value="">Assign Later</option>
-                    {scopedTeamMembers.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.user?.firstName} {m.user?.lastName}
-                      </option>
-                    ))}
-                  </select>
+                    {newTaskForm.assigneeMembershipIds.length === 0 ? (
+                      <span className="text-muted-foreground text-xs">Assign Later / None selected</span>
+                    ) : (
+                      newTaskForm.assigneeMembershipIds.map((mId) => {
+                        const member = assignableMembers.find((m) => m.id === mId);
+                        const name = member?.user
+                          ? `${member.user.firstName} ${member.user.lastName}`
+                          : 'Team Member';
+                        return (
+                          <span
+                            key={mId}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 dark:bg-blue-950/70 text-blue-800 dark:text-blue-300 font-semibold text-[11px]"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <span className="w-3.5 h-3.5 rounded-full bg-blue-600 text-white text-[9px] flex items-center justify-center font-bold">
+                              {member?.user?.firstName?.[0] || 'U'}
+                            </span>
+                            <span className="max-w-[100px] truncate">{name}</span>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const nextIds = newTaskForm.assigneeMembershipIds.filter((id) => id !== mId);
+                                setNewTaskForm((prev) => ({
+                                  ...prev,
+                                  assigneeMembershipIds: nextIds,
+                                  assigneeMembershipId: nextIds[0] || '',
+                                }));
+                              }}
+                              className="text-blue-500 hover:text-rose-500 ml-0.5 text-xs font-bold leading-none cursor-pointer"
+                            >
+                              &times;
+                            </button>
+                          </span>
+                        );
+                      })
+                    )}
+                    <span className="ml-auto text-muted-foreground text-[10px]">&#9662;</span>
+                  </div>
+
+                  {/* Multi-select dropdown popover */}
+                  {assigneeDropdownOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setAssigneeDropdownOpen(false)}
+                      />
+                      <div className="absolute left-0 right-0 mt-1 max-h-56 overflow-y-auto rounded-xl border border-border bg-popover shadow-2xl z-50 p-2 space-y-1">
+                        <div className="p-1 mb-1">
+                          <input
+                            type="text"
+                            placeholder="Filter members..."
+                            value={assigneeSearchQuery}
+                            onChange={(e) => setAssigneeSearchQuery(e.target.value)}
+                            className="w-full px-2.5 py-1 text-xs rounded-md border border-border bg-background focus:outline-hidden"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                        <div className="flex items-center justify-between px-2 py-1 text-[11px] text-muted-foreground border-b border-border/60">
+                          <span>{assignableMembers.length} available</span>
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                const allIds = assignableMembers.map((m) => m.id);
+                                setNewTaskForm((prev) => ({
+                                  ...prev,
+                                  assigneeMembershipIds: allIds,
+                                  assigneeMembershipId: allIds[0] || '',
+                                }));
+                              }}
+                              className="text-blue-600 dark:text-blue-400 font-semibold hover:underline text-[10px] cursor-pointer"
+                            >
+                              Select All
+                            </button>
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setNewTaskForm((prev) => ({
+                                  ...prev,
+                                  assigneeMembershipIds: [],
+                                  assigneeMembershipId: '',
+                                }));
+                              }}
+                              className="text-muted-foreground hover:underline text-[10px] cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div className="divide-y divide-border/40">
+                          {assignableMembers.length === 0 ? (
+                            <p className="py-3 text-center text-muted-foreground text-xs">No team members found</p>
+                          ) : (
+                            assignableMembers
+                              .filter((m) => {
+                                if (!assigneeSearchQuery.trim()) return true;
+                                const q = assigneeSearchQuery.toLowerCase();
+                                const f = (m.user?.firstName || '').toLowerCase();
+                                const l = (m.user?.lastName || '').toLowerCase();
+                                const e = (m.user?.email || '').toLowerCase();
+                                const r = (m.role?.name || m.accessRole || '').toLowerCase();
+                                return f.includes(q) || l.includes(q) || e.includes(q) || r.includes(q);
+                              })
+                              .map((m) => {
+                                const isSelected = newTaskForm.assigneeMembershipIds.includes(m.id);
+                                return (
+                                  <div
+                                    key={m.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const nextIds = isSelected
+                                        ? newTaskForm.assigneeMembershipIds.filter((id) => id !== m.id)
+                                        : [...newTaskForm.assigneeMembershipIds, m.id];
+                                      setNewTaskForm((prev) => ({
+                                        ...prev,
+                                        assigneeMembershipIds: nextIds,
+                                        assigneeMembershipId: nextIds[0] || '',
+                                      }));
+                                    }}
+                                    className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer text-xs"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={isSelected}
+                                      onChange={() => {}}
+                                      className="rounded text-blue-600 cursor-pointer"
+                                    />
+                                    <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[10px] font-bold flex items-center justify-center shrink-0">
+                                      {m.user?.firstName?.[0] || 'U'}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="font-semibold text-foreground truncate">
+                                        {m.user?.firstName} {m.user?.lastName}
+                                      </p>
+                                      <p className="text-[10px] text-muted-foreground truncate">
+                                        {m.role?.name || m.accessRole || 'Member'}
+                                        {m.department?.name ? ` • ${m.department.name}` : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                );
+                              })
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
 
