@@ -122,7 +122,7 @@ export class TasksService implements OnModuleInit {
     }
     const effectiveDepartmentId = userContext?.departmentId;
 
-    if (userContext?.membershipId && !isGlobalAdmin && (!effectiveScope || !Array.isArray(userContext?.scopedTeamIds))) {
+    if (userContext?.membershipId && !isGlobalAdmin) {
       const resolved = await resolveMemberScopeContext(this.prisma, workspaceId, {
         id: userContext.membershipId,
         accessRole: userContext.accessRole,
@@ -132,12 +132,40 @@ export class TasksService implements OnModuleInit {
         departmentId: userContext.departmentId,
         role: userContext.roleName ? { id: userContext.roleId, name: userContext.roleName } : undefined,
       });
-      if (!effectiveScope) effectiveScope = resolved.effectiveDataScope;
+      if (
+        !effectiveScope ||
+        effectiveScope === 'ASSIGNED' ||
+        effectiveScope === 'OWN' ||
+        resolved.effectiveDataScope !== 'ASSIGNED'
+      ) {
+        effectiveScope = resolved.effectiveDataScope;
+      }
       allowedTeamIds = Array.from(new Set([...allowedTeamIds, ...resolved.scopedTeamIds]));
     }
-    effectiveScope =
-      effectiveScope ||
-      (isGlobalAdmin ? 'GLOBAL' : getDefaultDataScopeForRole(roleUpper, roleNameUpper));
+    const defaultRoleScope = getDefaultDataScopeForRole(roleUpper, roleNameUpper);
+    if (!effectiveScope || effectiveScope === 'ASSIGNED' || effectiveScope === 'OWN') {
+      if (defaultRoleScope && defaultRoleScope !== 'ASSIGNED') {
+        effectiveScope = defaultRoleScope;
+      }
+    }
+    effectiveScope = effectiveScope || (isGlobalAdmin ? 'GLOBAL' : 'ASSIGNED');
+
+    if (filter?.scope) {
+      const requestedScope = String(filter.scope).toUpperCase();
+      if (requestedScope === 'DEPARTMENT' || requestedScope === 'DEPT') {
+        if (isGlobalAdmin || defaultRoleScope === 'GLOBAL' || defaultRoleScope === 'DEPARTMENT' || defaultRoleScope === 'TEAM') {
+          effectiveScope = 'DEPARTMENT';
+        }
+      } else if (requestedScope === 'GLOBAL' || requestedScope === 'ALL' || requestedScope === 'WORKSPACE') {
+        if (isGlobalAdmin || defaultRoleScope === 'GLOBAL' || defaultRoleScope === 'DEPARTMENT' || defaultRoleScope === 'TEAM') {
+          effectiveScope = 'GLOBAL';
+        }
+      } else if (requestedScope === 'TEAM' || requestedScope === 'TEAM_WORK') {
+        effectiveScope = 'TEAM';
+      } else if (requestedScope === 'MY_WORK' || requestedScope === 'OWN' || requestedScope === 'ASSIGNED') {
+        effectiveScope = 'ASSIGNED';
+      }
+    }
 
     let tasks = await this.prisma.task.findMany({
       where,
@@ -205,18 +233,20 @@ export class TasksService implements OnModuleInit {
         if (effectiveScope === 'DEPARTMENT') {
           const assigneeInDept = assigneeIds.some((aId) => {
             const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
-            return Boolean(effectiveDepartmentId && mem?.departmentId === effectiveDepartmentId);
+            return !effectiveDepartmentId || Boolean(mem?.departmentId === effectiveDepartmentId);
           });
           const creatorMem = creatorId ? memberMap.get(creatorId) : null;
           const unassignedInMyDept =
             assigneeIds.length === 0 &&
-            Boolean(
-              (effectiveDepartmentId && sla.departmentId === effectiveDepartmentId) ||
-                (effectiveDepartmentId && creatorMem?.departmentId === effectiveDepartmentId),
-            );
+            (!effectiveDepartmentId ||
+              Boolean(
+                (sla.departmentId === effectiveDepartmentId) ||
+                  (creatorMem?.departmentId === effectiveDepartmentId),
+              ));
           return (
             isAssignedToMe ||
             isCreatedByMe ||
+            !effectiveDepartmentId ||
             Boolean(effectiveDepartmentId && sla.departmentId === effectiveDepartmentId) ||
             assigneeInDept ||
             unassignedInMyDept
@@ -224,16 +254,19 @@ export class TasksService implements OnModuleInit {
         }
 
         // Strict TEAM scope (default for MANAGER / Team Lead / custom Team-scoped roles):
-        // ONLY self, own created tasks, direct reports, tasks assigned to permitted team(s),
-        // or unassigned tasks explicitly tagged to a permitted team / created by a team member.
+        // Self, own created tasks, direct reports, tasks assigned to permitted team(s),
+        // or department / workspace team tasks when no specific team ID is bound.
         if (isAssignedToMe || isCreatedByMe) return true;
         if (sla.teamId && allowedTeamIds.includes(sla.teamId)) return true;
+        if (t.teamId && allowedTeamIds.includes(t.teamId)) return true;
 
         const matchesTeamOrReport = assigneeIds.some((aId) => {
           const mem = memberMap.get(aId) || (t.assigneeMembershipId === aId ? t.assignee : null);
           return (
             mem?.reportsToId === myId ||
-            Boolean(mem?.teamId && allowedTeamIds.includes(mem.teamId))
+            Boolean(mem?.teamId && allowedTeamIds.includes(mem.teamId)) ||
+            (allowedTeamIds.length === 0 && effectiveDepartmentId && mem?.departmentId === effectiveDepartmentId) ||
+            (allowedTeamIds.length === 0 && !effectiveDepartmentId)
           );
         });
         if (matchesTeamOrReport) return true;
@@ -242,7 +275,9 @@ export class TasksService implements OnModuleInit {
           const creatorMem = memberMap.get(creatorId);
           if (
             creatorMem?.reportsToId === myId ||
-            Boolean(creatorMem?.teamId && allowedTeamIds.includes(creatorMem.teamId))
+            Boolean(creatorMem?.teamId && allowedTeamIds.includes(creatorMem.teamId)) ||
+            (allowedTeamIds.length === 0 && effectiveDepartmentId && creatorMem?.departmentId === effectiveDepartmentId) ||
+            (allowedTeamIds.length === 0 && !effectiveDepartmentId)
           ) {
             return true;
           }

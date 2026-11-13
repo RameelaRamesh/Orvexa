@@ -124,10 +124,10 @@ export class ProjectsService {
       departmentId: userContext.departmentId,
       role: userContext.roleName ? { id: userContext.roleId, name: userContext.roleName } : undefined,
     });
-    const effectiveScope =
-      userContext.dataScope ||
-      resolved.effectiveDataScope ||
-      getDefaultDataScopeForRole(roleUpper, userContext.roleName);
+    let effectiveScope =
+      userContext.dataScope && userContext.dataScope !== 'ASSIGNED' && userContext.dataScope !== 'OWN'
+        ? userContext.dataScope
+        : resolved.effectiveDataScope || getDefaultDataScopeForRole(roleUpper, userContext.roleName);
 
     if (effectiveScope === 'GLOBAL' || effectiveScope === 'ALL') {
       return mapped.map(({ _projTasks, _activity, ...p }) => p);
@@ -148,10 +148,17 @@ export class ProjectsService {
         for (const m of memberships) {
           if (m.departmentId === deptId) allowedMemberIds.add(m.id);
         }
+      } else {
+        for (const m of memberships) allowedMemberIds.add(m.id);
       }
     } else if (effectiveScope === 'TEAM') {
       for (const m of memberships) {
-        if (m.reportsToId === myId || (m.teamId && allowedTeamIds.includes(m.teamId))) {
+        if (
+          m.reportsToId === myId ||
+          (m.teamId && allowedTeamIds.includes(m.teamId)) ||
+          (allowedTeamIds.length === 0 && userContext.departmentId && m.departmentId === userContext.departmentId) ||
+          (allowedTeamIds.length === 0 && !userContext.departmentId)
+        ) {
           allowedMemberIds.add(m.id);
         }
       }

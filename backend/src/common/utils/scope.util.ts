@@ -58,12 +58,13 @@ export function getDefaultDataScopeForRole(accessRole?: string | null, roleName?
   if (accessUpper === 'OWNER' || accessUpper === 'ADMIN' || roleUpper === 'OWNER' || roleUpper === 'ADMIN') {
     return 'GLOBAL';
   }
+  if (roleUpper.includes('DIRECTOR') || roleUpper.includes('HEAD')) {
+    return 'DEPARTMENT';
+  }
   if (
     accessUpper === 'MANAGER' ||
     roleUpper === 'MANAGER' ||
     roleUpper.includes('LEAD') ||
-    roleUpper.includes('HEAD') ||
-    roleUpper.includes('DIRECTOR') ||
     roleUpper.includes('SUPERVISOR')
   ) {
     return 'TEAM';
@@ -126,6 +127,21 @@ export async function resolveMemberScopeContext(
     }
   }
 
+  let deptTeamIds: string[] = [];
+  if (workspaceId && membership.departmentId && prisma?.team?.findMany) {
+    try {
+      const deptTeams = await prisma.team.findMany({
+        where: { workspaceId, departmentId: membership.departmentId },
+        select: { id: true },
+      });
+      if (Array.isArray(deptTeams)) {
+        deptTeamIds = deptTeams.map((t: any) => t?.id).filter((id): id is string => Boolean(id));
+      }
+    } catch {
+      deptTeamIds = [];
+    }
+  }
+
   const memberDataScopes: Record<string, string> = settings.memberDataScopes || {};
   const roleDataScopes: Record<string, string> = settings.roleDataScopes || {};
   const memberScopedTeamsMap: Record<string, string[]> = settings.memberScopedTeams || {};
@@ -139,11 +155,15 @@ export async function resolveMemberScopeContext(
   } else {
     const memberOverride = memberDataScopes[membership.id];
     const roleScope = membership.roleId ? roleDataScopes[membership.roleId] : undefined;
+    const defaultRoleScope = getDefaultDataScopeForRole(accessUpper, roleUpper);
     effectiveDataScope =
       memberOverride ||
       roleScope ||
-      membership.dataScope ||
-      getDefaultDataScopeForRole(accessUpper, roleUpper);
+      (defaultRoleScope && defaultRoleScope !== 'ASSIGNED' ? defaultRoleScope : undefined) ||
+      (membership.dataScope && membership.dataScope !== 'ASSIGNED' && membership.dataScope !== 'OWN'
+        ? membership.dataScope
+        : undefined) ||
+      'ASSIGNED';
   }
 
   const memberCustomTeams = Array.isArray(memberScopedTeamsMap[membership.id])
@@ -154,16 +174,36 @@ export async function resolveMemberScopeContext(
       ? roleScopedTeamsMap[membership.roleId]
       : [];
 
-  const scopedTeamIds = Array.from(
+  let scopedTeamIds = Array.from(
     new Set(
       [
         membership.teamId || '',
         ...ledTeamIds,
+        ...deptTeamIds,
         ...memberCustomTeams,
         ...roleCustomTeams,
       ].filter((id): id is string => typeof id === 'string' && id.trim().length > 0),
     ),
   );
+
+  if (
+    scopedTeamIds.length === 0 &&
+    (roleUpper.includes('LEAD') || roleUpper.includes('MANAGER') || accessUpper === 'MANAGER') &&
+    workspaceId &&
+    prisma?.team?.findMany
+  ) {
+    try {
+      const allWsTeams = await prisma.team.findMany({
+        where: { workspaceId },
+        select: { id: true },
+      });
+      if (Array.isArray(allWsTeams)) {
+        for (const wt of allWsTeams) {
+          if (wt?.id) scopedTeamIds.push(wt.id);
+        }
+      }
+    } catch {}
+  }
 
   return {
     effectiveDataScope,

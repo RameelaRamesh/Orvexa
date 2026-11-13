@@ -177,6 +177,7 @@ export default function ProjectsAndTasksPage() {
   const [projectSearch, setProjectSearch] = useState('');
 
   // Team Work Filters
+  const [selectedTeamScope, setSelectedTeamScope] = useState<string>('');
   const [teamMemberFilter, setTeamMemberFilter] = useState('ALL');
   const [teamDeptFilter, setTeamDeptFilter] = useState('ALL');
   const [teamProjectFilter, setTeamProjectFilter] = useState('ALL');
@@ -431,54 +432,111 @@ export default function ProjectsAndTasksPage() {
     return ['OWNER', 'ADMIN'].includes(u) || u.includes('OWNER') || u.includes('ADMIN');
   }, [userRole]);
 
+  const maxAllowedScope = useMemo(() => {
+    if (isGlobalAdmin) return 'GLOBAL';
+    const u = (userRole || '').toUpperCase();
+    if (u.includes('DIRECTOR') || u.includes('HEAD')) return 'DEPARTMENT';
+    if (u.includes('MANAGER') || u.includes('LEAD') || u.includes('SUPERVISOR')) return 'TEAM';
+    if (userDataScope && userDataScope !== 'ASSIGNED' && userDataScope !== 'OWN') {
+      return userDataScope.toUpperCase();
+    }
+    return 'ASSIGNED';
+  }, [isGlobalAdmin, userRole, userDataScope]);
+
   const effectiveScope = useMemo(() => {
     if (isGlobalAdmin) return 'GLOBAL';
-    if (userDataScope) return userDataScope.toUpperCase();
-    const u = (userRole || '').toUpperCase();
-    if (u.includes('MANAGER') || u.includes('LEAD')) return 'TEAM';
-    if (u.includes('DIRECTOR') || u.includes('HEAD')) return 'DEPARTMENT';
+    if (maxAllowedScope !== 'ASSIGNED') return maxAllowedScope;
+    if (userDataScope && userDataScope !== 'ASSIGNED' && userDataScope !== 'OWN') {
+      return userDataScope.toUpperCase();
+    }
     return 'ASSIGNED';
-  }, [isGlobalAdmin, userDataScope, userRole]);
+  }, [isGlobalAdmin, maxAllowedScope, userDataScope]);
+
+  // Check if current user is manager / team lead / admin
+  const isManagerOrAdmin = useMemo(() => {
+    const u = (userRole || '').toUpperCase();
+    return (
+      ['OWNER', 'ADMIN', 'MANAGER'].includes(u) ||
+      u.includes('OWNER') ||
+      u.includes('ADMIN') ||
+      u.includes('MANAGER') ||
+      u.includes('LEAD') ||
+      u.includes('SUPERVISOR') ||
+      u.includes('DIRECTOR') ||
+      u.includes('HEAD') ||
+      maxAllowedScope === 'GLOBAL' ||
+      maxAllowedScope === 'DEPARTMENT' ||
+      maxAllowedScope === 'TEAM'
+    );
+  }, [userRole, maxAllowedScope]);
+
+  const activeTeamScope = useMemo(() => {
+    if (selectedTeamScope) return selectedTeamScope;
+    if (isGlobalAdmin) return 'GLOBAL';
+    if (maxAllowedScope === 'DEPARTMENT') return 'DEPARTMENT';
+    if (maxAllowedScope === 'TEAM' || isManagerOrAdmin) return 'TEAM';
+    if (userDataScope && userDataScope !== 'ASSIGNED' && userDataScope !== 'OWN') {
+      return userDataScope.toUpperCase();
+    }
+    return 'TEAM';
+  }, [selectedTeamScope, isGlobalAdmin, maxAllowedScope, isManagerOrAdmin, userDataScope]);
 
   const allowedTeamIds = useMemo(() => {
     const ledFromTeams = currentMembershipId
       ? teams.filter((t) => t.leadMembershipId === currentMembershipId).map((t) => t.id)
       : [];
-    return Array.from(
+    const deptTeams = userDepartmentId
+      ? teams.filter((t) => t.departmentId === userDepartmentId).map((t) => t.id)
+      : [];
+    const base = Array.from(
       new Set(
         [
           ...scopedTeamIds,
           ...ledTeamIds,
           ...ledFromTeams,
+          ...deptTeams,
           ...(userTeamId ? [userTeamId] : []),
         ].filter(Boolean),
       ),
     );
-  }, [scopedTeamIds, ledTeamIds, teams, userTeamId, currentMembershipId]);
+    if (base.length === 0 && isManagerOrAdmin && teams.length > 0) {
+      return teams.map((t) => t.id);
+    }
+    return base;
+  }, [scopedTeamIds, ledTeamIds, teams, userTeamId, currentMembershipId, userDepartmentId, isManagerOrAdmin]);
 
   const permittedMemberIds = useMemo(() => {
-    if (isGlobalAdmin || effectiveScope === 'GLOBAL' || effectiveScope === 'ALL') {
+    if (isGlobalAdmin || activeTeamScope === 'GLOBAL' || activeTeamScope === 'ALL') {
       return null;
     }
     const ids = new Set<string>();
     if (currentMembershipId) ids.add(currentMembershipId);
+    if (activeTeamScope === 'ASSIGNED' || activeTeamScope === 'OWN') {
+      return ids;
+    }
     for (const m of teamMembers) {
       if (!m?.id) continue;
-      if (effectiveScope === 'DEPARTMENT') {
-        const mDept = m.departmentId || m.department?.id || m.team?.departmentId;
-        if (userDepartmentId && mDept === userDepartmentId) ids.add(m.id);
-      } else if (effectiveScope === 'TEAM') {
-        const mTeam = m.teamId || m.team?.id;
-        if (
-          (currentMembershipId && m.reportsToId === currentMembershipId) ||
-          (mTeam && allowedTeamIds.includes(mTeam))
-        ) {
+      const mDept = m.departmentId || m.department?.id || m.team?.departmentId;
+      const mTeam = m.teamId || m.team?.id;
+
+      if (activeTeamScope === 'DEPARTMENT') {
+        if (!userDepartmentId || mDept === userDepartmentId) {
+          ids.add(m.id);
+        }
+      } else if (activeTeamScope === 'TEAM') {
+        const isReport = currentMembershipId && m.reportsToId === currentMembershipId;
+        const isInAllowedTeam = mTeam && allowedTeamIds.includes(mTeam);
+        const isInSameDept = Boolean(userDepartmentId && mDept === userDepartmentId);
+        const isWorkspaceFallback = allowedTeamIds.length === 0 && !userDepartmentId;
+        const isUnassignedMember = !mTeam && !mDept;
+
+        if (isReport || isInAllowedTeam || isInSameDept || isWorkspaceFallback || isUnassignedMember) {
           ids.add(m.id);
         }
       }
     }
     return ids;
-  }, [isGlobalAdmin, effectiveScope, currentMembershipId, teamMembers, userDepartmentId, allowedTeamIds]);
+  }, [isGlobalAdmin, activeTeamScope, currentMembershipId, teamMembers, userDepartmentId, allowedTeamIds]);
 
   const scopedTeamMembers = useMemo(() => {
     if (!permittedMemberIds) return teamMembers;
@@ -492,23 +550,6 @@ export default function ProjectsAndTasksPage() {
       .map((t) => t.name)
       .filter(Boolean);
   }, [teams, allowedTeamIds]);
-
-  // Check if current user is manager / team lead / admin
-  const isManagerOrAdmin = useMemo(() => {
-    const u = userRole.toUpperCase();
-    return (
-      ['OWNER', 'ADMIN', 'MANAGER'].includes(u) ||
-      u.includes('OWNER') ||
-      u.includes('ADMIN') ||
-      u.includes('MANAGER') ||
-      u.includes('LEAD') ||
-      u.includes('DIRECTOR') ||
-      u.includes('HEAD') ||
-      effectiveScope === 'GLOBAL' ||
-      effectiveScope === 'DEPARTMENT' ||
-      effectiveScope === 'TEAM'
-    );
-  }, [userRole, effectiveScope]);
 
   // Filter Tasks for My Work
   const myWorkTasks = useMemo(() => {
@@ -593,23 +634,33 @@ export default function ProjectsAndTasksPage() {
         const assigneeTeamId = (t.assignee as any)?.teamId || (t.assignee as any)?.team?.id;
         const assigneeDeptId = (t.assignee as any)?.departmentId || (t.assignee as any)?.department?.id;
         const assigneeReportsTo = (t.assignee as any)?.reportsToId;
+        const taskDeptId = (t as any).departmentId || sla.departmentId || (t.project as any)?.departmentId;
+        const isMine =
+          t.assigneeMembershipId === currentMembershipId ||
+          multiIds.includes(currentMembershipId) ||
+          (t as any).creatorMembershipId === currentMembershipId ||
+          sla.creatorMembershipId === currentMembershipId;
 
         const matchesPermittedAssignee =
           allAssignees.some((id) => permittedMemberIds.has(id)) ||
-          (effectiveScope === 'TEAM' &&
+          (activeTeamScope === 'TEAM' &&
             ((assigneeReportsTo && assigneeReportsTo === currentMembershipId) ||
-              Boolean(assigneeTeamId && allowedTeamIds.includes(assigneeTeamId)))) ||
-          (effectiveScope === 'DEPARTMENT' &&
-            Boolean(userDepartmentId && assigneeDeptId === userDepartmentId));
+              Boolean(assigneeTeamId && allowedTeamIds.includes(assigneeTeamId)) ||
+              Boolean(userDepartmentId && assigneeDeptId === userDepartmentId))) ||
+          (activeTeamScope === 'DEPARTMENT' &&
+            Boolean(!userDepartmentId || assigneeDeptId === userDepartmentId || taskDeptId === userDepartmentId));
 
         const isUnassignedTeamTask =
           allAssignees.length === 0 &&
-          ((t as any).creatorMembershipId === currentMembershipId ||
-            sla.creatorMembershipId === currentMembershipId ||
+          (isMine ||
             Boolean((t as any).teamId && allowedTeamIds.includes((t as any).teamId)) ||
-            (effectiveScope === 'DEPARTMENT' && Boolean(userDepartmentId && sla.departmentId === userDepartmentId)));
+            (activeTeamScope === 'DEPARTMENT' && Boolean(!userDepartmentId || taskDeptId === userDepartmentId)) ||
+            (activeTeamScope === 'TEAM' &&
+              (allowedTeamIds.length === 0 ||
+                Boolean((t as any).teamId && allowedTeamIds.includes((t as any).teamId)) ||
+                Boolean(userDepartmentId && taskDeptId === userDepartmentId))));
 
-        if (!matchesPermittedAssignee && !isUnassignedTeamTask) {
+        if (!matchesPermittedAssignee && !isUnassignedTeamTask && !isMine) {
           return false;
         }
       }
@@ -642,7 +693,20 @@ export default function ProjectsAndTasksPage() {
       }
       return true;
     });
-  }, [tasks, permittedMemberIds, effectiveScope, currentMembershipId, allowedTeamIds, userDepartmentId, teamMemberFilter, teamProjectFilter, teamDeptFilter, teamStatusFilter, teamPriorityFilter, teamSearch]);
+  }, [
+    tasks,
+    permittedMemberIds,
+    activeTeamScope,
+    currentMembershipId,
+    allowedTeamIds,
+    userDepartmentId,
+    teamMemberFilter,
+    teamProjectFilter,
+    teamDeptFilter,
+    teamStatusFilter,
+    teamPriorityFilter,
+    teamSearch,
+  ]);
 
   // ---------------------------------------------------------------------------
   // HANDLERS
@@ -1799,18 +1863,34 @@ export default function ProjectsAndTasksPage() {
               />
             </div>
 
-            {!isGlobalAdmin && (
-              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/50 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-900 font-semibold text-[11px]">
-                Scope:{' '}
-                {effectiveScope === 'DEPARTMENT'
-                  ? 'Department'
-                  : effectiveScope === 'TEAM'
-                  ? allowedTeamNames.length > 0
-                    ? `Team (${allowedTeamNames.join(', ')})`
-                    : 'My Team'
-                  : 'Own Records'}
+            <div className="flex items-center gap-1.5 bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-900 rounded-lg px-2.5 py-1 text-xs">
+              <span className="font-semibold text-blue-700 dark:text-blue-300 text-[11px] whitespace-nowrap">
+                Scope:
               </span>
-            )}
+              <select
+                value={activeTeamScope}
+                onChange={(e) => setSelectedTeamScope(e.target.value)}
+                className="bg-transparent border-0 text-blue-700 dark:text-blue-300 font-bold text-[11px] cursor-pointer focus:outline-hidden py-0 pr-1"
+                aria-label="Scope selector"
+              >
+                <option value="TEAM" className="bg-background text-foreground">
+                  {allowedTeamNames.length > 0 ? `Team (${allowedTeamNames.join(', ')})` : 'Team Records'}
+                </option>
+                <option value="DEPARTMENT" className="bg-background text-foreground">
+                  {userDepartmentId
+                    ? `Department (${departments.find((d) => d.id === userDepartmentId)?.name || 'My Dept'})`
+                    : 'Department Records'}
+                </option>
+                {(isGlobalAdmin || isManagerOrAdmin) && (
+                  <option value="GLOBAL" className="bg-background text-foreground">
+                    All Workspace Records
+                  </option>
+                )}
+                <option value="ASSIGNED" className="bg-background text-foreground">
+                  Own Records
+                </option>
+              </select>
+            </div>
 
             <select
               value={teamMemberFilter}

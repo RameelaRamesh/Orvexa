@@ -71,15 +71,28 @@ export function getDataScope(ctx?: PermissionContext | null): string {
   if (ctx?.id && ctx?.workspace?.settings?.memberDataScopes?.[ctx.id]) {
     return ctx.workspace.settings.memberDataScopes[ctx.id];
   }
-  if (ctx?.dataScope) return ctx.dataScope;
   const roleId = ctx?.role?.id;
   const roleScopes = ctx?.workspace?.settings?.roleDataScopes || {};
   if (roleId && roleScopes[roleId]) {
     return roleScopes[roleId];
   }
-  if (accessRole === 'ADMIN') return 'GLOBAL';
-  // LEGACY_ROLE_COMMENTED_OUT: legacy MANAGER carrier defaults to TEAM; all other staff default to ASSIGNED unless configured on their role
-  if (accessRole === 'MANAGER') return 'TEAM';
+  const roleNameUpper = (ctx?.role?.name || '').toUpperCase();
+  const accessUpper = (ctx?.accessRole || '').toUpperCase();
+  if (accessUpper === 'ADMIN' || roleNameUpper.includes('ADMIN')) return 'GLOBAL';
+  if (roleNameUpper.includes('DIRECTOR') || roleNameUpper.includes('HEAD')) {
+    return 'DEPARTMENT';
+  }
+  if (
+    accessUpper === 'MANAGER' ||
+    roleNameUpper.includes('MANAGER') ||
+    roleNameUpper.includes('LEAD') ||
+    roleNameUpper.includes('SUPERVISOR')
+  ) {
+    return 'TEAM';
+  }
+  if (ctx?.dataScope && ctx.dataScope !== 'ASSIGNED' && ctx.dataScope !== 'OWN') {
+    return ctx.dataScope;
+  }
   return 'ASSIGNED';
 }
 
